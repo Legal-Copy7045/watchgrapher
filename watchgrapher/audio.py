@@ -77,6 +77,7 @@ class Recorder:
         self.overflows = 0
         self.frames = 0          # total samples ever received; monotonic, for a stall watchdog
         self._wav: Optional[wave.Wave_write] = None
+        self._wav_path = ""
         self._wav_lock = threading.Lock()
 
     # -- stream lifecycle --------------------------------------------------
@@ -163,6 +164,10 @@ class Recorder:
             self._write = 0
 
     # -- wav logging -------------------------------------------------------
+    @property
+    def is_recording(self) -> bool:
+        return self._wav is not None
+
     def start_recording(self, path: str):
         with self._wav_lock:
             self.stop_recording_locked()
@@ -171,18 +176,23 @@ class Recorder:
             w.setsampwidth(2)
             w.setframerate(self.samplerate)
             self._wav = w
+            self._wav_path = path
 
     def stop_recording_locked(self):
+        path = getattr(self, "_wav_path", "")
         if self._wav is not None:
             try:
                 self._wav.close()
             except Exception:
                 pass
             self._wav = None
+        self._wav_path = ""
+        return path
 
-    def stop_recording(self):
+    def stop_recording(self) -> str:
+        """Close the WAV; returns the path written, or '' if none."""
         with self._wav_lock:
-            self.stop_recording_locked()
+            return self.stop_recording_locked()
 
 
 def load_wav(path: str):
@@ -231,6 +241,7 @@ class SimulatedRecorder:
         self.overflows = 0
         self.frames = 0
         self._wav = None
+        self._wav_path = ""
         self._wav_lock = threading.Lock()
 
         self._rng = np.random.default_rng()
@@ -369,6 +380,7 @@ class SimulatedRecorder:
     start_recording = Recorder.start_recording
     stop_recording = Recorder.stop_recording
     stop_recording_locked = Recorder.stop_recording_locked
+    is_recording = Recorder.is_recording
 
     @property
     def seconds_buffered(self) -> float:
