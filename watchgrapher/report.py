@@ -308,8 +308,47 @@ def trend_svg(history, w=820, h=280):
     return "".join(parts)
 
 
+def _service_section(watch, doc_dir=""):
+    e = html.escape
+    svcs = sorted(getattr(watch, "services", []), key=lambda s: s.when, reverse=True)
+    if not svcs:
+        return ""
+    out = ["<h2>Service history</h2>"]
+    totals = watch.total_service_cost() if hasattr(watch, "total_service_cost") else {}
+    if totals:
+        out.append("<p class='sub'>Total recorded spend: "
+                   + ", ".join(f"{v:.0f} {k}" for k, v in totals.items()) + "</p>")
+    out.append("<table><tr><th>Date</th><th>Type</th><th>By</th><th class='n'>Cost</th>"
+               "<th>Warranty</th><th>Notes</th></tr>")
+    for s in svcs:
+        cost = f"{s.cost} {s.currency}" if s.cost else "--"
+        warr = f"{s.warranty_months} mo" if s.warranty_months else ""
+        loc = f" &mdash; {e(s.location)}" if s.location else ""
+        out.append(f"<tr><td>{e(s.when)}</td><td>{e(s.kind)}</td>"
+                   f"<td>{e(s.performed_by)}{loc}</td><td class='n'>{e(cost)}</td>"
+                   f"<td>{e(warr)}</td><td>{e(s.notes)}</td></tr>")
+    out.append("</table>")
+    for s in svcs:
+        imgs = [_embed_image(os.path.join(doc_dir, d)) for d in s.documents
+                if doc_dir and os.path.splitext(d)[1].lower() in
+                (".png", ".jpg", ".jpeg", ".webp", ".bmp")]
+        imgs = [x for x in imgs if x]
+        others = [d for d in s.documents
+                  if os.path.splitext(d)[1].lower() not in
+                  (".png", ".jpg", ".jpeg", ".webp", ".bmp")]
+        if imgs or others:
+            out.append(f"<h3 style='margin:14px 0 4px;font-size:13px'>"
+                       f"{e(s.when)} &mdash; {e(s.kind)} &mdash; attachments</h3>")
+        for src in imgs:
+            out.append(f"<img src='{src}' style='max-width:100%;max-height:520px;"
+                       f"border:1px solid #d8dee7;border-radius:6px;margin:6px 0'>")
+        for d in others:
+            out.append(f"<p class='sub'>Document on file: {e(d)}</p>")
+    return "".join(out)
+
+
 def build_watch_report(path, watch, caliber=None, trends=None, notes=None,
-                       photo_path=None, owner=""):
+                       photo_path=None, owner="", doc_dir=""):
     """One printable page for a watch: what it is, and how it has behaved."""
     e = html.escape
     now = datetime.now().strftime("%d %B %Y")
@@ -434,6 +473,8 @@ def build_watch_report(path, watch, caliber=None, trends=None, notes=None,
             p.append(f"<div class='f {sev}'><div class='t'>{e(t.metric)}{extra}</div>"
                      f"<div class='d'>{e(t.verdict)}</div></div>")
 
+    p.append(_service_section(watch, doc_dir))
+
     if notes:
         p.append("<h2>Observations</h2>")
         for n in notes:
@@ -447,6 +488,121 @@ def build_watch_report(path, watch, caliber=None, trends=None, notes=None,
              "error are not affected by it. Bench figures are not wrist performance."
              "</div></body></html>")
 
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("".join(p))
+    return os.path.abspath(path)
+
+
+def build_portfolio(path, collection, owner=""):
+    """One page covering the whole collection: what each watch is, and how it runs."""
+    from .calibers import CALIBERS
+    from .collection import summarise
+    e = html.escape
+    now = datetime.now().strftime("%d %B %Y")
+    watches = collection.sorted_watches()
+
+    p = ["<!doctype html><html><head><meta charset='utf-8'>",
+         f"<title>Watch portfolio</title><style>{CSS}"
+         ".wcard{border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:14px 0}"
+         ".wcard h3{margin:0 0 2px;font-size:16px}"
+         ".thumb{float:right;max-width:150px;max-height:150px;border-radius:6px;"
+         "border:1px solid var(--line);background:#fff;margin:0 0 10px 14px}"
+         "</style></head><body>"]
+    p.append("<h1>Watch portfolio</h1>")
+    p.append(f"<p class='sub'>{len(watches)} watch{'es' if len(watches) != 1 else ''} "
+             f"&middot; {now}{' &middot; ' + e(owner) if owner else ''}</p>")
+
+    buy, svc = {}, {}
+    for w in watches:
+        try:
+            v = float(str(w.purchase_price).replace(",", "").strip())
+            buy[w.purchase_currency or "GBP"] = buy.get(w.purchase_currency or "GBP", 0.0) + v
+        except (ValueError, TypeError):
+            pass
+        for cur, amt in (w.total_service_cost() if hasattr(w, "total_service_cost") else {}).items():
+            svc[cur] = svc.get(cur, 0.0) + amt
+    tot_bits = []
+    if buy:
+        tot_bits.append("purchases " + ", ".join(f"{v:,.0f} {k}" for k, v in buy.items()))
+    if svc:
+        tot_bits.append("service spend " + ", ".join(f"{v:,.0f} {k}" for k, v in svc.items()))
+    if tot_bits:
+        p.append(f"<p class='sub'>{' &middot; '.join(tot_bits)}</p>")
+
+    p.append("<h2>At a glance</h2><table><tr><th>Watch</th><th>Movement</th>"
+             "<th class='n'>Runs</th><th class='n'>Latest rate</th>"
+             "<th class='n'>Latest amp</th><th>Last service</th><th>Due</th></tr>")
+    for w in watches:
+        c = CALIBERS.get(w.caliber_key)
+        hist = sorted(w.history, key=lambda h: h.when)
+        last = hist[-1] if hist else None
+        rate = (_fmt(last.mean_rate, 1) + " s/d") if last else "--"
+        amp = _fmt(last.max_amplitude, 0) if last else "--"
+        due = w.service_due() or ""
+        p.append(f"<tr><td>{e(w.label)}</td>"
+                 f"<td>{e(c.brand + ' ' + c.name) if c else 'not set'}</td>"
+                 f"<td class='n'>{len(w.history)}</td>"
+                 f"<td class='n'>{rate}</td><td class='n'>{amp}</td>"
+                 f"<td>{e(w.effective_last_service or '--')}</td>"
+                 f"<td>{'past due' if 'past the' in due else ('ok' if due else '')}</td></tr>")
+    p.append("</table>")
+
+    for w in watches:
+        c = CALIBERS.get(w.caliber_key)
+        p.append("<div class='wcard'>")
+        img = _embed_image(collection.photo_path(w) if hasattr(collection, "photo_path") else None)
+        if img:
+            p.append(f"<img class='thumb' src='{img}'>")
+        p.append(f"<h3>{e(w.label)}</h3>")
+        idbits = [x for x in (w.brand, w.model, w.reference,
+                              f"serial {w.serial}" if w.serial else "",
+                              w.production_year) if x]
+        p.append(f"<p class='sub'>{e(' | '.join(idbits))}</p>")
+
+        rows = [("Movement", f"{c.brand} {c.name}" if c else "not set"),
+                ("Lift angle", f"{(w.lift_angle or (c.lift_angle if c else 52)):g} deg"),
+                ("Case", " / ".join(x for x in (w.material, w.bezel, w.crystal,
+                                                w.case_size_mm) if x)),
+                ("Purchased", " ".join(x for x in (
+                    w.purchase_date,
+                    f"for {w.purchase_price} {w.purchase_currency}" if w.purchase_price else "",
+                    f"from {w.purchased_from}" if w.purchased_from else "") if x)),
+                ("Target rate", f"{w.target_rate} s/d" if w.target_rate else "")]
+        p.append("<table>")
+        for k, v in rows:
+            if v and str(v).strip():
+                p.append(f"<tr><th style='width:150px'>{k}</th><td>{e(str(v))}</td></tr>")
+        p.append("</table>")
+
+        hist = sorted(w.history, key=lambda h: h.when)
+        if hist:
+            last = hist[-1]
+            p.append(f"<p><b>{len(hist)} run(s).</b> Latest ({last.when[:10]}): "
+                     f"rate {_fmt(last.mean_rate, 1)} s/d, amplitude "
+                     f"{_fmt(last.max_amplitude, 0)}&ndash;{_fmt(last.min_amplitude, 0)} deg, "
+                     f"beat error {_fmt(last.max_beat_error, 2)} ms, "
+                     f"positional delta {_fmt(last.delta_rate, 1)} s/d.</p>")
+            for t in summarise(w):
+                if t.n >= 3:
+                    p.append(f"<p class='sub'>{e(t.metric)}: {e(t.verdict)}</p>")
+        else:
+            p.append("<p class='sub'>No timing runs recorded yet.</p>")
+
+        svcs = sorted(getattr(w, "services", []), key=lambda s: s.when, reverse=True)
+        if svcs:
+            tc = ", ".join(f"{v:.0f} {k}" for k, v in w.total_service_cost().items())
+            p.append(f"<p><b>{len(svcs)} service(s)</b>"
+                     + (f", total {tc}" if tc else "") + ". Most recent: "
+                     f"{e(svcs[0].when)} {e(svcs[0].kind)}"
+                     + (f" by {e(svcs[0].performed_by)}" if svcs[0].performed_by else "") + ".</p>")
+        due = w.service_due()
+        if due:
+            p.append(f"<div class='f {'warn' if 'past the' in due else ''}'>"
+                     f"<div class='d'>{e(due)}</div></div>")
+        p.append("</div>")
+
+    p.append("<div class='foot'>Generated by WatchGrapher. Timing figures are bench "
+             "measurements, not wrist performance.</div></body></html>")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("".join(p))
     return os.path.abspath(path)

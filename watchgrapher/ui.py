@@ -544,6 +544,118 @@ class WatchEditor(QtWidgets.QDialog):
         return w, self._photo_src
 
 
+class ServiceEditor(QtWidgets.QDialog):
+    """Add or edit one service-history entry, with scanned paperwork attached."""
+
+    DOC_FILTER = "Documents & images (*.pdf *.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff)"
+
+    def __init__(self, record=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Service entry")
+        self.setMinimumWidth(460)
+        rec = record or coll.ServiceRecord(when=datetime.now().strftime("%Y-%m-%d"))
+        self._existing_docs = list(rec.documents)     # already-stored filenames
+        self._new_docs = []                           # source paths to copy on accept
+        self._removed = []                            # stored filenames to forget
+
+        form = QtWidgets.QFormLayout(self)
+        self.e_when = QtWidgets.QDateEdit()
+        self.e_when.setCalendarPopup(True)
+        self.e_when.setDisplayFormat("yyyy-MM-dd")
+        try:
+            self.e_when.setDate(QtCore.QDate.fromString(rec.when, "yyyy-MM-dd"))
+        except Exception:
+            self.e_when.setDate(QtCore.QDate.currentDate())
+        self.cmb_kind = QtWidgets.QComboBox()
+        self.cmb_kind.addItems(coll.SERVICE_KINDS)
+        if rec.kind:
+            self.cmb_kind.setCurrentText(rec.kind)
+        self.e_by = QtWidgets.QLineEdit(rec.performed_by)
+        self.e_loc = QtWidgets.QLineEdit(rec.location)
+        cost_row = QtWidgets.QWidget()
+        cl = QtWidgets.QHBoxLayout(cost_row)
+        cl.setContentsMargins(0, 0, 0, 0)
+        self.e_cost = QtWidgets.QLineEdit(rec.cost)
+        self.e_cost.setPlaceholderText("amount")
+        self.cmb_cur = QtWidgets.QComboBox()
+        self.cmb_cur.addItems(coll.CURRENCIES)
+        self.cmb_cur.setCurrentText(rec.currency or "GBP")
+        cl.addWidget(self.e_cost, 2)
+        cl.addWidget(self.cmb_cur, 1)
+        self.e_warr = QtWidgets.QLineEdit(rec.warranty_months)
+        self.e_warr.setPlaceholderText("months")
+        self.e_notes = QtWidgets.QPlainTextEdit(rec.notes)
+        self.e_notes.setMaximumHeight(80)
+
+        form.addRow("Date", self.e_when)
+        form.addRow("Type", self.cmb_kind)
+        form.addRow("Performed by", self.e_by)
+        form.addRow("Location", self.e_loc)
+        form.addRow("Cost", cost_row)
+        form.addRow("Warranty", self.e_warr)
+        form.addRow("Notes", self.e_notes)
+
+        self.lst_docs = QtWidgets.QListWidget()
+        self.lst_docs.setMaximumHeight(110)
+        self._reload_doc_list()
+        drow = QtWidgets.QHBoxLayout()
+        b_add = QtWidgets.QPushButton("Attach file...")
+        b_rm = QtWidgets.QPushButton("Remove")
+        b_add.clicked.connect(self._attach)
+        b_rm.clicked.connect(self._remove_doc)
+        drow.addWidget(b_add)
+        drow.addWidget(b_rm)
+        drow.addStretch(1)
+        form.addRow("Documents", self.lst_docs)
+        dw = QtWidgets.QWidget()
+        dw.setLayout(drow)
+        form.addRow("", dw)
+
+        bb = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Save | QtWidgets.QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        form.addRow(bb)
+
+    def _reload_doc_list(self):
+        self.lst_docs.clear()
+        for name in self._existing_docs:
+            self.lst_docs.addItem(f"[stored] {name}")
+        for src in self._new_docs:
+            self.lst_docs.addItem(f"[new] {os.path.basename(src)}")
+
+    def _attach(self):
+        paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
+            self, "Attach service document", "", self.DOC_FILTER)
+        for p in paths:
+            self._new_docs.append(p)
+        self._reload_doc_list()
+
+    def _remove_doc(self):
+        r = self.lst_docs.currentRow()
+        if r < 0:
+            return
+        if r < len(self._existing_docs):
+            self._removed.append(self._existing_docs.pop(r))
+        else:
+            self._new_docs.pop(r - len(self._existing_docs))
+        self._reload_doc_list()
+
+    def result(self):
+        """(ServiceRecord without new docs applied, list of new source paths, removed names)."""
+        rec = coll.ServiceRecord(
+            when=self.e_when.date().toString("yyyy-MM-dd"),
+            kind=self.cmb_kind.currentText(),
+            performed_by=self.e_by.text().strip(),
+            location=self.e_loc.text().strip(),
+            cost=self.e_cost.text().strip(),
+            currency=self.cmb_cur.currentText(),
+            warranty_months=self.e_warr.text().strip(),
+            notes=self.e_notes.toPlainText().strip(),
+            documents=list(self._existing_docs))
+        return rec, list(self._new_docs), list(self._removed)
+
+
 class WavScrubber(QtWidgets.QDialog):
     """
     Load a long recording and re-analyse any window of it.
@@ -1686,6 +1798,11 @@ alongside the application.</p>
         top.addWidget(self.txt_wdetail, 1)
         right.addLayout(top, 2)
 
+        wtabs = QtWidgets.QTabWidget()
+
+        # -- timing tab --
+        timing = QtWidgets.QWidget()
+        tl = QtWidgets.QVBoxLayout(timing)
         self.p_trend = pg.PlotWidget(title="Performance over time")
         self.p_trend.setLabel("bottom", "date")
         self.p_trend.showGrid(x=True, y=True, alpha=0.25)
@@ -1700,7 +1817,7 @@ alongside the application.</p>
         self.c_tr_delta = self.p_trend.plot(pen=pg.mkPen("#ff9d4d", width=2), symbol="o",
                                             symbolSize=7, symbolBrush="#ff9d4d",
                                             name="positional delta (s/d)")
-        right.addWidget(self.p_trend, 3)
+        tl.addWidget(self.p_trend, 3)
 
         self.tbl_hist = QtWidgets.QTableWidget(0, 7)
         self.tbl_hist.setHorizontalHeaderLabels(
@@ -1708,23 +1825,58 @@ alongside the application.</p>
         self.tbl_hist.horizontalHeader().setSectionResizeMode(
             QtWidgets.QHeaderView.ResizeMode.Stretch)
         self.tbl_hist.verticalHeader().setVisible(False)
-        right.addWidget(self.tbl_hist, 2)
-
+        tl.addWidget(self.tbl_hist, 2)
         hb = QtWidgets.QHBoxLayout()
-        self.btn_wreport = QtWidgets.QPushButton("Print / save watch report")
-        self.btn_wreport.setMinimumHeight(32)
-        self.btn_wreport.setStyleSheet(
-            "QPushButton{background:#57d38c;color:#08101c;font-weight:bold;"
-            "padding:8px 18px;border-radius:6px;}")
-        self.btn_wreport.clicked.connect(self._watch_report)
-        hb.addWidget(self.btn_wreport)
         for label, slot in (("Delete selected run", self._hist_delete),
                             ("Export history CSV", self._hist_export)):
             b = QtWidgets.QPushButton(label)
             b.clicked.connect(slot)
             hb.addWidget(b)
         hb.addStretch(1)
-        right.addLayout(hb)
+        tl.addLayout(hb)
+        wtabs.addTab(timing, "Timing history")
+
+        # -- service tab --
+        svc = QtWidgets.QWidget()
+        svl = QtWidgets.QVBoxLayout(svc)
+        self.lbl_svc_summary = QtWidgets.QLabel("")
+        self.lbl_svc_summary.setStyleSheet("color:#c8d0dc;")
+        svl.addWidget(self.lbl_svc_summary)
+        self.tbl_svc = QtWidgets.QTableWidget(0, 6)
+        self.tbl_svc.setHorizontalHeaderLabels(
+            ["Date", "Type", "By", "Cost", "Docs", "Notes"])
+        self.tbl_svc.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        self.tbl_svc.verticalHeader().setVisible(False)
+        self.tbl_svc.itemDoubleClicked.connect(lambda _=None: self._service_edit())
+        svl.addWidget(self.tbl_svc, 1)
+        sb = QtWidgets.QHBoxLayout()
+        for label, slot in (("Add service", self._service_add),
+                            ("Edit", self._service_edit),
+                            ("Delete", self._service_delete),
+                            ("Open document", self._service_open_doc)):
+            b = QtWidgets.QPushButton(label)
+            b.clicked.connect(slot)
+            sb.addWidget(b)
+        sb.addStretch(1)
+        svl.addLayout(sb)
+        wtabs.addTab(svc, "Service log")
+
+        right.addWidget(wtabs, 5)
+
+        hb2 = QtWidgets.QHBoxLayout()
+        self.btn_wreport = QtWidgets.QPushButton("Print / save watch report")
+        self.btn_wreport.setMinimumHeight(32)
+        self.btn_wreport.setStyleSheet(
+            "QPushButton{background:#57d38c;color:#08101c;font-weight:bold;"
+            "padding:8px 18px;border-radius:6px;}")
+        self.btn_wreport.clicked.connect(self._watch_report)
+        hb2.addWidget(self.btn_wreport)
+        self.btn_portfolio = QtWidgets.QPushButton("Portfolio report (all watches)")
+        self.btn_portfolio.setMinimumHeight(32)
+        self.btn_portfolio.clicked.connect(self._portfolio_report)
+        hb2.addWidget(self.btn_portfolio)
+        hb2.addStretch(1)
+        right.addLayout(hb2)
         outer.addLayout(right, 1)
         return page
 
@@ -4180,6 +4332,132 @@ alongside the application.</p>
             xs, ys = series(attr)
             curve.setData(xs, ys)
 
+        self._fill_service_table(w)
+
+    def _fill_service_table(self, w):
+        self.tbl_svc.setRowCount(0)
+        for s in sorted(w.services, key=lambda x: x.when, reverse=True):
+            r = self.tbl_svc.rowCount()
+            self.tbl_svc.insertRow(r)
+            cost = f"{s.cost} {s.currency}" if s.cost else ""
+            cells = [s.when, s.kind, s.performed_by, cost,
+                     str(len(s.documents)) if s.documents else "",
+                     s.notes.replace("\n", " ")]
+            for cix, v in enumerate(cells):
+                self.tbl_svc.setItem(r, cix, QtWidgets.QTableWidgetItem(v))
+        totals = w.total_service_cost()
+        tot = ", ".join(f"{v:.0f} {k}" for k, v in totals.items())
+        n = len(w.services)
+        due = w.service_due() or "service timing unknown"
+        self.lbl_svc_summary.setText(
+            f"{n} service{'s' if n != 1 else ''} logged"
+            + (f"  |  total {tot}" if tot else "")
+            + f"  |  {due}")
+
+    def _service_add(self):
+        w = self._current_watch()
+        if not w:
+            return
+        dlg = ServiceEditor(None, self)
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
+            return
+        rec, new_srcs, _removed = dlg.result()
+        for src in new_srcs:
+            try:
+                rec.documents.append(self.collection.store_document(w.id, src))
+            except OSError as e:
+                QtWidgets.QMessageBox.warning(self, "Service entry", f"Could not copy {src}: {e}")
+        w.services.append(rec)
+        w.last_service = w.effective_last_service
+        self.collection.save()
+        self._refresh_watches(w.id)
+
+    def _current_service(self):
+        w = self._current_watch()
+        if not w or not w.services:
+            return None, None
+        r = self.tbl_svc.currentRow()
+        ordered = sorted(w.services, key=lambda x: x.when, reverse=True)
+        if 0 <= r < len(ordered):
+            return w, ordered[r]
+        return w, None
+
+    def _service_edit(self):
+        w, s = self._current_service()
+        if not s:
+            return
+        dlg = ServiceEditor(s, self)
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
+            return
+        rec, new_srcs, removed = dlg.result()
+        for name in removed:
+            try:
+                os.remove(os.path.join(self.collection.docs, name))
+            except OSError:
+                pass
+        for src in new_srcs:
+            try:
+                rec.documents.append(self.collection.store_document(w.id, src))
+            except OSError:
+                pass
+        idx = w.services.index(s)
+        w.services[idx] = rec
+        w.last_service = w.effective_last_service
+        self.collection.save()
+        self._refresh_watches(w.id)
+
+    def _service_delete(self):
+        w, s = self._current_service()
+        if not s:
+            return
+        if QtWidgets.QMessageBox.question(
+                self, "Delete service entry",
+                f"Delete the {s.kind} on {s.when}? Its {len(s.documents)} attached "
+                f"document(s) will also be removed.") != QtWidgets.QMessageBox.Yes:
+            return
+        for name in s.documents:
+            try:
+                os.remove(os.path.join(self.collection.docs, name))
+            except OSError:
+                pass
+        w.services.remove(s)
+        w.last_service = w.effective_last_service
+        self.collection.save()
+        self._refresh_watches(w.id)
+
+    def _service_open_doc(self):
+        w, s = self._current_service()
+        if not s:
+            return
+        if not s.documents:
+            QtWidgets.QMessageBox.information(self, "Documents", "This entry has no attachments.")
+            return
+        name = s.documents[0]
+        if len(s.documents) > 1:
+            name, ok = QtWidgets.QInputDialog.getItem(
+                self, "Open document", "Attachment:", s.documents, 0, False)
+            if not ok:
+                return
+        p = self.collection.document_path(name)
+        if p:
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(p))
+        else:
+            QtWidgets.QMessageBox.warning(self, "Documents", "That file is missing.")
+
+    def _portfolio_report(self):
+        if not self.collection.watches:
+            QtWidgets.QMessageBox.information(self, "Portfolio report", "Add a watch first.")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Portfolio report",
+            os.path.join(REPORT_DIR, f"portfolio_{datetime.now():%Y%m%d}.html"),
+            "HTML (*.html)")
+        if not path:
+            return
+        out = reportmod.build_portfolio(path, self.collection)
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
+        self.status.showMessage(f"Wrote {out}", 8000)
+
     def _save_test_to_watch(self):
         wid = self.cmb_watch.currentData() if hasattr(self, "cmb_watch") else None
         w = self.collection.watches.get(wid) if wid else self._current_watch()
@@ -4236,7 +4514,8 @@ alongside the application.</p>
         out = reportmod.build_watch_report(
             path, w, caliber=CALIBERS.get(w.caliber_key),
             trends=coll.summarise(w), notes=coll.health_notes(w),
-            photo_path=self.collection.photo_path(w))
+            photo_path=self.collection.photo_path(w),
+            doc_dir=self.collection.docs)
         QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
         self.status.showMessage(
             f"Wrote {out} -- use the browser's Print to make a PDF", 9000)
