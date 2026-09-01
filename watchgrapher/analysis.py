@@ -172,6 +172,11 @@ class Measurement:
     shape_pre: int = 0
     p1_idx: float = 0.0
     p3_idx: float = 0.0
+    # One recent complete beat, band-passed, for the live-beat view.
+    beat_wave: Optional[np.ndarray] = None
+    beat_wave_fs: int = 0
+    beat_wave_pre: int = 0                # samples before the beat anchor
+    amp_samples: np.ndarray = field(default_factory=lambda: np.array([]))  # per-beat amplitude, deg
     dt_mean: float = float("nan")         # seconds, 1st-to-3rd noise
     parity_correction: float = 0.0        # ms of tick/tock anchor offset removed
     parity_offset_seen: float = 0.0       # ms of offset measured, applied or not
@@ -225,6 +230,16 @@ def analyze(samples: np.ndarray, fs: int, cfg: AnalyzerConfig) -> Measurement:
     m.snr_db = beats.snr_db
     m.quality = beats.quality
     m.beats = int(beats.times.size)
+
+    # Keep one complete beat's band-passed waveform for the live-beat view.
+    # The second-to-last beat is safely clear of the window edge.
+    if beats.times.size >= 3:
+        anchor = int(round(float(beats.times[-2]) * fs))
+        pre, post = int(fs * 0.006), int(fs * 0.020)
+        if 0 <= anchor - pre and anchor + post < xf.size:
+            m.beat_wave = xf[anchor - pre: anchor + post].astype(np.float32)
+            m.beat_wave_fs = fs
+            m.beat_wave_pre = pre
 
     # Always record what the audio actually measured, independently of any
     # forced value. Overwriting this with the forced figure hides exactly the
@@ -303,6 +318,7 @@ def analyze(samples: np.ndarray, fs: int, cfg: AnalyzerConfig) -> Measurement:
         amps = np.array([amplitude_from_dt(d, nominal, cfg.lift_angle, cfg.exact_amplitude)
                          for d in dts])
         amps = amps[np.isfinite(amps)]
+        m.amp_samples = amps
         if amps.size > 4:
             m.amplitude_spread = float(np.percentile(amps, 75) - np.percentile(amps, 25))
     else:
