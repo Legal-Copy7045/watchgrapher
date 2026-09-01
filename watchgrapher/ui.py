@@ -13,6 +13,7 @@ import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 import pyqtgraph as pg
 
+from . import __version__
 from . import (audio, advisor, catalog as catdb, collection as coll,
                faults, references as refdb, report as reportmod)
 from .analysis import (AnalyzerConfig, analyze, autotune, trace_points,
@@ -738,7 +739,7 @@ class Readout(QtWidgets.QFrame):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("WatchGrapher -- acoustic timegrapher")
+        self.setWindowTitle(f"WatchGrapher {__version__} -- acoustic timegrapher")
         # Minimum small enough for a 1366x768 laptop; the control column
         # scrolls, so nothing can be pushed out of reach.
         self.setMinimumSize(940, 560)
@@ -972,7 +973,8 @@ minimum before the trend figures mean anything.</p>
 
 <p style='color:#8a94a4;margin-top:20px'>Full documentation is in README.md
 alongside the application.</p>
-</div>""")
+<p style='color:#5a6472'>Version %s</p>
+</div>""" % __version__)
         v.addWidget(t)
         return page
 
