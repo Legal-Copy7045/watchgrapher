@@ -1,0 +1,4 @@
+key,brand,name,bph,lift_angle,regulator,verified,lift_source,amp_min,amp_max,notes
+eta_2892a2_mine,ETA,2892-A2 (my measured),28800,51.5,etachron,true,measured,265,310,Solved on my own bench
+tissot_powermatic,ETA,C07.111,21600,50,index,true,documented,240,290,Sealed index on some variants
+st2130_mine,Sea-Gull,ST2130 (my measured),28800,50.5,etachron,true,measured,250,300,Solved via 180-degree method
