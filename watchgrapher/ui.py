@@ -2990,8 +2990,17 @@ alongside the application.</p>
                 self.btn_noise.setText("Room noise")
             self.worker.recorder = None
             if self.recorder:
+                if getattr(self.recorder, "is_recording", False):
+                    p = self.recorder.stop_recording()
+                    if p:
+                        self.status.showMessage(f"WAV saved: {os.path.basename(p)}", 8000)
                 self.recorder.stop()
             self.recorder = None
+            if self.act_rec.isChecked():
+                self.act_rec.blockSignals(True)
+                self.act_rec.setChecked(False)
+                self.act_rec.blockSignals(False)
+                self.act_rec.setText("Record WAV...")
             self._set_go(False)
             self.prg_run.setFormat("idle")
             self.prg_run.setValue(0)
@@ -3172,12 +3181,21 @@ alongside the application.</p>
                 self.act_rec.setChecked(False)
                 self.act_rec.blockSignals(False)
                 return
-            self.recorder.start_recording(path)
+            try:
+                self.recorder.start_recording(path)
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(self, "Record WAV", f"Could not start: {e}")
+                self.act_rec.blockSignals(True)
+                self.act_rec.setChecked(False)
+                self.act_rec.blockSignals(False)
+                return
             self.act_rec.setText("Stop recording")
             self.status.showMessage(f"Recording to {os.path.basename(path)}", 6000)
         else:
-            self.recorder.stop_recording()
+            saved = self.recorder.stop_recording()
             self.act_rec.setText("Record WAV...")
+            if saved:
+                self.status.showMessage(f"WAV saved: {os.path.basename(saved)}", 8000)
 
     # --------------------------------------------------------------- events
     def _tick_ui(self):
@@ -3263,7 +3281,12 @@ alongside the application.</p>
         sr = self.recorder.samplerate
         buf = self.recorder.n / sr
         old = self.recorder
+        was_recording = getattr(old, "is_recording", False)
         self.worker.recorder = None
+        try:
+            old_path = old.stop_recording()
+        except Exception:
+            old_path = ""
         try:
             old.stop()
         except Exception:
@@ -3279,9 +3302,18 @@ alongside the application.</p>
         self.worker.recorder = self.recorder
         self._cap_frames = None
         self._stream_restarts += 1
+        cont = ""
+        if was_recording and old_path:
+            stem, ext = os.path.splitext(old_path)
+            new_path = f"{stem}_part{self._stream_restarts + 1}{ext}"
+            try:
+                self.recorder.start_recording(new_path)
+                cont = f" WAV continues in {os.path.basename(new_path)}."
+            except Exception:
+                cont = " WAV recording could not continue."
         self.status.showMessage(
             f"Audio stream stalled and was restarted (#{self._stream_restarts}). "
-            f"Rate history and the power-reserve log continue uninterrupted.", 6000)
+            f"Rate history and the power-reserve log continue uninterrupted.{cont}", 8000)
 
     _WAVE_TITLES = {
         "Average": "Averaged beat  --  every beat in the window, stacked; markers are the "
