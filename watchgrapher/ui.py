@@ -2371,10 +2371,11 @@ alongside the application.</p>
                 "watch in the Collection tab so it becomes part of that watch's "
                 "history.")
         else:
+            remaining = [p for p in advisor.POSITIONS if p not in done]
             self.status.showMessage(
-                f"Auto-captured {pos}. Rotate the watch to "
-                f"{self.cmb_pos.currentText()}. "
-                f"{len(done)} of {len(advisor.POSITIONS)} done.", 8000)
+                f"Auto-captured {pos}. {len(done)} of {len(advisor.POSITIONS)} done -- "
+                f"move the watch and set the position dropdown for the next one "
+                f"({', '.join(remaining)}).", 8000)
 
     def _toggle_reserve(self, on):
         if on:
@@ -3131,12 +3132,8 @@ alongside the application.</p>
         for c, v in enumerate(vals):
             self.tbl.setItem(row, c, QtWidgets.QTableWidgetItem(v))
         self._update_delta()
-        # Advance to the next position that has not been captured yet.
-        done = {x.position for x in self.readings}
-        for p in advisor.POSITIONS:
-            if p not in done:
-                self.cmb_pos.setCurrentText(p)
-                break
+        # The position dropdown is left where the user set it -- they choose
+        # when to move the watch and which position to record it as.
 
     def _update_delta(self):
         rates = [r.rate for r in self.readings if r.rate == r.rate]
