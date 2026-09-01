@@ -744,7 +744,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.recorder = None
         self.last = None
         self.readings = []
-        self.rate_history = []
+        self._rate_hist = []       # (elapsed_s, rate_spd) for the rate-history plot
+        self._listen_t0 = None     # wall-clock start of the current listen session
+        self._rate_last_update = None   # monotonic() of the last appended rate point
         self._last_rate_for_calib = None
         self._tuning = False       # a self-tune sweep is in flight
         self._suppress_finish = False   # internal stream restarts, not user stops
@@ -1513,6 +1515,7 @@ alongside the application.</p>
 
         self.p_hist = pg.PlotWidget(title="Rate history")
         self.p_hist.setLabel("left", "s/day")
+        self.p_hist.setLabel("bottom", "run time", units="min")
         self.p_hist.showGrid(x=True, y=True, alpha=0.2)
         self.c_hist = self.p_hist.plot(pen=pg.mkPen(ACCENT, width=2))
         right.addWidget(self.p_hist)
@@ -1871,7 +1874,10 @@ alongside the application.</p>
                 return
             self._pending_buffer = 0
             self.worker.recorder = self.recorder
-            self.rate_history.clear()
+            self._rate_hist = []
+            self._listen_t0 = time.time()
+            self._rate_last_update = None
+            self.c_hist.setData([], [])
         else:
             if self._run_t0 is not None:
                 self._finish_run(stopped_early=True)
@@ -2082,6 +2088,11 @@ alongside the application.</p>
             self.lvl.setStyleSheet(
                 f"QProgressBar{{background:#1a1f27;border:none;}}"
                 f"QProgressBar::chunk{{background:{col};}}")
+            if self._rate_last_update is not None and hasattr(self, "lbl_live"):
+                age = time.monotonic() - self._rate_last_update
+                if age > 4.0:
+                    self.lbl_live.setText(f"no new reading for {age:.0f} s")
+                    self.lbl_live.setStyleSheet("color:#ffb648;font-size:12px;")
 
     def _on_result(self, m):
         self.last = m
@@ -2115,10 +2126,13 @@ alongside the application.</p>
                 self.l_p1.setPos((m.p1_idx - m.shape_pre) / m.shape_fs * 1000.0)
                 self.l_p3.setPos((m.p3_idx - m.shape_pre) / m.shape_fs * 1000.0)
 
-        if m.rate == m.rate:
-            self.rate_history.append(m.rate)
-            self.rate_history = self.rate_history[-400:]
-            self.c_hist.setData(np.arange(len(self.rate_history)), np.array(self.rate_history))
+        if m.rate == m.rate and self._listen_t0 is not None:
+            el = time.time() - self._listen_t0
+            self._rate_hist.append((el, float(m.rate)))
+            self._rate_hist = self._decimate_rate_hist(self._rate_hist)
+            a = np.asarray(self._rate_hist, dtype=float)
+            self.c_hist.setData(a[:, 0] / 60.0, a[:, 1])
+            self._rate_last_update = time.monotonic()
 
         self._check_stable(m)
         self._log_reserve(m)
@@ -2142,6 +2156,24 @@ alongside the application.</p>
         self.status.showMessage("   |   ".join(bits))
 
     # -------------------------------------------------------- new features
+
+    @staticmethod
+    def _decimate_rate_hist(pts):
+        """
+        Age-tiered thinning so a multi-day run keeps scrolling without the
+        point count (or the redraw cost) growing without bound: full
+        resolution for the last 10 minutes, one point per 5 s out to 2 hours,
+        one per 30 s beyond that. ~8k points at 48 h.
+        """
+        now = pts[-1][0]
+        out, last_t = [], -1e9
+        for t, r in pts:
+            age = now - t
+            step = 0.0 if age < 600.0 else (5.0 if age < 7200.0 else 30.0)
+            if t - last_t >= step:
+                out.append((t, r))
+                last_t = t
+        return out
 
     def _check_stable(self, m):
         """
