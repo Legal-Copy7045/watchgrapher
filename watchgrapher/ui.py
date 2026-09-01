@@ -1256,6 +1256,10 @@ class MainWindow(QtWidgets.QMainWindow):
         esc_act = QtGui.QAction("Escapement animation...", self)
         esc_act.triggered.connect(self._open_escapement)
         vm.addAction(esc_act)
+        rescan_act = QtGui.QAction("Rescan audio devices", self)
+        rescan_act.setShortcut("Ctrl+R")
+        rescan_act.triggered.connect(self._refresh_devices)
+        vm.addAction(rescan_act)
 
     def _build_header(self):
         bar = QtWidgets.QFrame()
@@ -1736,15 +1740,17 @@ alongside the application.</p>
         self.cmb_sr = QtWidgets.QComboBox()
         self.cmb_sr.addItems(["44100", "48000", "96000", "192000"])
         self.cmb_sr.setCurrentText("48000")
-        self.btn_refresh = QtWidgets.QPushButton("Rescan devices")
-        self.btn_refresh.clicked.connect(self._refresh_devices)
         self.lvl = QtWidgets.QProgressBar()
         self.lvl.setRange(0, 100)
         self.lvl.setTextVisible(False)
         self.lvl.setFixedHeight(10)
-        g.addRow("Device", self.cmb_dev)
-        g.addRow("Sample rate", self.cmb_sr)
-        g.addRow(self.btn_refresh)
+        dev_row = QtWidgets.QWidget()
+        dv = QtWidgets.QHBoxLayout(dev_row)
+        dv.setContentsMargins(0, 0, 0, 0)
+        dv.setSpacing(6)
+        dv.addWidget(self.cmb_dev, 3)
+        dv.addWidget(self.cmb_sr, 1)
+        g.addRow("Device", dev_row)
         g.addRow("Level", self.lvl)
         lay.addWidget(g)
 
@@ -1804,8 +1810,14 @@ alongside the application.</p>
         lb_lay.addWidget(_bl, 0)
         lb_lay.addWidget(self.cmb_bph, 1)
 
-        g2.addRow(self.btn_mywatches)
-        g2.addRow(self.btn_model)
+        wbtn_row = QtWidgets.QWidget()
+        wb = QtWidgets.QHBoxLayout(wbtn_row)
+        wb.setContentsMargins(0, 0, 0, 0)
+        wb.setSpacing(6)
+        wb.addWidget(self.btn_mywatches, 1)
+        wb.addWidget(self.btn_model, 1)
+
+        g2.addRow(wbtn_row)
         g2.addRow("My watch", self.cmb_watch)
         g2.addRow("Search", self.txt_search)
         g2.addRow("", self.lbl_hint)
@@ -1851,16 +1863,22 @@ alongside the application.</p>
             "band, envelope window and sub-noise threshold to find the settings that\n"
             "resolve the escapement most cleanly. About ten seconds.")
         self.btn_tune.clicked.connect(self._self_tune)
-        g4.addPersistent(self.btn_tune)
 
         self.btn_noise = QtWidgets.QPushButton("Room noise")
-        self.btn_noise.setMinimumHeight(26)
+        self.btn_noise.setMinimumHeight(30)
         self.btn_noise.setToolTip(
-            "Lift the watch off the pickup and press this. It measures the noise\n"
-            "floor for two seconds and tells you whether the room is quiet enough\n"
-            "to trust an amplitude reading.")
+            "Lift the watch off the pickup and press this. It listens for a couple of\n"
+            "seconds and tells you whether the room is quiet enough to trust an\n"
+            "amplitude reading. Starts listening on its own if nothing is running.")
         self.btn_noise.clicked.connect(self._noise_check)
-        g4.addPersistent(self.btn_noise)
+
+        tune_row = QtWidgets.QWidget()
+        tr = QtWidgets.QHBoxLayout(tune_row)
+        tr.setContentsMargins(0, 0, 0, 0)
+        tr.setSpacing(6)
+        tr.addWidget(self.btn_tune, 1)
+        tr.addWidget(self.btn_noise, 1)
+        g4.addPersistent(tune_row)
 
         self.spn_win = QtWidgets.QDoubleSpinBox()
         self.spn_win.setRange(4, 120)
@@ -2028,8 +2046,8 @@ alongside the application.</p>
 
         self._fill_calibers()
 
-        want = inner.sizeHint().width() + 20
-        self._sidebar_width = max(340, min(430, want))
+        want = inner.sizeHint().width() + 18
+        self._sidebar_width = max(330, min(410, want))
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(inner)
@@ -2042,8 +2060,8 @@ alongside the application.</p>
         cl.setSpacing(6)
         cl.addWidget(scroll, 1)
         cl.addWidget(startbox, 0)      # Start stays put no matter how the sections expand
-        col.setMinimumWidth(300)
-        col.setMaximumWidth(560)
+        col.setMinimumWidth(290)
+        col.setMaximumWidth(500)
         return col
 
     def _reset_tuning(self):
