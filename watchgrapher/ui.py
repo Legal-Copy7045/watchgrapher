@@ -748,6 +748,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last = None
         self.readings = []
         self._rate_hist = []       # (elapsed_s, rate_spd) for the rate-history plot
+        self._be_hist = []         # (elapsed_s, beat_error_ms) for the diagnostics strip
         self._listen_t0 = None     # wall-clock start of the current listen session
         self._rate_last_update = None   # monotonic() of the last appended rate point
         self._cap_frames = None    # last-seen recorder.frames, for the stream watchdog
@@ -1770,6 +1771,42 @@ alongside the application.</p>
         # ---- diagnostics ----
         dw = QtWidgets.QWidget()
         dl = QtWidgets.QVBoxLayout(dw)
+
+        live = QtWidgets.QHBoxLayout()
+
+        self.p_amp_hist = pg.PlotWidget(title="Per-beat amplitude  --  spread, not just the median")
+        self.p_amp_hist.setLabel("bottom", "amplitude", units="deg")
+        self.p_amp_hist.setLabel("left", "beats")
+        self.p_amp_hist.showGrid(x=True, y=True, alpha=0.2)
+        self.p_amp_hist.setXRange(150, 340, padding=0)
+        self.bar_amp = pg.BarGraphItem(x=[], height=[], width=0, brush="#57d38c", pen=None)
+        self.p_amp_hist.addItem(self.bar_amp)
+        self.l_amp_med = pg.InfiniteLine(angle=90, pen=pg.mkPen("#e8eef7", width=1,
+                                         style=QtCore.Qt.DashLine))
+        self.p_amp_hist.addItem(self.l_amp_med)
+        live.addWidget(self.p_amp_hist)
+
+        self.p_be_hist = pg.PlotWidget(title="Beat error over the run")
+        self.p_be_hist.setLabel("bottom", "run time", units="min")
+        self.p_be_hist.setLabel("left", "beat error", units="ms")
+        self.p_be_hist.showGrid(x=True, y=True, alpha=0.2)
+        self.c_be_hist = self.p_be_hist.plot(pen=pg.mkPen("#ff9d4d", width=2))
+        live.addWidget(self.p_be_hist)
+
+        self.p_spec = pg.PlotWidget(title="Audio spectrum  --  shaded band is the current filter")
+        self.p_spec.setLabel("bottom", "frequency", units="Hz")
+        self.p_spec.setLabel("left", "level", units="dB")
+        self.p_spec.showGrid(x=True, y=True, alpha=0.2)
+        self.p_spec.setLogMode(x=True, y=False)
+        self.p_spec.setYRange(-60, 2, padding=0)
+        self.c_spec = self.p_spec.plot(pen=pg.mkPen("#4da3ff", width=1.5))
+        self.reg_band = pg.LinearRegionItem(brush=(90, 163, 255, 55), pen=pg.mkPen(None),
+                                            movable=False)
+        self.p_spec.addItem(self.reg_band)
+        live.addWidget(self.p_spec)
+
+        dl.addLayout(live, 3)
+
         self.p_fault = pg.PlotWidget(title="Timing residual spectrum -- peaks are repeating faults")
         self.p_fault.setLabel("bottom", "period", units="beats")
         self.p_fault.setLabel("left", "swing", units="ms")
@@ -1778,7 +1815,7 @@ alongside the application.</p>
         self.c_fault = self.p_fault.plot(pen=pg.mkPen("#4da3ff", width=1.5))
         dl.addWidget(self.p_fault, 2)
         self.txt_fault = QtWidgets.QTextBrowser()
-        dl.addWidget(self.txt_fault, 3)
+        dl.addWidget(self.txt_fault, 2)
         b_fault = QtWidgets.QPushButton("Scan for periodic faults")
         b_fault.setStyleSheet(
             f"QPushButton{{background:{ACCENT};color:#08101c;font-weight:bold;"
@@ -1966,11 +2003,13 @@ alongside the application.</p>
             self._pending_buffer = 0
             self.worker.recorder = self.recorder
             self._rate_hist = []
+            self._be_hist = []
             self._listen_t0 = time.time()
             self._rate_last_update = None
             self._cap_frames = None
             self._stream_restarts = 0
             self.c_hist.setData([], [])
+            self.c_be_hist.setData([], [])
         else:
             if self._run_t0 is not None:
                 self._finish_run(stopped_early=True)
@@ -2295,6 +2334,29 @@ alongside the application.</p>
                 t = (np.arange(m.beat_wave.size) - m.beat_wave_pre) / m.beat_wave_fs * 1000.0
                 self.c_wave.setData(t, np.asarray(m.beat_wave, dtype=float))
 
+    def _update_diag(self, m):
+        """Live diagnostics plots: amplitude spread, beat-error trend, spectrum."""
+        if m.amp_samples.size >= 5:
+            a = np.asarray(m.amp_samples, dtype=float)
+            counts, edges = np.histogram(a, bins=28, range=(150.0, 340.0))
+            centres = (edges[:-1] + edges[1:]) / 2.0
+            self.bar_amp.setOpts(x=centres, height=counts, width=(edges[1] - edges[0]) * 0.9)
+            self.l_amp_med.setPos(float(np.median(a)))
+
+        if m.beat_error == m.beat_error and self._listen_t0 is not None:
+            el = time.time() - self._listen_t0
+            self._be_hist.append((el, float(m.beat_error)))
+            self._be_hist = self._decimate_rate_hist(self._be_hist)
+            b = np.asarray(self._be_hist, dtype=float)
+            self.c_be_hist.setData(b[:, 0] / 60.0, b[:, 1])
+
+        if m.spectrum_f.size:
+            self.c_spec.setData(np.asarray(m.spectrum_f, dtype=float),
+                                np.asarray(m.spectrum_db, dtype=float))
+            lo = max(20.0, float(self.spn_lo.value()))
+            hi = max(lo + 1.0, float(self.spn_hi.value()))
+            self.reg_band.setRegion([np.log10(lo), np.log10(hi)])
+
     def _draw_mic_scope(self):
         if self._wave_mode != "Mic" or self.recorder is None:
             return
@@ -2341,6 +2403,7 @@ alongside the application.</p>
             self.c_hist.setData(a[:, 0] / 60.0, a[:, 1])
             self._rate_last_update = time.monotonic()
 
+        self._update_diag(m)
         self._check_stable(m)
         self._log_reserve(m)
 

@@ -177,6 +177,8 @@ class Measurement:
     beat_wave_fs: int = 0
     beat_wave_pre: int = 0                # samples before the beat anchor
     amp_samples: np.ndarray = field(default_factory=lambda: np.array([]))  # per-beat amplitude, deg
+    spectrum_f: np.ndarray = field(default_factory=lambda: np.array([]))   # Hz
+    spectrum_db: np.ndarray = field(default_factory=lambda: np.array([]))  # dB, peak = 0
     dt_mean: float = float("nan")         # seconds, 1st-to-3rd noise
     parity_correction: float = 0.0        # ms of tick/tock anchor offset removed
     parity_offset_seen: float = 0.0       # ms of offset measured, applied or not
@@ -196,6 +198,34 @@ class AnalyzerConfig:
     no_parity_fix: bool = False       # disable the tick/tock anchor correction
 
 
+def _coarse_spectrum(x: np.ndarray, fs: int, bins: int = 360):
+    """
+    A log-binned magnitude spectrum of the raw signal, for the diagnostics
+    view: where the escapement energy sits, and whether the rotor or a case
+    resonance is putting energy somewhere the filter is not looking. Peak
+    normalised to 0 dB. Returns (freqs_hz, level_db).
+    """
+    try:
+        nfft = 1 << 14
+        seg = x[:nfft] if x.size >= nfft else np.pad(x, (0, nfft - x.size))
+        mag = np.abs(np.fft.rfft(seg * np.hanning(nfft)))
+        fr = np.fft.rfftfreq(nfft, 1.0 / fs)
+        keep = (fr >= 20.0) & (fr <= fs / 2.0)
+        fr, mag = fr[keep], mag[keep]
+        if fr.size < 8:
+            return np.array([]), np.array([])
+        edges = np.logspace(np.log10(fr[0]), np.log10(fr[-1]), bins + 1)
+        idx = np.clip(np.digitize(fr, edges) - 1, 0, bins - 1)
+        binned = np.zeros(bins)
+        np.maximum.at(binned, idx, mag)          # peak-hold within each bin
+        centres = np.sqrt(edges[:-1] * edges[1:])
+        ok = binned > 0
+        db = 20.0 * np.log10(binned[ok] / (binned[ok].max() + 1e-12) + 1e-9)
+        return centres[ok], db
+    except Exception:
+        return np.array([]), np.array([])
+
+
 def analyze(samples: np.ndarray, fs: int, cfg: AnalyzerConfig) -> Measurement:
     """Run the full chain on one block of audio."""
     m = Measurement(lift_angle=cfg.lift_angle)
@@ -210,6 +240,7 @@ def analyze(samples: np.ndarray, fs: int, cfg: AnalyzerConfig) -> Measurement:
         return m
 
     x = x - np.mean(x)
+    m.spectrum_f, m.spectrum_db = _coarse_spectrum(x, fs)
     xf = dsp.bandpass(x, fs, cfg.band_lo, cfg.band_hi)
     env = dsp.envelope(xf, fs, cfg.env_win_ms)
 
