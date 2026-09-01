@@ -13,6 +13,7 @@ import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 import pyqtgraph as pg
 
+from . import __version__
 from . import (audio, advisor, catalog as catdb, collection as coll,
                faults, references as refdb, report as reportmod)
 from .analysis import (AnalyzerConfig, analyze, autotune, trace_points,
@@ -738,7 +739,7 @@ class Readout(QtWidgets.QFrame):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("WatchGrapher -- acoustic timegrapher")
+        self.setWindowTitle(f"WatchGrapher {__version__} -- acoustic timegrapher")
         # Minimum small enough for a 1366x768 laptop; the control column
         # scrolls, so nothing can be pushed out of reach.
         self.setMinimumSize(940, 560)
@@ -749,6 +750,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._rate_hist = []       # (elapsed_s, rate_spd) for the rate-history plot
         self._listen_t0 = None     # wall-clock start of the current listen session
         self._rate_last_update = None   # monotonic() of the last appended rate point
+        self._cap_frames = None    # last-seen recorder.frames, for the stream watchdog
+        self._cap_frames_t = 0.0   # monotonic() when frames last advanced
+        self._stream_restart_t = 0.0    # monotonic() of the last auto-restart
+        self._stream_restarts = 0
         self._last_rate_for_calib = None
         self._tuning = False       # a self-tune sweep is in flight
         self._selftune_session = False       # one-press auto run active
@@ -972,7 +977,8 @@ minimum before the trend figures mean anything.</p>
 
 <p style='color:#8a94a4;margin-top:20px'>Full documentation is in README.md
 alongside the application.</p>
-</div>""")
+<p style='color:#5a6472'>Version %s</p>
+</div>""" % __version__)
         v.addWidget(t)
         return page
 
@@ -1938,6 +1944,8 @@ alongside the application.</p>
             self._rate_hist = []
             self._listen_t0 = time.time()
             self._rate_last_update = None
+            self._cap_frames = None
+            self._stream_restarts = 0
             self.c_hist.setData([], [])
         else:
             if self._run_t0 is not None:
@@ -2171,6 +2179,62 @@ alongside the application.</p>
                 if age > 4.0:
                     self.lbl_live.setText(f"no new reading for {age:.0f} s")
                     self.lbl_live.setStyleSheet("color:#ffb648;font-size:12px;")
+            self._watch_stream()
+
+    def _watch_stream(self):
+        """
+        Recover a dead input stream on a long run.
+
+        On some hardware the OS stops delivering audio callbacks after a while
+        (USB power management, a WASAPI event timeout, a run of overflows).
+        The capture buffer then stops advancing, the analysis worker keeps
+        re-reading the same stale seconds, and every live plot freezes on
+        identical data while the clock-driven labels carry on -- which is
+        exactly the "it paused" symptom. Detect it and rebuild the stream in
+        place, keeping the rate history and power-reserve log intact.
+        """
+        rec = self.recorder
+        if rec is None or self.cmb_dev.currentData() == "SIM" or self._run_t0 is not None:
+            return
+        fr = getattr(rec, "frames", None)
+        if fr is None:
+            return
+        now = time.monotonic()
+        if self._cap_frames is None or fr != self._cap_frames:
+            self._cap_frames = fr
+            self._cap_frames_t = now
+            return
+        stalled = (now - self._cap_frames_t) > 3.0 or not getattr(rec, "running", True)
+        if stalled and (now - self._stream_restart_t) > 5.0:
+            self._stream_restart_t = now
+            self._restart_stream()
+
+    def _restart_stream(self):
+        dev = self.cmb_dev.currentData()
+        if dev == "SIM" or self.recorder is None:
+            return
+        sr = self.recorder.samplerate
+        buf = self.recorder.n / sr
+        old = self.recorder
+        self.worker.recorder = None
+        try:
+            old.stop()
+        except Exception:
+            pass
+        try:
+            self.recorder = audio.Recorder(device=dev, samplerate=sr, buffer_seconds=buf)
+            self.recorder.start()
+        except Exception as e:
+            self.recorder = None
+            self.status.showMessage(
+                f"Audio stream stopped and could not be restarted: {e}", 10000)
+            return
+        self.worker.recorder = self.recorder
+        self._cap_frames = None
+        self._stream_restarts += 1
+        self.status.showMessage(
+            f"Audio stream stalled and was restarted (#{self._stream_restarts}). "
+            f"Rate history and the power-reserve log continue uninterrupted.", 6000)
 
     def _on_result(self, m):
         self.last = m

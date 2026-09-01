@@ -75,6 +75,7 @@ class Recorder:
         self._stream = None
         self.peak = 0.0
         self.overflows = 0
+        self.frames = 0          # total samples ever received; monotonic, for a stall watchdog
         self._wav: Optional[wave.Wave_write] = None
         self._wav_lock = threading.Lock()
 
@@ -86,6 +87,7 @@ class Recorder:
         data = np.asarray(data, dtype=np.float32)
         p = float(np.max(np.abs(data))) if data.size else 0.0
         self.peak = max(self.peak * 0.92, p)
+        self.frames += len(data)
 
         with self._lock:
             k = len(data)
@@ -127,6 +129,15 @@ class Recorder:
                 pass
             self._stream = None
         self.stop_recording()
+
+    @property
+    def running(self) -> bool:
+        """True while the input stream is open and delivering audio."""
+        s = self._stream
+        try:
+            return s is not None and s.active
+        except Exception:
+            return False
 
     # -- data access -------------------------------------------------------
     def read(self, seconds: float) -> np.ndarray:
@@ -218,6 +229,7 @@ class SimulatedRecorder:
         self._lock = threading.Lock()
         self.peak = 0.0
         self.overflows = 0
+        self.frames = 0
         self._wav = None
         self._wav_lock = threading.Lock()
 
@@ -316,6 +328,7 @@ class SimulatedRecorder:
     def _push(self, data):
         p = float(np.max(np.abs(data))) if data.size else 0.0
         self.peak = max(self.peak * 0.92, p)
+        self.frames += len(data)
         with self._lock:
             k = len(data)
             end = self._write + k
@@ -345,6 +358,10 @@ class SimulatedRecorder:
             self._thread.join(timeout=1.0)
             self._thread = None
         self.stop_recording()
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
 
     # -- shared interface --------------------------------------------------
     read = Recorder.read

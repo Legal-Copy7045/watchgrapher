@@ -162,7 +162,9 @@ def selftest():
 
 
 def main(argv=None):
+    from . import __version__
     ap = argparse.ArgumentParser(prog="watchgrapher", description="Acoustic watch timegrapher")
+    ap.add_argument("--version", action="version", version=f"watchgrapher {__version__}")
     ap.add_argument("--devices", action="store_true", help="list audio input devices")
     ap.add_argument("--wav", help="analyze a WAV file instead of the GUI")
     ap.add_argument("--listen", type=float, metavar="SEC",
