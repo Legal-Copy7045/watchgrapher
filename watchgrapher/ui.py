@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import csv
+import math
 import os
 import threading
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -15,7 +16,7 @@ import pyqtgraph as pg
 
 from . import __version__
 from . import (audio, advisor, catalog as catdb, collection as coll,
-               faults, references as refdb, report as reportmod)
+               faults, references as refdb, report as reportmod, timesync)
 from .analysis import (AnalyzerConfig, analyze, autotune, trace_points,
                        solve_lift_angle, tuning_score, reserve_analytics)
 from .calibers import (CALIBERS, GROUP_ORDER, STANDARD_BPH, grouped,
@@ -736,6 +737,93 @@ class Readout(QtWidgets.QFrame):
         self.v.setStyleSheet(f"color:{color};border:none;")
 
 
+class AnalogClock(QtWidgets.QWidget):
+    """A plain analog face driven from an external datetime, with a beat flash."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(260, 260)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self._dt = None
+        self._flash = 0.0        # 0..1
+
+    def show_time(self, dt, flash=0.0):
+        self._dt = dt
+        self._flash = float(flash)
+        self.update()
+
+    def paintEvent(self, _ev):
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        side = min(self.width(), self.height())
+        p.translate(self.width() / 2.0, self.height() / 2.0)
+        p.scale(side / 220.0, side / 220.0)
+
+        face = QtGui.QColor("#1a1f27")
+        if self._flash > 0:
+            f = self._flash
+            face = QtGui.QColor(int(26 + (235 - 26) * f), int(31 + (240 - 31) * f),
+                                int(39 + (247 - 39) * f))
+        p.setPen(QtGui.QPen(QtGui.QColor("#2a323e"), 3))
+        p.setBrush(face)
+        p.drawEllipse(-100, -100, 200, 200)
+
+        for i in range(60):
+            p.save()
+            p.rotate(i * 6)
+            if i % 5 == 0:
+                p.setPen(QtGui.QPen(QtGui.QColor("#8a94a4"), 3))
+                p.drawLine(0, -100, 0, -87)
+            else:
+                p.setPen(QtGui.QPen(QtGui.QColor("#3a4553"), 1))
+                p.drawLine(0, -100, 0, -94)
+            p.restore()
+
+        if self._dt is None:
+            p.setPen(QtGui.QColor("#8a94a4"))
+            p.drawText(QtCore.QRectF(-100, -12, 200, 24), QtCore.Qt.AlignCenter,
+                       "pick a time source")
+            return
+
+        dt = self._dt
+        secs = dt.second + dt.microsecond / 1e6
+        mins = dt.minute + secs / 60.0
+        hrs = (dt.hour % 12) + mins / 60.0
+
+        def hand(angle, length, width, color, back=14):
+            p.save()
+            p.rotate(angle)
+            pen = QtGui.QPen(QtGui.QColor(color), width)
+            pen.setCapStyle(QtCore.Qt.RoundCap)
+            p.setPen(pen)
+            p.drawLine(0, back, 0, -length)
+            p.restore()
+
+        hand(hrs * 30.0, 52, 6, "#e8eef7")
+        hand(mins * 6.0, 78, 4, "#e8eef7")
+        hand(secs * 6.0, 92, 2, "#ff5d5d")
+        p.setPen(QtCore.Qt.NoPen)
+        p.setBrush(QtGui.QColor("#ff5d5d"))
+        p.drawEllipse(-4, -4, 8, 8)
+
+
+class _NtpProbe(QtCore.QObject):
+    done = QtCore.Signal(str, float, float, str)   # label, offset_s, roundtrip_s, error
+
+    def __init__(self, host, label):
+        super().__init__()
+        self.host, self.label = host, label
+
+    @QtCore.Slot()
+    def run(self):
+        try:
+            from . import timesync
+            off, rt = timesync.query_ntp(self.host)
+            self.done.emit(self.label, float(off), float(rt), "")
+        except Exception as e:                       # noqa: BLE001
+            self.done.emit(self.label, 0.0, 0.0, f"{type(e).__name__}: {e}")
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -763,6 +851,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._selftune_deadline = 0.0        # monotonic() escape time for the sweep
         self._suppress_finish = False   # internal stream restarts, not user stops
         self._closing = False
+        self._sync_offset = 0.0     # seconds to add to time.time() for true time
+        self._sync_info = "Using this computer's clock, uncorrected."
+        self._sync_last_sec = 0
+        self._sync_thread = None
+        self._watch_set_ref = None  # (true_epoch, watch_epoch) when the watch was set
         self._run_t0 = None        # timed run start, or None
         self._run_len = 0.0
         self._stable = []          # recent readings, for auto-capture
@@ -807,7 +900,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stack = QtWidgets.QStackedWidget()
         self.stack.addWidget(measure)
         self.stack.addWidget(self._build_watches_page())
+        self.stack.addWidget(self._build_sync_page())
         self.stack.addWidget(self._build_help_page())
+        self.stack.currentChanged.connect(self._on_page_changed)
 
         central = QtWidgets.QWidget()
         v = QtWidgets.QVBoxLayout(central)
@@ -847,7 +942,8 @@ class MainWindow(QtWidgets.QMainWindow):
         vm = mb.addMenu("&View")
         for label, idx, key in (("Measure", 0, "Ctrl+1"),
                                 ("My Watches", 1, "Ctrl+2"),
-                                ("Help", 2, "Ctrl+3")):
+                                ("Sync", 2, "Ctrl+3"),
+                                ("Help", 3, "Ctrl+4")):
             act = QtGui.QAction(label, self)
             act.setShortcut(key)
             act.triggered.connect(lambda _=False, i=idx: self._goto_page(i))
@@ -869,6 +965,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for i, (text, tip) in enumerate([
                 ("MEASURE", "Live timing: trace, readouts, positions and advice."),
                 ("MY WATCHES", "Your collection: profiles, timing history and trends."),
+                ("SYNC", "Reference clock for hand-setting a watch to true time."),
                 ("HELP", "How to use the tool, and how to read what it tells you.")]):
             b = QtWidgets.QPushButton(text)
             b.setCheckable(True)
@@ -890,6 +987,223 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_live.setStyleSheet("color:#5a6472;font-size:12px;")
         h.addWidget(self.lbl_live)
         return bar
+
+    # ============================================================== sync page
+    def _build_sync_page(self):
+        page = QtWidgets.QWidget()
+        outer = QtWidgets.QHBoxLayout(page)
+        outer.setContentsMargins(24, 20, 24, 20)
+        outer.setSpacing(20)
+
+        self.clock = AnalogClock()
+        outer.addWidget(self.clock, 3)
+
+        side = QtWidgets.QVBoxLayout()
+        side.setSpacing(10)
+
+        self.lbl_sync_digital = QtWidgets.QLabel("--:--:--")
+        f = self.lbl_sync_digital.font()
+        f.setPointSize(34)
+        f.setBold(True)
+        f.setFamily("Consolas")
+        self.lbl_sync_digital.setFont(f)
+        self.lbl_sync_digital.setStyleSheet("color:#e8eef7;")
+        side.addWidget(self.lbl_sync_digital)
+
+        self.lbl_sync_date = QtWidgets.QLabel("")
+        self.lbl_sync_date.setStyleSheet("color:#8a94a4;")
+        side.addWidget(self.lbl_sync_date)
+
+        srow = QtWidgets.QHBoxLayout()
+        self.cmb_src = QtWidgets.QComboBox()
+        self.cmb_src.addItem("This computer's clock", "SYSTEM")
+        for host, label in timesync.NTP_SERVERS:
+            self.cmb_src.addItem(f"NTP -- {label}", host)
+        self.cmb_src.addItem("Manual offset...", "MANUAL")
+        self.cmb_src.currentIndexChanged.connect(self._sync_source_changed)
+        self.btn_sync = QtWidgets.QPushButton("Sync now")
+        self.btn_sync.setStyleSheet(
+            f"QPushButton{{background:{ACCENT};color:#08101c;font-weight:bold;"
+            "padding:7px 16px;border-radius:6px;}")
+        self.btn_sync.clicked.connect(self._sync_now)
+        srow.addWidget(self.cmb_src, 1)
+        srow.addWidget(self.btn_sync, 0)
+        side.addLayout(srow)
+
+        self.spn_manual = QtWidgets.QDoubleSpinBox()
+        self.spn_manual.setRange(-120.0, 120.0)
+        self.spn_manual.setDecimals(2)
+        self.spn_manual.setSingleStep(0.1)
+        self.spn_manual.setSuffix(" s manual correction")
+        self.spn_manual.valueChanged.connect(
+            lambda v: self._apply_offset(v, f"Manual correction {v:+.2f} s.")
+            if self.cmb_src.currentData() == "MANUAL" else None)
+        self.spn_manual.setVisible(False)
+        side.addWidget(self.spn_manual)
+
+        self.lbl_sync_info = QtWidgets.QLabel(self._sync_info)
+        self.lbl_sync_info.setWordWrap(True)
+        self.lbl_sync_info.setStyleSheet("color:#c8d0dc;font-size:12px;")
+        side.addWidget(self.lbl_sync_info)
+
+        self.lbl_sync_dev = QtWidgets.QLabel("")
+        self.lbl_sync_dev.setWordWrap(True)
+        self.lbl_sync_dev.setStyleSheet("color:#ffb648;font-size:12px;")
+        side.addWidget(self.lbl_sync_dev)
+
+        self.chk_sync_flash = QtWidgets.QCheckBox("Flash the face on every second")
+        self.chk_sync_beep = QtWidgets.QCheckBox("Beep on every second")
+        for c in (self.chk_sync_flash, self.chk_sync_beep):
+            c.setStyleSheet("color:#c8d0dc;")
+            side.addWidget(c)
+
+        line = QtWidgets.QFrame()
+        line.setFrameShape(QtWidgets.QFrame.HLine)
+        line.setStyleSheet("color:#2a323e;")
+        side.addWidget(line)
+
+        _wd = QtWidgets.QLabel("Watch drift")
+        _wd.setStyleSheet("color:#4da3ff;font-weight:bold;")
+        side.addWidget(_wd)
+        self.btn_watch_set = QtWidgets.QPushButton("Mark: watch is set to this time now")
+        self.btn_watch_set.clicked.connect(self._mark_watch_set)
+        side.addWidget(self.btn_watch_set)
+
+        drow = QtWidgets.QHBoxLayout()
+        self.te_watch_now = QtWidgets.QTimeEdit()
+        self.te_watch_now.setDisplayFormat("HH:mm:ss")
+        self.te_watch_now.setTime(QtCore.QTime.currentTime())
+        b_drift = QtWidgets.QPushButton("Watch now reads this -> drift")
+        b_drift.clicked.connect(self._compute_watch_drift)
+        drow.addWidget(self.te_watch_now, 0)
+        drow.addWidget(b_drift, 1)
+        side.addLayout(drow)
+
+        self.lbl_watch_drift = QtWidgets.QLabel("")
+        self.lbl_watch_drift.setWordWrap(True)
+        self.lbl_watch_drift.setStyleSheet("color:#c8d0dc;font-size:12px;")
+        side.addWidget(self.lbl_watch_drift)
+
+        side.addStretch(1)
+        sw = QtWidgets.QWidget()
+        sw.setLayout(side)
+        sw.setMaximumWidth(380)
+        outer.addWidget(sw, 2)
+
+        self._sync_tmr = QtCore.QTimer(self)
+        self._sync_tmr.setInterval(33)
+        self._sync_tmr.timeout.connect(self._sync_tick)
+        return page
+
+    def _on_page_changed(self, idx):
+        # The Sync clock only needs its 30 fps repaint while it is on screen.
+        if not hasattr(self, "_sync_tmr"):
+            return
+        if idx == 2:
+            self._sync_tick()
+            self._sync_tmr.start()
+        else:
+            self._sync_tmr.stop()
+
+    def _sync_source_changed(self):
+        self.spn_manual.setVisible(self.cmb_src.currentData() == "MANUAL")
+        if self.cmb_src.currentData() == "SYSTEM":
+            self._apply_offset(0.0, "Using this computer's clock, uncorrected.")
+
+    def _apply_offset(self, offset, info, deviation=""):
+        self._sync_offset = float(offset)
+        self._sync_info = info
+        self.lbl_sync_info.setText(info)
+        self.lbl_sync_dev.setText(deviation)
+
+    def _sync_now(self):
+        src = self.cmb_src.currentData()
+        if src == "SYSTEM":
+            self._apply_offset(0.0, "Using this computer's clock, uncorrected.")
+            return
+        if src == "MANUAL":
+            v = self.spn_manual.value()
+            self._apply_offset(v, f"Manual correction {v:+.2f} s.")
+            return
+        if self._sync_thread is not None and self._sync_thread.isRunning():
+            return
+        label = self.cmb_src.currentText().replace("NTP -- ", "")
+        self.btn_sync.setEnabled(False)
+        self.btn_sync.setText("Contacting...")
+        self._sync_thread = QtCore.QThread(self)
+        self._sync_probe = _NtpProbe(src, label)
+        self._sync_probe.moveToThread(self._sync_thread)
+        self._sync_thread.started.connect(self._sync_probe.run)
+        self._sync_probe.done.connect(self._on_ntp_done)
+        self._sync_probe.done.connect(self._sync_thread.quit)
+        self._sync_thread.start()
+
+    def _on_ntp_done(self, label, offset, roundtrip, error):
+        self.btn_sync.setEnabled(True)
+        self.btn_sync.setText("Sync now")
+        if error:
+            self.lbl_sync_dev.setText("")
+            self._apply_offset(self._sync_offset,
+                               f"Could not reach {label}: {error}. Clock unchanged.")
+            return
+        when = datetime.now().strftime("%H:%M:%S")
+        self._apply_offset(
+            offset,
+            f"Synced to {label} at {when}. Offset {offset:+.3f} s, "
+            f"round trip {roundtrip * 1000:.0f} ms.",
+            deviation=(f"This computer's clock is {abs(offset):.2f} s "
+                       f"{'slow' if offset > 0 else 'fast'} versus {label}."))
+
+    def _true_now(self):
+        return time.time() + self._sync_offset
+
+    def _sync_tick(self):
+        now = self._true_now()
+        dt = datetime.fromtimestamp(now)
+        whole = math.floor(now)
+        if whole != self._sync_last_sec:
+            self._sync_last_sec = whole
+            if self.chk_sync_beep.isChecked():
+                QtWidgets.QApplication.beep()
+        frac = now - whole
+        flash = max(0.0, 1.0 - frac / 0.12) if self.chk_sync_flash.isChecked() else 0.0
+        self.clock.show_time(dt, flash)
+        self.lbl_sync_digital.setText(dt.strftime("%H:%M:%S") + f".{dt.microsecond // 1000:03d}")
+        self.lbl_sync_date.setText(dt.strftime("%A %d %B %Y  (local time)"))
+
+    def _mark_watch_set(self):
+        t = self._true_now()
+        self._watch_set_ref = t
+        self.te_watch_now.setTime(QtCore.QTime.currentTime())
+        self.lbl_watch_drift.setText(
+            f"Marked at {datetime.fromtimestamp(t):%H:%M:%S}. Come back later, read the "
+            f"watch, enter it above and press the drift button.")
+
+    def _compute_watch_drift(self):
+        if self._watch_set_ref is None:
+            self.lbl_watch_drift.setText("Press 'Mark' when you set the watch first.")
+            return
+        now = self._true_now()
+        ref0 = datetime.fromtimestamp(self._watch_set_ref)
+        wt = self.te_watch_now.time()
+        # Assume the watch shows a time on the same day as 'now', nearest wrap.
+        base = datetime.fromtimestamp(now).replace(
+            hour=wt.hour(), minute=wt.minute(), second=wt.second(), microsecond=0)
+        for cand in (base, base - timedelta(days=1), base + timedelta(days=1)):
+            if abs((cand - datetime.fromtimestamp(now)).total_seconds()) < 43200:
+                watch_dt = cand
+                break
+        else:
+            watch_dt = base
+        elapsed = now - self._watch_set_ref
+        drift = (watch_dt - datetime.fromtimestamp(now)).total_seconds()
+        if elapsed < 60:
+            self.lbl_watch_drift.setText("Give it longer than a minute before reading drift.")
+            return
+        rate = drift / elapsed * 86400.0
+        self.lbl_watch_drift.setText(
+            f"Set {ref0:%H:%M:%S}, {elapsed / 3600:.1f} h ago. Watch is {drift:+.0f} s "
+            f"versus true time now -> {rate:+.1f} s/day.")
 
     def _build_help_page(self):
         page = QtWidgets.QWidget()
@@ -969,6 +1283,14 @@ tells you what to adjust for your caliber. <b>Tools</b> has the regulator
 sensitivity helper, the lift-angle solver, a demagnetiser A/B and the report
 builder. <b>Power reserve</b> logs amplitude decay over hours. <b>Diagnostics</b>
 scans the timing residuals for repeating faults like a bent escape wheel tooth.</p>
+
+<h2 style='color:#4da3ff'>Sync</h2>
+<p>A reference clock for hand-setting a watch. Pick a time source -- this
+computer, or a public NTP server for true time independent of the PC clock --
+and press <i>Sync now</i>. The face shows corrected time and the panel reports
+how far the computer's own clock is off. Turn on the per-second flash or beep
+to land the seconds hand precisely. <i>Mark</i> when you set the watch, come
+back later, enter what it reads, and it works out the daily rate.</p>
 
 <h2 style='color:#4da3ff'>My Watches</h2>
 <p>Save runs against a watch and the trend builds up. A single run says how it
