@@ -252,11 +252,19 @@ Lift angle only scales amplitude. Rate and beat error are unaffected, so a
 wrong value won't make a good watch look broken for the right reason -- it'll
 make it look broken for the wrong one.
 
-The database holds around 2,200 calibers in groups -- Swiss/European,
+The database holds around 2,250 calibers in groups -- Swiss/European,
 Japanese, Chinese clones, Chinese in-house, Russian, generic fallbacks, and the
-bulk WatchGuy reference list. The dropdown shows the curated groups; the search
-box reaches everything, including the reference list, and matches notes as well
-as names, so `dandong`, `2824`, `8215` and `as1686` all work.
+bulk WatchGuy reference list. About 140 of those are curated entries with a
+beat rate, regulator type and amplitude band; the rest are the WatchGuy
+lift-angle list. The dropdown shows the curated groups; the search box reaches
+everything, including the reference list, and matches notes as well as names,
+so `dandong`, `2824`, `8215` and `as1686` all work.
+
+The watch catalogue that feeds **Find by watch model** carries roughly 470
+model/reference entries across 80+ brands -- the mainstream Swiss and Japanese
+lines by generation, the Swatch-group value tier (all Powermatic 80 / C07), the
+common Sellita/Soprod/STP/La Joux-Perret microbrand movements, and the vintage
+Valjoux and Seiko diver/chronograph families.
 
 Every entry records where its lift angle came from:
 

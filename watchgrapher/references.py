@@ -240,7 +240,7 @@ Rolex|Daytona|6263|1969-1987|eta_7750|Stainless steel|Black acrylic|Big Red|Manu
 Rolex|Datejust|16220|1988-2005|rolex_3135|Stainless steel|Smooth or engine turned||
 Rolex|Milgauss|116400GV Z-Blue|2014-2023|rolex_3131|Oystersteel|Smooth|Z-Blue|Green sapphire crystal
 
-Tudor|Black Bay Chrono|79360N|2021-|eta_7750|Stainless steel|Steel tachymeter||MT5813 base -- verify
+Tudor|Black Bay Chrono|79360N|2017-|breitling_b01|Stainless steel|Steel tachymeter||MT5813 = Breitling B01 base
 Tudor|Black Bay GMT|79830RB|2018-|tudor_mt5602|Stainless steel|Blue and red|Pepsi BB|
 Tudor|Black Bay Bronze|79250BA|2016-|tudor_mt5602|Bronze|Bronze||
 Tudor|Black Bay Fifty-Eight 925|79010SG|2021-|tudor_mt5602|Silver|Taupe||
@@ -282,7 +282,7 @@ Seiko|Grand Seiko|SBGR251|2015-|seiko_9s65|Stainless steel|Smooth||Cal 9S65
 Seiko|Grand Seiko|SBGH273|2019-|seiko_9s85|Stainless steel|Smooth||Hi-Beat 36000
 
 Citizen|Promaster Diver|NY0040|1990-|miyota_8215|Stainless steel|Black|Fugu|Cal 8203
-Citizen|Tsuyosa|NJ0150|2022-|miyota_9015|Stainless steel|Smooth||Cal 8210
+Citizen|Tsuyosa|NJ0150|2022-|miyota_8215|Stainless steel|Smooth||Miyota 8210, day/date, no hacking
 Citizen|Series 8|NB6011|2022-|miyota_9015|Stainless steel|Smooth||Cal 0950
 Orient|Star Classic|RK-AU0002|2018-|orient_f6922|Stainless steel|Smooth||Cal F6N4
 Orient|Ray II|FAA02004|2016-|orient_f6922|Stainless steel|Black||
@@ -380,7 +380,7 @@ Panerai|Luminor Marina|PAM01312|2019-|panerai_p3000|Stainless steel|Smooth||Cal 
 Panerai|Radiomir|PAM00992|2018-|panerai_p3000|Stainless steel|Smooth||Cal P.6000
 Panerai|Luminor Base 8 Days|PAM00560|2013-|panerai_p3000|Stainless steel|Smooth||Cal P.5000
 Breitling|Navitimer 01|AB0121|2011-|eta_7750|Stainless steel|Slide rule||Cal B01 in-house
-Breitling|Superocean Heritage|A10380|2017-|eta_2892a2|Stainless steel|Black ceramic||Cal B20 / Tudor MT5612
+Breitling|Superocean Heritage|A10380|2017-|tudor_mt5602|Stainless steel|Black ceramic||Cal B20 = Kenissi / Tudor MT5612 base
 Breitling|Chronomat|AB0134|2020-|eta_7750|Stainless steel|Rider tabs||Cal B01
 TAG Heuer|Carrera Calibre 5|WAR211A|2013-|sw200_1|Stainless steel|Smooth||ETA 2824 / SW200
 TAG Heuer|Aquaracer Calibre 5|WAY201A|2015-|sw200_1|Stainless steel|Black ceramic||
