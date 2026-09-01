@@ -352,7 +352,9 @@ Nomos|Tangente / Club Campus / Orion / Ludwig|Alpha (hand-wind)|2005-|nomos_alph
 Nomos|Tangente neomatik / Metro / Club Sport|DUW 3001|2015-|nomos_alpha|check
 Nomos|Ahoi / Club Automat|DUW 5001 / Epsilon|2013-|nomos_alpha|check
 
-Jaeger-LeCoultre|Master Ultra Thin / Master Control Date|cal 899 / 938|2013-|jlc_889|sure
+Jaeger-LeCoultre|Master Ultra Thin / Master Control Date|cal 899|2013-|jlc_889|sure
+Jaeger-LeCoultre|Master Ultra Thin Power Reserve / Reserve de Marche|cal 938 / 938A|2016-|jlc_938|sure
+Jaeger-LeCoultre|Master Control Power Reserve|cal 938|2020-|jlc_938|check
 Jaeger-LeCoultre|Polaris Automatic / Date|cal 898 / 899|2018-|jlc_889|sure
 Jaeger-LeCoultre|Reverso Tribute Duoface|cal 854 / 1000|2016-|jlc_889|check
 
