@@ -923,6 +923,180 @@ class AnalogClock(QtWidgets.QWidget):
         p.drawEllipse(-4, -4, 8, 8)
 
 
+class EscapementView(QtWidgets.QWidget):
+    """
+    Schematic Swiss lever escapement, animated from the measured numbers.
+
+    Not a mechanism simulation -- it is driven by a phase clock so you can
+    watch, slowed right down, what the balance, fork and escape wheel are
+    doing at each of the three noises the analyzer listens for.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(320, 300)
+        self.amp = 275.0
+        self.bph = 28800
+        self.dt = 0.006          # unlocking-to-drop interval, seconds
+        self.slowdown = 0.1
+        self._t0 = time.monotonic()
+        self._phase = 0.0        # seconds into the watch's own timeline
+
+    def set_params(self, amp, bph, dt):
+        if amp == amp:
+            self.amp = float(np.clip(amp, 120, 340))
+        if bph:
+            self.bph = int(bph)
+        if dt == dt and dt > 0:
+            self.dt = float(dt)
+
+    def advance(self):
+        now = time.monotonic()
+        self._phase += (now - self._t0) * self.slowdown
+        self._t0 = now
+        self.update()
+
+    def paintEvent(self, _ev):
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        p.fillRect(self.rect(), QtGui.QColor("#12151a"))
+        s = min(self.width(), self.height())
+        p.translate(self.width() / 2.0, self.height() / 2.0)
+        p.scale(s / 300.0, s / 300.0)
+
+        t_beat = 3600.0 / self.bph
+        t_osc = 2.0 * t_beat
+        k = int(self._phase / t_beat)              # beat index
+        into = self._phase - k * t_beat            # seconds into this beat
+        theta = self.amp * math.sin(2 * math.pi * self._phase / t_osc)   # balance angle, deg
+
+        # phase within the beat: unlock at 0, impulse ~dt/2, drop at dt
+        stage = ("unlock" if into < self.dt * 0.35 else
+                 "impulse" if into < self.dt else "free")
+
+        # ---- escape wheel (top) : steps one half-tooth per beat -------------
+        p.save()
+        p.translate(-70, -78)
+        ew_ang = -k * (360.0 / 15.0 / 2.0) - (min(into, self.dt) / self.dt) * 6.0
+        p.rotate(ew_ang)
+        p.setPen(QtGui.QPen(QtGui.QColor("#8a94a4"), 2))
+        p.setBrush(QtGui.QColor("#1a1f27"))
+        pts = []
+        for i in range(15):
+            a0 = math.radians(i * 24)
+            a1 = math.radians(i * 24 + 10)
+            pts.append(QtCore.QPointF(34 * math.cos(a0), 34 * math.sin(a0)))
+            pts.append(QtCore.QPointF(22 * math.cos(a1), 22 * math.sin(a1)))
+        p.drawPolygon(QtGui.QPolygonF(pts))
+        p.restore()
+
+        # ---- pallet fork : flips between bankings each beat ----------------
+        p.save()
+        p.translate(-22, -30)
+        p.rotate(12.0 if k % 2 == 0 else -12.0)
+        col = ("#ff5d5d" if stage == "unlock"
+               else "#ffb648" if stage == "impulse" else "#8a94a4")
+        pen = QtGui.QPen(QtGui.QColor(col), 5)
+        pen.setCapStyle(QtCore.Qt.RoundCap)
+        p.setPen(pen)
+        p.drawLine(0, -34, 0, 20)
+        p.drawLine(-10, -34, 10, -34)
+        p.setBrush(QtGui.QColor(col))
+        p.drawEllipse(-3, 16, 6, 6)
+        p.restore()
+
+        # ---- balance wheel (fills the lower area) -------------------------
+        p.save()
+        p.translate(0, 46)
+        p.rotate(theta)
+        p.setPen(QtGui.QPen(QtGui.QColor("#e8eef7"), 4))
+        p.setBrush(QtCore.Qt.NoBrush)
+        p.drawEllipse(-88, -88, 176, 176)
+        for a in (0, 60, 120):
+            p.save()
+            p.rotate(a)
+            p.drawLine(-88, 0, 88, 0)
+            p.restore()
+        p.setPen(QtGui.QPen(QtGui.QColor("#ff5d5d"), 5))
+        p.drawLine(0, 0, 0, -88)
+        p.restore()
+
+        # ---- labels ------------------------------------------------------
+        p.setPen(QtGui.QColor("#c8d0dc"))
+        p.setFont(QtGui.QFont("Segoe UI", 9))
+        p.drawText(QtCore.QRectF(-150, 118, 300, 18), QtCore.Qt.AlignCenter,
+                   f"amplitude {self.amp:.0f} deg   {self.bph} bph   "
+                   f"slowed {1/self.slowdown:.0f}x")
+        for i, (name, active) in enumerate([("unlock", stage == "unlock"),
+                                            ("impulse", stage == "impulse"),
+                                            ("drop / lock", stage == "free")]):
+            p.setPen(QtGui.QColor("#ff5d5d" if (i == 0 and active) else
+                                  "#ffb648" if (i == 1 and active) else
+                                  "#57d38c" if (i == 2 and active) else "#5a6472"))
+            p.drawText(QtCore.QRectF(-150, -142 + i * 16, 300, 16),
+                       QtCore.Qt.AlignHCenter, ("> " if active else "") + name)
+
+
+class EscapementDialog(QtWidgets.QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Escapement animation")
+        self.setMinimumSize(380, 460)
+        self._parent = parent
+        lay = QtWidgets.QVBoxLayout(self)
+        self.view = EscapementView()
+        lay.addWidget(self.view, 1)
+
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Speed"))
+        self.sld = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.sld.setRange(2, 100)          # percent of real time
+        self.sld.setValue(10)
+        self.sld.valueChanged.connect(
+            lambda v: setattr(self.view, "slowdown", v / 100.0))
+        row.addWidget(self.sld, 1)
+        self.b_sound = QtWidgets.QPushButton("Play the beat, slowed")
+        self.b_sound.clicked.connect(self._play)
+        row.addWidget(self.b_sound)
+        lay.addLayout(row)
+
+        self._tmr = QtCore.QTimer(self)
+        self._tmr.setInterval(33)
+        self._tmr.timeout.connect(self._tick)
+        self._tmr.start()
+
+    def _tick(self):
+        m = getattr(self._parent, "last", None)
+        if m is not None and m.ok:
+            self.view.set_params(m.amplitude, m.nominal_bph or m.detected_bph, m.dt_mean)
+        self.view.advance()
+
+    def _play(self):
+        if not audio.HAVE_SD:
+            QtWidgets.QMessageBox.information(self, "Slowed playback",
+                                             "sounddevice is not available.")
+            return
+        m = getattr(self._parent, "last", None)
+        if m is None or m.beat_wave is None or not m.beat_wave_fs:
+            QtWidgets.QMessageBox.information(
+                self, "Slowed playback", "Take a live reading first so there is a beat to play.")
+            return
+        import sounddevice as sd
+        w = np.asarray(m.beat_wave, dtype=np.float32)
+        w = w / (np.max(np.abs(w)) + 1e-9) * 0.5
+        slow = max(4, int(round(1.0 / max(0.02, self.sld.value() / 100.0))))
+        gap = np.zeros(int(m.beat_wave_fs * 0.10), dtype=np.float32)
+        seq = np.concatenate([np.concatenate([w, gap]) for _ in range(4)])
+        try:
+            sd.play(seq, samplerate=max(2000, m.beat_wave_fs // slow))
+        except Exception as e:                       # noqa: BLE001
+            QtWidgets.QMessageBox.warning(self, "Slowed playback", str(e))
+
+    def closeEvent(self, e):
+        self._tmr.stop()
+        super().closeEvent(e)
+
+
 class _NtpProbe(QtCore.QObject):
     done = QtCore.Signal(str, float, float, str)   # label, offset_s, roundtrip_s, error
 
@@ -1074,6 +1248,10 @@ class MainWindow(QtWidgets.QMainWindow):
             act.setShortcut(key)
             act.triggered.connect(lambda _=False, i=idx: self._goto_page(i))
             vm.addAction(act)
+        vm.addSeparator()
+        esc_act = QtGui.QAction("Escapement animation...", self)
+        esc_act.triggered.connect(self._open_escapement)
+        vm.addAction(esc_act)
 
     def _build_header(self):
         bar = QtWidgets.QFrame()
@@ -3580,6 +3758,14 @@ alongside the application.</p>
     def _goto_page(self, i):
         self.nav.button(i).setChecked(True)
         self.stack.setCurrentIndex(i)
+
+    def _open_escapement(self):
+        dlg = getattr(self, "_esc_dlg", None)
+        if dlg is None:
+            dlg = self._esc_dlg = EscapementDialog(self)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _goto_watches(self):
         self._goto_page(1)
