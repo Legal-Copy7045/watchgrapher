@@ -2107,6 +2107,8 @@ alongside the application.</p>
             readings, c.key if c else w.caliber_key, float(self.spn_lift.value()))
         w.history.append(rec)
         self.collection.save()
+        n_readings = len(rec.readings)
+        self._end_session()
         self._refresh_watches(w.id)
         i = self.cmb_watch.findData(w.id)
         if i >= 0:
@@ -2115,7 +2117,8 @@ alongside the application.</p>
             self.cmb_watch.blockSignals(False)
             self.lbl_now.setText(f"Testing:  {w.label}")
         self.status.showMessage(
-            f"Run saved to {w.label} ({len(w.history)} on record)", 8000)
+            f"Run ({n_readings} position(s)) saved to {w.label} "
+            f"({len(w.history)} on record). Session cleared.", 8000)
 
     def _toggle_record(self, on):
         if not self.recorder:
@@ -3000,12 +3003,13 @@ alongside the application.</p>
             float(self.spn_lift.value()), notes=note, service_event=svc)
         w.history.append(rec)
         self.collection.save()
+        self._end_session()
         self._refresh_watches(w.id)
         QtWidgets.QMessageBox.information(
             self, "Run saved",
-            f"Saved to {w.label}.\n\nThat watch now has {len(w.history)} recorded "
-            f"run(s). Three or more spread over months are needed before the trend "
-            f"figures mean anything.")
+            f"Saved to {w.label}, and the current session was cleared.\n\nThat watch "
+            f"now has {len(w.history)} recorded run(s). Three or more spread over "
+            f"months are needed before the trend figures mean anything.")
 
     def _watch_report(self):
         w = self._current_watch()
@@ -3154,6 +3158,21 @@ alongside the application.</p>
     def _clear_rows(self):
         self.tbl.setRowCount(0)
         self.readings.clear()
+        self._update_delta()
+
+    def _end_session(self):
+        """
+        Close the current measuring session.
+
+        `self.readings` accumulates captured positions and is shared by every
+        save path. Once a run has been filed against a watch that session is
+        finished -- carrying its readings into the next watch is how the same
+        data ends up saved against several watches.
+        """
+        self.readings.clear()
+        self._stable.clear()
+        if hasattr(self, "tbl"):
+            self.tbl.setRowCount(0)
         self._update_delta()
 
     def _export_csv(self):
