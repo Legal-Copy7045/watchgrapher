@@ -373,6 +373,7 @@ IWC|Aquatimer|IW329001|2014-|iwc_30110|Stainless steel|Internal rotating||
 IWC|Pilot Chronograph|IW377709|2012-|iwc_79350|Stainless steel|Smooth||
 Jaeger-LeCoultre|Reverso Classic|Q2548440|2016-|jlc_889|Stainless steel|Smooth||Cal 965
 Jaeger-LeCoultre|Master Control Date|Q1548530|2017-|jlc_889|Stainless steel|Smooth||Cal 899
+Jaeger-LeCoultre|Master Ultra Thin Power Reserve|Q1378421|2016-|jlc_938|Stainless steel|Smooth||Cal 938, 43h reserve indicator
 Jaeger-LeCoultre|Polaris|Q9008471|2018-|jlc_889|Stainless steel|Internal rotating||Cal 898
 Zenith|Chronomaster El Primero|03.2040|2010-|zenith_400|Stainless steel|Tachymeter||
 Zenith|Defy Classic|95.9000|2018-|zenith_400|Titanium|Smooth||Cal Elite 670
