@@ -410,6 +410,87 @@ def trace_points(m: Measurement, nominal_bph: float, window_ms: float = 20.0):
 # Pickup auto-tuning
 # --------------------------------------------------------------------------
 
+@dataclass
+class ReserveStats:
+    """Analytics over a power-reserve run: [(elapsed_s, rate, amplitude, beat_error), ...]."""
+    n: int = 0
+    hours: float = 0.0
+    amp_first: float = float("nan")
+    amp_last: float = float("nan")
+    amp_per_hour: float = float("nan")     # mean slope over the run, deg/h
+    hours_to_220: float = float("nan")     # extrapolated from the last third of the run
+    hours_to_200: float = float("nan")
+    iso_slope: float = float("nan")        # s/day of rate per +1 deg amplitude
+    iso_span: float = float("nan")         # rate change across the amplitude range seen
+    iso_fit: tuple = ()                    # (slope, intercept) for a rate-vs-amplitude line
+    be_slope: float = float("nan")         # ms beat error per +1 deg amplitude
+    verdict: list = field(default_factory=list)
+
+
+def reserve_analytics(samples) -> ReserveStats:
+    a = np.asarray(list(samples), dtype=float)
+    st = ReserveStats(n=int(a.shape[0]))
+    if a.ndim != 2 or a.shape[0] < 4:
+        return st
+    t_h = a[:, 0] / 3600.0
+    rate, amp, be = a[:, 1], a[:, 2], a[:, 3]
+    st.hours = float(t_h[-1])
+
+    ma = np.isfinite(amp) & np.isfinite(t_h)
+    if ma.sum() >= 4:
+        st.amp_first, st.amp_last = float(amp[ma][0]), float(amp[ma][-1])
+        st.amp_per_hour = float(np.polyfit(t_h[ma], amp[ma], 1)[0])
+        # The decay accelerates near the end, so extrapolate the runway from
+        # the last third rather than the whole-run slope.
+        cut = t_h[ma][-1] - max(1.0, st.hours / 3.0)
+        tail = ma & (t_h >= cut)
+        if tail.sum() >= 3:
+            sl, ic = np.polyfit(t_h[tail], amp[tail], 1)
+            if sl < -1e-3:
+                for target, name in ((220.0, "hours_to_220"), (200.0, "hours_to_200")):
+                    th = (target - ic) / sl
+                    if th > t_h[tail][0]:
+                        setattr(st, name, float(th))
+
+    mi = np.isfinite(amp) & np.isfinite(rate)
+    if mi.sum() >= 5 and float(amp[mi].max() - amp[mi].min()) > 15.0:
+        sl, ic = np.polyfit(amp[mi], rate[mi], 1)
+        st.iso_slope = float(sl)
+        st.iso_fit = (float(sl), float(ic))
+        st.iso_span = float(sl * (amp[mi].max() - amp[mi].min()))
+
+    mb = np.isfinite(amp) & np.isfinite(be)
+    if mb.sum() >= 5 and float(amp[mb].max() - amp[mb].min()) > 15.0:
+        st.be_slope = float(np.polyfit(amp[mb], be[mb], 1)[0])
+
+    v = st.verdict
+    if st.iso_span == st.iso_span:
+        mag = abs(st.iso_span)
+        if mag < 4.0:
+            v.append(f"Isochronism good: rate moves only {st.iso_span:+.1f} s/day across "
+                     f"the amplitude range covered.")
+        elif mag < 12.0:
+            v.append(f"Isochronism fair: {st.iso_span:+.1f} s/day of rate change with "
+                     f"amplitude ({st.iso_slope:+.2f} per degree).")
+        else:
+            v.append(f"Isochronism poor: {st.iso_span:+.1f} s/day of rate change as "
+                     f"amplitude falls ({st.iso_slope:+.2f} s/day per degree). The "
+                     f"hairspring is not developing evenly -- suspect pinning, a "
+                     f"sticky terminal curve, or the regulator pins.")
+    if st.be_slope == st.be_slope and abs(st.be_slope) > 0.01:
+        v.append(f"Beat error changes {st.be_slope:+.3f} ms per degree of amplitude -- "
+                 f"a hairspring that is not breathing concentrically, not a collet that "
+                 f"is simply rotated.")
+    if st.hours_to_220 == st.hours_to_220:
+        v.append(f"On the end-of-run slope, amplitude reaches 220 deg at about "
+                 f"{st.hours_to_220:.0f} h" +
+                 (f" and 200 deg at {st.hours_to_200:.0f} h." if st.hours_to_200 == st.hours_to_200
+                  else "."))
+    elif st.amp_per_hour == st.amp_per_hour:
+        v.append(f"Amplitude is falling about {abs(st.amp_per_hour):.1f} deg/hour on average.")
+    return st
+
+
 def tuning_score(m: Measurement) -> float:
     """
     How trustworthy does this settings combination look?
