@@ -1,0 +1,541 @@
+# WatchGrapher
+
+An acoustic timegrapher for Windows. Listens to a mechanical watch through a
+USB microphone and reports rate, amplitude, beat error and beat rate, then
+tells you what to adjust for the caliber you're working on.
+
+---
+
+## Setup
+
+Unzip somewhere your account owns -- `C:\Tools\Timegrapher` is fine,
+`C:\Program Files` is not, because the app writes recordings and exports next
+to itself. Then double-click **`run.bat`**.
+
+That is the whole installation. If Python 3.10+ is not already present,
+`run.bat` installs it (via winget, falling back to downloading the official
+installer from python.org), then builds a virtual environment and installs
+dependencies. First run takes a few minutes; later runs start in seconds.
+
+Manual install if you prefer:
+
+```
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python -m watchgrapher
+```
+
+---
+
+## The pickup matters more than the software
+
+This is the part that decides whether you get a clean trace or noise. A watch
+escapement puts out a very quiet, very short click. A microphone sitting in
+open air a few inches away will not reliably resolve the three sub-noises
+inside each beat, which is what amplitude depends on.
+
+In rough order of how well they work:
+
+- **A piezo disc against the case back.** A 20-35 mm piezo element wired into
+  a cheap USB audio interface's mic input is the closest thing to what a real
+  timegrapher uses. Total cost is a few dollars. Press the case back flat
+  against the disc; contact pressure matters a lot.
+- **A contact / throat microphone.** Same idea, already packaged.
+- **A stethoscope head taped over a small electret capsule.** Works well.
+- **A good USB condenser mic in a quiet room, watch resting on the grille.**
+  Workable for rate and beat error. Amplitude will be marginal.
+
+Whatever you use, kill the room noise: no fans, no HVAC, no talking. If your
+interface has gain, set it so the level meter sits in the upper half without
+touching red. Clipping destroys the sub-noise structure that amplitude reads.
+
+Sample rate: 48 kHz is the sensible default. At 4 Hz, one sample at 48 kHz is
+worth roughly 0.7 degrees of amplitude resolution. 96 kHz halves that if your
+interface supports it; it will not fix a bad pickup.
+
+---
+
+## Self-tuning the pickup
+
+**Start listening**, let five seconds of audio accumulate, then press
+**Self-tune pickup**. It sweeps the filter band, the envelope window and the
+sub-noise threshold, scoring each combination on signal-quality evidence only:
+how well beats match their own averaged template, what fraction yield a usable
+impulse interval, how many noises per beat are being resolved, and how much the
+per-beat amplitude estimate scatters. It deliberately does not reward a
+particular amplitude or rate -- tuning toward a number you were hoping to see
+is how you talk yourself into a wrong reading.
+
+Takes about ten seconds; click the button again to cancel. If a filter setting
+makes the analysis fail -- some bands leave too little signal for the peak
+finder, which is common on a noisy pickup -- that trial scores zero and the
+sweep carries on rather than aborting. If every trial fails it says so and
+changes nothing.
+
+The report afterwards tells you what it chose and,
+crucially, the **noises per beat**. A lever escapement makes exactly three:
+unlocking, impulse, drop. If tuning still leaves you well above three, no
+filter setting will save it -- the pickup is hearing the room, not the
+escapement. Press the case back harder against the sensor, kill background
+noise, and back the gain off if the level meter is anywhere near red.
+
+That single number is the best health check on a reading. Amplitude is the
+measurement it destroys first.
+
+---
+
+## Testing without a microphone
+
+Two ways, both exercising the real analysis chain.
+
+**Simulated watch (best).** Pick `-- Simulated watch (no microphone) --` from the
+Device dropdown and hit Start listening. The **Simulated watch** panel on the
+left lets you dial in beat rate, amplitude, rate and beat error, and the
+readouts should come back with exactly those numbers. It generates audio into
+the same ring buffer a real microphone feeds, so the live trace, level meter,
+position capture and advice all behave identically. Change values while it's
+running and watch the readouts follow.
+
+Useful things to try:
+
+- Set amplitude to **338** and watch the app flag knocking.
+- Set beat error to **1.6 ms** and see the two trace lines pull apart.
+- Set rate to **+40** and watch the trace slope.
+- Drop **Noise** to 4 dB to see what a bad pickup looks like.
+- Select an ETA 2824-2 but set the simulator to 21600 bph -- the beat rate
+  readout turns red and the app tells you the rate figure is meaningless.
+
+**Device selection.** The app picks a real input on startup and lists the
+simulator last, so it never opens pretending to measure a watch that is not
+there. Windows exposes the same physical microphone once per host API, and
+PortAudio's "default" is usually the MME copy -- which resamples to 44100
+behind your back and costs about a third of your amplitude resolution. The app
+therefore honours your chosen *device* but takes the best route to it,
+preferring WASAPI. Override from the Device dropdown if you want a different
+one.
+
+**Test WAV files.** Generate a set with known values baked into the filenames:
+
+```
+.venv\Scripts\python tools\make_test_wav.py test_wavs
+```
+
+Ten files covering healthy, needs-regulating, bad beat error, low amplitude,
+knocking, Seiko, vintage, co-axial, hi-beat and a deliberately noisy pickup.
+Load them with **Analyze a WAV file** and check the readouts against the
+filename. Set the lift angle to match the filename first, or amplitude will be
+scaled wrong.
+
+---
+
+## Using it
+
+1. **Wind the watch fully**, then let it settle 10-15 minutes. Amplitude right
+   after winding reads high and falling.
+2. Pick the caliber. Search accepts loose text: `2824`, `nh35`, `3135`,
+   `co-axial`. Selecting a caliber fills in the lift angle and beat rate.
+3. **Measure.** One **Start** button at the bottom of the control column, with
+   a duration beside it.
+
+   - **A duration** (default 20 s) runs a timed test. When it ends, the run
+     *ends*: the stream stops, the whole capture is analysed in one pass, and
+     you are asked what to do with the result. That single pass beats any live
+     reading -- rate precision scales with capture length, so 60 s resolves
+     about 0.02 s/day where a 20 s window manages roughly 0.2.
+   - **Duration 0** ("open-ended") runs until you press Stop, which is what you
+     want while turning a regulator and watching a number move. Stopping asks
+     the same question.
+
+   Do not confuse the duration with the **rolling window** in Pickup tuning:
+   that is how far back each *live* reading looks while a measurement is in
+   progress, not how long the measurement lasts.
+
+     The dialog offers four things: save to one of your watches (the one you
+     are testing is pre-selected), create a new watch and save to it, print a
+     report for the run, or discard it. Pressing **Stop** on a continuous
+     session offers the same four choices -- stopping by hand is just as much
+     the end of a measurement as a timer running out, and the numbers should
+     not be lost because you pressed the other button. It stays quiet when
+     there is nothing to file, and when the stream is only being restarted
+     internally. A separate tick box records the result
+     as the current position in the running six-position session, so filing the
+     run and continuing round the positions are independent choices.
+
+     Start timed run starts listening by itself, so a six-position sequence is
+     one button per position rather than two.
+
+   The rolling window is not a test duration -- that confusion is why the run
+   length control exists. For multi-hour mainspring work use the Power reserve
+   tab, which is a third thing again, measured in hours.
+4. Check the **beat rate** readout matches the caliber before you believe
+   anything else. If it doesn't, the pickup is mistracking or the caliber is
+   wrong.
+5. Capture each of the six positions with **Capture this position**. The
+   position dropdown advances automatically.
+6. Hit **Analyze and advise**.
+
+### Reading the trace
+
+Two dot lines, one for the tick and one for the tock.
+
+- **Slope** is the rate. Sloping down-right means gaining.
+- **Vertical gap between the two lines** is the beat error.
+- **Thick or fuzzy lines** mean the escapement isn't repeating cleanly, or the
+  pickup is noisy.
+- **Wandering, non-straight lines** point at a real fault -- a bent pivot, a
+  hairspring catching, dirt in the train.
+
+### Reading the beat waveform panel
+
+This is the averaged sound of one beat with the two markers the amplitude
+calculation uses: the **unlock** noise and the **drop** noise. If those markers
+aren't sitting on obvious peaks, your amplitude number is wrong and you should
+fix that before believing it.
+
+The **sub-noise threshold** control is the knob:
+
+- Amplitude reads implausibly **high** or jumps to nonsense: threshold is too
+  high, the quiet unlocking noise is being missed. Lower it.
+- Amplitude reads **low** and scatters: threshold is too low, room noise is
+  being counted as the unlocking noise. Raise it.
+
+---
+
+## What good looks like
+
+| | Target | Acceptable | Investigate |
+|---|---|---|---|
+| Rate | 0 to ±5 s/d | ±10 s/d | beyond ±20 |
+| Amplitude, dial up, full wind | 270-310° | 250-270° | under 250, or over 330 |
+| Amplitude, vertical | within 20-40° of horizontal | 50° | more than 60° drop |
+| Beat error | under 0.3 ms | under 0.5 ms | over 0.8 ms |
+| Positional delta | under 10 s/d | under 20 s/d | over 25 s/d |
+
+Those are modern-Swiss numbers. Vintage and budget calibers run lower on
+amplitude by design and the app adjusts its expectations per caliber. A
+Sellita SW300-1 is specified as low as 200° at full wind; a Vostok 2409 in the
+220s is fine. Don't chase a number the movement was never built to hit.
+
+**Amplitude over 330° is a problem, not an achievement.** That's the region
+where the impulse pin starts striking the back of the fork horn (knocking /
+rebanking). The watch runs wildly fast and the escapement takes damage.
+
+---
+
+## Order of operations
+
+Work in this order or you'll do the work twice:
+
+1. **Confirm the beat rate and lift angle.** A wrong lift angle makes a
+   healthy watch look sick. One degree of lift angle error is worth about
+   five degrees of amplitude.
+2. **Amplitude.** It's the energy budget for everything else. A movement with
+   weak amplitude will not hold whatever rate you regulate it to.
+3. **Beat error.** Cheap on most calibers, and it destabilises rate across
+   positions when it's large.
+4. **Rate.** Last, because steps 2 and 3 both move it.
+5. **Positional delta and isochronism.** These are poise and hairspring
+   problems. No amount of regulating fixes them.
+
+The **Tools** tab has a regulator-sensitivity helper: make one small
+adjustment, enter the rate before and after, and it tells you what fraction of
+that step you still need. Index sensitivity varies enormously between calibers,
+so measuring it beats guessing.
+
+---
+
+## Lift angle
+
+Lift angle only scales amplitude. Rate and beat error are unaffected, so a
+wrong value won't make a good watch look broken for the right reason -- it'll
+make it look broken for the wrong one.
+
+The database holds around 2,200 calibers in groups -- Swiss/European,
+Japanese, Chinese clones, Chinese in-house, Russian, generic fallbacks, and the
+bulk WatchGuy reference list. The dropdown shows the curated groups; the search
+box reaches everything, including the reference list, and matches notes as well
+as names, so `dandong`, `2824`, `8215` and `as1686` all work.
+
+Every entry records where its lift angle came from:
+
+| Source | Meaning |
+|---|---|
+| documented | Manufacturer or technical sheet |
+| measured | Published bench measurement on real samples |
+| community | Corroborated enthusiast consensus, unconfirmed |
+| inherited | Taken from the caliber this one clones -- never measured on this movement |
+| watchguy | The WatchGuy reference list. Lift angle only; no beat rate published, so beat rate is auto-detected |
+
+**Searching by watch rather than caliber.** The movement search box takes
+either. Type a caliber number and it searches movements; type a watch --
+`Rolex Submariner`, `Speedmaster`, `SKX007`, `126610LN` -- and it narrows to
+the movements that watch actually uses, listing them first.
+
+Read the years before picking. A Submariner spans five calibers from the 1570
+to the 3235, and they do not share a lift angle. **Find by watch model...**
+shows every generation side by side with references and dates, which is the
+faster way to tell them apart.
+
+That distinction matters most for Chinese movements, where manufacturer
+documentation frequently does not exist at all. Sea-Gull, Peacock (Dandong),
+Hangzhou, HKPT and Dixmont calibers are covered, but only the Peacock SL3034,
+SL4801 and the HKPT PT5000 have a lift angle anyone has actually published.
+
+Everything else in that group is *inherited* -- a 2824-2 clone is assigned 50,
+a Miyota 8215 clone 49, on the reasoning that clones copy the escapement
+geometry. That is usually true and occasionally not. Rate and beat error are
+unaffected either way; only amplitude is at risk. If you care about the
+amplitude figure on one of these, solve for the real lift angle with the
+180-degree method in the Tools tab and add your result via CSV.
+
+Search matches the notes as well as the name, so `dandong`, `2824`, `8215` or
+`ty2130` all find the right entries.
+
+To add your own, copy `calibers_template.csv`, fill it in, and either load it
+from the **Load caliber CSV** button or save it as
+`%USERPROFILE%\.watchgrapher_calibers.csv` to have it loaded at every start.
+
+The largest public list is WatchGuy's, at
+<https://watchguy.co.uk/cgi-bin/lift_angles>. It's straightforward to reshape
+into the CSV format above.
+
+If your caliber isn't listed anywhere, the **Tools** tab can solve for it: mark
+one balance arm, let the watch run down until the mark appears to stall exactly
+opposite its rest position (that's 180° of amplitude), and back-solve from the
+measured impulse interval.
+
+---
+
+## Command line
+
+```
+python -m watchgrapher --devices                      list input devices
+python -m watchgrapher --wav run.wav --caliber eta_2824_2
+python -m watchgrapher --listen 30 --caliber rolex_3135
+python -m watchgrapher --selftest                     validate the DSP chain
+```
+
+`--selftest` generates synthetic escapement audio with known rate, beat error
+and amplitude and checks the analyzer recovers them. Useful after any change,
+and a quick way to confirm the install is sane.
+
+---
+
+## How it works
+
+1. Band-pass 1.5-12 kHz. Escapement noise lives there; rumble and handling
+   don't.
+2. RMS envelope with a ~0.35 ms window -- short enough to keep the three
+   sub-noises inside each beat resolvable.
+3. Beat period from envelope autocorrelation, cross-checked against actual
+   peak spacing. The cross-check matters: tick and tock never sound quite
+   alike, so autocorrelation alone will happily report half the true bph.
+4. Sub-sample beat timing by cross-correlating each beat against an averaged
+   template, with parabolic interpolation. Tick and tock get **separate**
+   templates -- entry and exit pallet stones sound different, and sharing one
+   template injects a fixed bias straight into beat error.
+5. Rate from a least-squares fit of beat time against beat index, where
+   indices come from successive intervals rather than elapsed time so a
+   sloppy period estimate can't accumulate into misnumbered beats.
+6. Beat error from the gap between the mean residual of the even beats and
+   the odd beats, which is exactly |T1 - T2| / 2.
+7. Amplitude from the interval between the first and third noise, using the
+   exact harmonic relation
+
+   ```
+   A = (lift / 2) / sin(pi * dt * bph / 7200)
+   ```
+
+   The formula usually quoted, `A = 3600 * lift / (pi * dt * bph)`, is the
+   small-angle approximation of the same thing. They agree to about 0.4% at
+   270° but the approximation drifts high as amplitude climbs -- precisely
+   where you care, near the knocking threshold.
+
+Steps 4 and 6 need one more correction that is easy to miss. The coarse
+detector locks onto whichever sub-noise is loudest, and that need not be the
+same one for a tick as for a tock -- if the drop is loudest on one half swing
+and the impulse on the other, the anchor jumps by several milliseconds every
+other beat. That is a constant offset applied to alternate beats, which is
+exactly the signature of beat error, so an uncorrected analyzer will report
+several ms of beat error on a watch that is perfectly in beat. The unlocking
+noise is the same physical event on both half swings, so the difference
+between the mean unlocking offsets of the even and odd beats isolates the
+anchor error and nothing else. Removing it leaves real beat error untouched.
+
+Similarly, a lever escapement makes exactly three noises per beat. Anything
+arriving after the drop -- case resonance, the rotor, a reflection off the
+bench -- is not part of that sequence, and letting it extend the measured
+interval drags amplitude far below the truth. The span therefore ends on the
+loudest peak in the group, since the drop is the loudest of the three and an
+echo is by definition quieter than whatever produced it.
+
+Validated against 192 synthetic combinations of beat rate, amplitude, rate,
+beat error, tick/tock asymmetry and spurious extra noises: rate within
+1.5 s/day, beat error within 0.25 ms, amplitude within 15°, down to 14 dB SNR.
+`--selftest` runs a representative subset.
+
+---
+
+## My Watches
+
+The app has three pages, switched from the buttons at the top left: **MEASURE**
+is the live instrument, **MY WATCHES** is your collection, **HELP** is the
+quick reference. Ctrl+1/2/3 switch between them. They are different
+activities with different rhythms, and the collection gets a full page rather
+than a strip below the trace.
+
+My Watches keeps a profile and a timing history for each watch you own.
+
+**Printable report.** *Print / save watch report* produces one self-contained
+HTML page: the photo, the full profile, the movement and its regulating
+hardware, ownership and service dates, the whole timing history as a table,
+a trend chart, the most recent run position by position, and the trend verdicts.
+Print to PDF from the browser. The photo is embedded as a data URI, so the file
+survives being emailed on its own.
+
+**Attributing a run.** Pick the watch from the dropdown in Test conditions
+before you measure. That applies its caliber and lift angle automatically, and
+"Save current run to this watch" files the results into its history. The
+My Watches button beside it jumps straight to the tab.
+
+Both this tab and **Find by watch model** read one shared catalog -- around
+350 references across 280 models and 73 brands -- so anything you can look up
+is something you can save, and vice versa. It covers Rolex, Omega, Tudor,
+Seiko, Grand Seiko, Citizen, Orient, Hamilton, Tissot, Certina, Mido, Rado,
+Longines, Oris, Sinn, Stowa, Laco, Damasko, Nomos, Junghans, IWC, JLC, Zenith,
+Panerai, Breitling, TAG Heuer, Blancpain, AP, Cartier, the Russian and Chinese
+makers, and the microbrands from Baltic and Lorier through to San Martin and
+Steeldive.
+
+**Profiles.** Brand, model, reference, serial, movement serial, caliber, case
+material, bezel, crystal, size, water resistance, bracelet, production year,
+purchase date, price and currency, condition, dealer, last service date,
+service interval, target rate, photo and notes.
+
+The reference field does the work. Pick a brand and the model list fills; pick
+a model and its known references appear. Selecting one fills in the movement,
+case metal, bezel, crystal and nickname -- choose a Submariner Date 126613LB
+and it knows that is yellow Rolesor with a blue bezel and that everyone calls
+it a Bluesy. Everything stays editable, because the database does not know
+about your service replacement bezel.
+
+Uncatalogued Rolex references still decode, because modern Rolex numbering is
+systematic: the final digit is the case metal and the letter suffix is the
+bezel colour abbreviated in French. So 126619LB resolves to white gold with a
+blue bezel even though nobody wrote that row down.
+
+**History and trends.** Save a run against a watch and it joins that watch's
+record. Mean rate, positional delta, peak amplitude and beat error are plotted
+against date, with a least-squares slope per year for each.
+
+Those slopes are reported against the measurement's own repeatability, and a
+slope smaller than that is called stable rather than dressed up as a finding.
+Three measurements on a hobby timegrapher will always produce *some* slope; the
+question is whether it is bigger than the noise. Amplitude falling 15 degrees a
+year is invisible in any single measurement and unmistakable across six, and
+that is the whole reason to keep the history.
+
+Runs can be marked post-service, since comparing the runs either side of a
+service is the clearest read on whether it achieved anything.
+
+Storage is `watches/collection.json` plus a photos folder -- plain text on
+purpose, because a collection record should outlive the software that made it.
+Reports, exports and recordings default to the `reports/` folder.
+
+---
+
+## Beyond the four numbers
+
+**Diagnostics tab -- periodic fault scan.** Rate, amplitude and beat error
+describe a movement's average behaviour. They say nothing about whether that
+average is produced smoothly. A bent escape wheel tooth or an eccentric pinion
+barely moves the mean rate; it makes the watch run fast and slow in a cycle
+whose period matches the rotation of the guilty part. On a paper tape that is
+the wavy trace an experienced watchmaker reads instantly. A periodogram of the
+fit residuals finds it more reliably.
+
+The identification is the useful part. One escape wheel revolution spans
+2 x teeth beats (30 for a standard 15-tooth Swiss lever, 3.75 s at 4 Hz); the
+fourth wheel turns once a minute. Which period is modulating tells you which
+part to inspect. Note the honest limit the tab reports: three cycles are needed
+before a period can be called real, so a 60-second capture cannot see a fourth
+wheel at all, and a centre wheel needs three hours.
+
+Two-beat cycles are excluded on purpose -- that IS beat error, reported as its
+own number. A genuine impulse-jewel fault also lands at two beats and is not
+separable from beat error by this method.
+
+**Auto-capture when stable.** Ticks over in Test conditions. It captures a
+position once six consecutive readings agree, then advances the dropdown. It
+refuses to fire on a beat-rate mismatch, a low template match, a missing
+amplitude, or more than four noises per beat -- a bad pickup produces perfectly
+steady numbers, and steady wrong numbers are exactly what an unguarded
+auto-capture would record six times over.
+
+**Power reserve tab.** Logs rate and amplitude at an interval you set, plotted
+on twin axes against elapsed hours. Set a target in hours and it announces when
+it is done; set 0 to run until you stop it.
+
+This is a long run, not a twenty second test. With the default five minute
+interval nothing visible happens between samples, so the label beside the
+buttons counts down to the next one and shows time remaining -- that is there
+purely so a working run does not look like a crashed one. Leave the watch on
+the pickup and the app listening throughout; if either stops, the curve has a
+hole in it.
+
+At the end it reports the amplitude and rate change across the run, and flags
+the point amplitude crossed 200 degrees. That crossing, not the moment the
+watch stops, is the practical end of the useful reserve.
+
+**Demagnetiser A/B** (Tools tab). Capture before, demagnetise, capture after.
+The signature to look for is a large rate drop with amplitude roughly
+unchanged: magnetised hairspring coils cling together and behave like a shorter
+spring. The app names the pattern and reminds you that any regulation done
+while magnetised is now wrong.
+
+**Service report** (Tools tab). One self-contained HTML file -- readings,
+six-position table, the trace redrawn as inline SVG, assessment, fault scan and
+measurement conditions. No external assets, so it survives being emailed. Print
+to PDF from the browser if you need one; that avoids dragging a PDF library
+into the dependency list for something used once a job.
+
+---
+
+## When two instruments disagree
+
+Record the same audio once and analyze it twice, rather than comparing two
+live sessions taken minutes apart -- amplitude genuinely falls as the
+mainspring unwinds, and rate moves with it.
+
+Then check, in this order:
+
+1. **Beat rate.** If the two tools report different bph, nothing else is
+   comparable. This app shows the measured value, not the one you selected.
+2. **Lift angle.** Amplitude scales with it and rate does not. If amplitude
+   disagrees but rate and beat error match, suspect the lift angle first.
+3. **The beat waveform panel.** The two markers show exactly which noises the
+   amplitude calculation used. If they are not on obvious peaks, that number
+   is wrong regardless of what any other tool says.
+4. **The status line.** It reports a tick/tock anchor correction and a
+   noises-per-beat count. More than about 3.3 noises per beat means something
+   beyond the escapement is being picked up, and amplitude is the reading at
+   risk.
+
+A phone app and this app are both microphone timegraphers with the same
+physical limits. Where they differ, the one whose markers sit on real peaks is
+the one to believe.
+
+---
+
+## Limits
+
+- Amplitude is the fragile measurement. Rate and beat error survive a mediocre
+  pickup; amplitude does not.
+- Amplitude accuracy is capped by how well you know the lift angle, not by the
+  software.
+- Chronographs read lower with the chrono running -- that's real, not an error.
+- Co-axial and other non-lever escapements have a different noise signature.
+  The 38° lift angle is handled, but expect to tune the sub-noise threshold.
+- Static bench readings aren't wrist performance. Use these numbers to set the
+  watch up, then track it on the wrist for a few days.
