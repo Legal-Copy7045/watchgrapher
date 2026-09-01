@@ -544,6 +544,122 @@ class WatchEditor(QtWidgets.QDialog):
         return w, self._photo_src
 
 
+class WavScrubber(QtWidgets.QDialog):
+    """
+    Load a long recording and re-analyse any window of it.
+
+    A noisy or intermittent signal usually has a good stretch in it
+    somewhere; this lets you find it instead of living with whatever the
+    first twenty seconds happened to contain.
+    """
+
+    def __init__(self, data, fs, cfg, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Scrub a recording")
+        self.setMinimumSize(820, 520)
+        self._data = np.asarray(data, dtype=np.float64)
+        self._fs = int(fs)
+        self._cfg = cfg
+        self.result_m = None
+        dur = len(self._data) / self._fs
+
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.addWidget(QtWidgets.QLabel(
+            f"{dur:.1f} s at {self._fs} Hz. Drag the shaded window, or use the "
+            f"controls, then Analyse."))
+
+        self.plot = pg.PlotWidget()
+        self.plot.setLabel("bottom", "time", units="s")
+        self.plot.setLabel("left", "level")
+        self.plot.showGrid(x=True, y=True, alpha=0.2)
+        # Fast overview: block-max of |signal|, a few thousand points.
+        n = self._data.size
+        step = max(1, n // 4000)
+        env = np.abs(self._data[:n - n % step].reshape(-1, step)).max(axis=1)
+        t = np.arange(env.size) * step / self._fs
+        self.plot.plot(t, env, pen=pg.mkPen("#57d38c", width=1))
+        w0 = min(20.0, dur)
+        self.region = pg.LinearRegionItem([0, w0], brush=(90, 163, 255, 45),
+                                          pen=pg.mkPen("#4da3ff"))
+        self.region.setBounds([0, dur])
+        self.plot.addItem(self.region)
+        self.region.sigRegionChangeFinished.connect(self._analyze)
+        lay.addWidget(self.plot, 1)
+
+        ctl = QtWidgets.QHBoxLayout()
+        self.spn_w = QtWidgets.QDoubleSpinBox()
+        self.spn_w.setRange(4.0, max(4.0, dur))
+        self.spn_w.setValue(w0)
+        self.spn_w.setSuffix(" s window")
+        self.spn_w.valueChanged.connect(self._resize_region)
+        b_prev = QtWidgets.QPushButton("<< prev")
+        b_next = QtWidgets.QPushButton("next >>")
+        b_prev.clicked.connect(lambda: self._step(-1))
+        b_next.clicked.connect(lambda: self._step(1))
+        b_an = QtWidgets.QPushButton("Analyse window")
+        b_an.setStyleSheet(f"QPushButton{{background:{ACCENT};color:#08101c;"
+                           "font-weight:bold;padding:6px 12px;border-radius:6px;}")
+        b_an.clicked.connect(self._analyze)
+        for wdg in (self.spn_w, b_prev, b_next, b_an):
+            ctl.addWidget(wdg)
+        ctl.addStretch(1)
+        lay.addLayout(ctl)
+
+        self.lbl_res = QtWidgets.QLabel("--")
+        self.lbl_res.setStyleSheet("font-family:Consolas,monospace;color:#c8d0dc;"
+                                   "background:#1a1f27;border:1px solid #2a323e;"
+                                   "border-radius:6px;padding:10px;")
+        self.lbl_res.setWordWrap(True)
+        lay.addWidget(self.lbl_res)
+
+        bb = QtWidgets.QDialogButtonBox()
+        self.b_send = bb.addButton("Send window to main view", QtWidgets.QDialogButtonBox.AcceptRole)
+        bb.addButton(QtWidgets.QDialogButtonBox.Close)
+        self.b_send.setEnabled(False)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+        self._analyze()
+
+    def _resize_region(self, w):
+        lo, _hi = self.region.getRegion()
+        dur = len(self._data) / self._fs
+        lo = min(lo, max(0.0, dur - w))
+        self.region.setRegion([lo, lo + w])
+
+    def _step(self, direction):
+        lo, hi = self.region.getRegion()
+        w = hi - lo
+        dur = len(self._data) / self._fs
+        lo = min(max(0.0, lo + direction * w), max(0.0, dur - w))
+        self.region.setRegion([lo, lo + w])
+
+    def _analyze(self):
+        lo, hi = self.region.getRegion()
+        a = int(max(0, lo * self._fs))
+        b = int(min(len(self._data), hi * self._fs))
+        seg = self._data[a:b]
+        if seg.size < self._fs:
+            self.lbl_res.setText("Window too short.")
+            return
+        m = analyze(seg, self._fs, self._cfg)
+        self.result_m = m
+        self.b_send.setEnabled(m.ok)
+        if not m.ok:
+            self.lbl_res.setText(f"{lo:.1f}-{hi:.1f} s:  {m.message}")
+            return
+        self.lbl_res.setText(
+            f"{lo:.1f}-{hi:.1f} s   ({hi-lo:.0f} s window)\n"
+            f"Rate {m.rate:+.1f}"
+            + (f" +/-{m.rate_ci:.1f}" if m.rate_ci == m.rate_ci else "")
+            + f" s/d    Amplitude {'--' if m.amplitude != m.amplitude else f'{m.amplitude:.0f}'} deg"
+            f"    Beat error {'--' if m.beat_error != m.beat_error else f'{m.beat_error:.2f}'} ms\n"
+            f"{m.detected_bph} bph    {m.beats} beats    match {m.quality:.2f}    "
+            f"{3 + m.extra_peaks:.1f} noises/beat"
+            + (f"\n{m.message}" if m.message not in ('OK', '') else ""))
+
+
 class ModelFinder(QtWidgets.QDialog):
     """
     Look a movement up by the watch it lives in.
@@ -4142,6 +4258,13 @@ alongside the application.</p>
             data, fs = audio.load_wav(path)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Read error", str(e))
+            return
+        if len(data) / fs > self.spn_win.value() + 4:
+            dlg = WavScrubber(data, fs, self.worker.cfg, self)
+            if dlg.exec() == QtWidgets.QDialog.Accepted and dlg.result_m is not None:
+                self._on_result(dlg.result_m)
+                self.status.showMessage(
+                    f"{os.path.basename(path)}: window analysed, {dlg.result_m.message}", 8000)
             return
         n = int(self.spn_win.value() * fs)
         m = analyze(data[:n] if len(data) > n else data, fs, self.worker.cfg)
