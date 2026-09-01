@@ -1586,6 +1586,20 @@ alongside the application.</p>
         self.chk_parity.toggled.connect(self._push_cfg)
         b_reset = QtWidgets.QPushButton("Reset to defaults")
         b_reset.clicked.connect(self._reset_tuning)
+        b_prof = QtWidgets.QPushButton("Remember for this pickup")
+        b_prof.setToolTip(
+            "Save the filter band, envelope window and sub-noise threshold against the\n"
+            "selected input device. They load automatically whenever you pick that\n"
+            "device again -- handy if you switch between a piezo and a microphone.")
+        b_prof.clicked.connect(self._save_pickup_profile)
+        b_forget = QtWidgets.QPushButton("Forget")
+        b_forget.setMaximumWidth(72)
+        b_forget.clicked.connect(self._forget_pickup_profile)
+        prow = QtWidgets.QHBoxLayout()
+        prow.addWidget(b_prof, 1)
+        prow.addWidget(b_forget, 0)
+        pw2 = QtWidgets.QWidget()
+        pw2.setLayout(prow)
         g4.addRow("Rolling window", self.spn_win)
         g4.addRow("Filter low", self.spn_lo)
         g4.addRow("Filter high", self.spn_hi)
@@ -1594,6 +1608,7 @@ alongside the application.</p>
         g4.addRow("Trace width", self.spn_trace)
         g4.addRow(self.chk_parity)
         g4.addRow(b_reset)
+        g4.addRow("Pickup profile", pw2)
         lay.addWidget(g4)
 
         # ---------- simulator, only with the simulated device ----------
@@ -1713,6 +1728,73 @@ alongside the application.</p>
             "One press: starts listening, sweeps the filter band, envelope window and\n"
             "sub-noise threshold for the cleanest reading, applies the result and stops.\n"
             "About 10 seconds; gives up after 15.")
+        self._apply_pickup_profile()
+
+    # ------------------------------------------------------------ pickup profiles
+    def _pickup_key(self):
+        if self.cmb_dev.currentData() == "SIM":
+            return None
+        return (self.cmb_dev.currentText() or "").strip() or None
+
+    def _profiles_path(self):
+        return os.path.join(APP_DIR, "pickup_profiles.json")
+
+    def _load_profiles(self):
+        import json
+        try:
+            with open(self._profiles_path(), encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            return {}
+
+    def _apply_pickup_profile(self):
+        key = self._pickup_key()
+        prof = getattr(self, "_pickup_profiles", None)
+        if prof is None:
+            self._pickup_profiles = prof = self._load_profiles()
+        p = prof.get(key) if key else None
+        if not p:
+            return
+        for spn, k in ((self.spn_lo, "band_lo"), (self.spn_hi, "band_hi"),
+                       (self.spn_env, "env_win_ms"), (self.spn_thr, "sub_threshold")):
+            if k in p:
+                spn.blockSignals(True)
+                spn.setValue(p[k])
+                spn.blockSignals(False)
+        self._push_cfg()
+        self.status.showMessage(f"Loaded saved filter settings for '{key}'.", 4000)
+
+    def _save_pickup_profile(self):
+        import json
+        key = self._pickup_key()
+        if not key:
+            QtWidgets.QMessageBox.information(
+                self, "Pickup profile", "Select a real input device first.")
+            return
+        self._pickup_profiles = self._load_profiles()
+        self._pickup_profiles[key] = {
+            "band_lo": int(self.spn_lo.value()), "band_hi": int(self.spn_hi.value()),
+            "env_win_ms": float(self.spn_env.value()),
+            "sub_threshold": float(self.spn_thr.value())}
+        try:
+            with open(self._profiles_path(), "w", encoding="utf-8") as fh:
+                json.dump(self._pickup_profiles, fh, indent=2)
+        except OSError as e:
+            QtWidgets.QMessageBox.warning(self, "Pickup profile", str(e))
+            return
+        self.status.showMessage(f"Saved these filter settings for '{key}'.", 5000)
+
+    def _forget_pickup_profile(self):
+        import json
+        key = self._pickup_key()
+        self._pickup_profiles = self._load_profiles()
+        if key and self._pickup_profiles.pop(key, None) is not None:
+            try:
+                with open(self._profiles_path(), "w", encoding="utf-8") as fh:
+                    json.dump(self._pickup_profiles, fh, indent=2)
+            except OSError:
+                pass
+            self.status.showMessage(f"Forgot the saved settings for '{key}'.", 4000)
 
     def _self_tune(self):
         if self._selftune_session:
