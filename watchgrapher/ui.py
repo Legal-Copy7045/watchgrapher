@@ -1167,7 +1167,7 @@ alongside the application.</p>
         g3 = Collapsible("3.  TEST CONDITIONS", True)
         self.cmb_pos = QtWidgets.QComboBox()
         self.cmb_pos.addItems(advisor.POSITIONS)
-        self.cmb_pos.setCurrentText("Crown up")
+        self.cmb_pos.setCurrentText("Dial up")
         self.cmb_wind = QtWidgets.QComboBox()
         self.cmb_wind.addItems(["Full wind", "6h", "12h", "24h", "36h"])
         self.btn_capture = QtWidgets.QPushButton("Capture this position")
