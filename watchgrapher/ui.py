@@ -1993,11 +1993,26 @@ alongside the application.</p>
         # positions
         pw = QtWidgets.QWidget()
         pl = QtWidgets.QVBoxLayout(pw)
+        psplit = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.tbl = QtWidgets.QTableWidget(0, 6)
         self.tbl.setHorizontalHeaderLabels(
             ["Position", "Wind", "Rate s/d", "Amplitude", "Beat error ms", "Time"])
         self.tbl.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
-        pl.addWidget(self.tbl)
+        psplit.addWidget(self.tbl)
+
+        self.p_pos = pg.PlotWidget(title="Positional rate  --  bar height is s/day, dashed line is the mean")
+        self.p_pos.setLabel("left", "rate", units="s/d")
+        self.p_pos.showGrid(y=True, alpha=0.2)
+        self.p_pos.getAxis("bottom").setTicks([[]])
+        self.bar_pos = pg.BarGraphItem(x=[], height=[], width=0.6, brush="#4da3ff", pen=None)
+        self.p_pos.addItem(self.bar_pos)
+        self.l_pos_mean = pg.InfiniteLine(angle=0, pen=pg.mkPen("#e8eef7", width=1,
+                                          style=QtCore.Qt.DashLine))
+        self.p_pos.addItem(self.l_pos_mean)
+        self._pos_labels = []
+        psplit.addWidget(self.p_pos)
+        psplit.setSizes([260, 220])
+        pl.addWidget(psplit, 1)
         br = QtWidgets.QHBoxLayout()
         for label, slot in (("Delete selected", self._del_row),
                             ("Clear all", self._clear_rows),
@@ -2015,6 +2030,12 @@ alongside the application.</p>
         # advice
         aw = QtWidgets.QWidget()
         al = QtWidgets.QVBoxLayout(aw)
+        self.lbl_reg = QtWidgets.QLabel("Regulation assistant: take a reading.")
+        self.lbl_reg.setWordWrap(True)
+        self.lbl_reg.setStyleSheet(
+            "background:#1a1f27;border:1px solid #2a323e;border-radius:6px;"
+            "padding:10px;color:#c8d0dc;font-size:12px;")
+        al.addWidget(self.lbl_reg)
         self.txt_advice = QtWidgets.QTextBrowser()
         self.txt_advice.setOpenExternalLinks(True)
         al.addWidget(self.txt_advice)
@@ -2799,6 +2820,7 @@ alongside the application.</p>
             self._rate_last_update = time.monotonic()
 
         self._update_diag(m)
+        self._update_regulation(m)
         self._check_stable(m)
         self._log_reserve(m)
 
@@ -3719,6 +3741,36 @@ alongside the application.</p>
                 f"delta {max(rates)-min(rates):.1f} s/d    mean {sum(rates)/len(rates):+.1f} s/d")
         else:
             self.lbl_delta.setText("")
+        self._redraw_positions()
+
+    def _redraw_positions(self):
+        for t in self._pos_labels:
+            self.p_pos.removeItem(t)
+        self._pos_labels = []
+        rows = [r for r in self.readings if r.rate == r.rate]
+        if not rows:
+            self.bar_pos.setOpts(x=[], height=[])
+            self.l_pos_mean.setValue(0)
+            self.p_pos.getAxis("bottom").setTicks([[]])
+            return
+        # Keep the canonical position order; unknown labels go on the end.
+        order = {p: i for i, p in enumerate(advisor.POSITIONS)}
+        rows.sort(key=lambda r: order.get(r.position, 99))
+        xs = list(range(len(rows)))
+        heights = [r.rate for r in rows]
+        mean = sum(heights) / len(heights)
+        cols = ["#57d38c" if abs(h - mean) < 5 else ("#ffb648" if abs(h - mean) < 12 else "#ff5d5d")
+                for h in heights]
+        self.bar_pos.setOpts(x=xs, height=heights, width=0.6, brushes=cols)
+        self.l_pos_mean.setValue(mean)
+        self.p_pos.getAxis("bottom").setTicks(
+            [[(i, r.position.replace("Crown ", "C").replace("Dial ", "D")) for i, r in zip(xs, rows)]])
+        for i, r in zip(xs, rows):
+            amp = "" if r.amplitude != r.amplitude else f"{r.amplitude:.0f}°"
+            t = pg.TextItem(f"{r.rate:+.1f}\n{amp}", color="#8a94a4", anchor=(0.5, 0))
+            t.setPos(i, max(heights) if r.rate >= 0 else min(heights))
+            self.p_pos.addItem(t)
+            self._pos_labels.append(t)
 
     def _del_row(self):
         rows = sorted({i.row() for i in self.tbl.selectedIndexes()}, reverse=True)
@@ -3767,6 +3819,43 @@ alongside the application.</p>
         self.status.showMessage(f"Wrote {path}", 5000)
 
     # --------------------------------------------------------------- advice
+    def _regulation_target(self):
+        w = self._current_watch() if hasattr(self, "_current_watch") else None
+        if w and str(getattr(w, "target_rate", "")).strip():
+            try:
+                return float(str(w.target_rate).replace("+", "").strip())
+            except ValueError:
+                pass
+        return 0.0
+
+    def _update_regulation(self, m):
+        if not hasattr(self, "lbl_reg"):
+            return
+        c = self._current_caliber()
+        if c is None or not m.ok or m.rate != m.rate:
+            return
+        if m.nominal_bph and m.detected_bph != m.nominal_bph:
+            self.lbl_reg.setText("Regulation assistant: beat rate does not match the caliber, "
+                                 "so the rate figure is not usable yet.")
+            return
+        target = self._regulation_target()
+        err = m.rate - target
+        ci = f" ±{m.rate_ci:.1f}" if m.rate_ci == m.rate_ci else ""
+        head = (f"<b>Now {m.rate:+.1f}{ci} s/day</b>, target {target:+.1f}. ")
+        if abs(err) <= max(2.0, (m.rate_ci if m.rate_ci == m.rate_ci else 0.0)):
+            self.lbl_reg.setText(head + "Within tolerance of the target -- leave the regulator "
+                                 "alone and confirm across positions.")
+            return
+        direction = "slower" if err > 0 else "faster"
+        instr = advisor.rate_adjust_instructions(c, direction)
+        extra = ""
+        if self.spn_before.value() or self.spn_after.value():
+            extra = ("<br><br><i>From your Tools-tab calibration:</i> "
+                     + advisor.regulator_sensitivity(self.spn_before.value(),
+                                                     self.spn_after.value()))
+        self.lbl_reg.setText(
+            f"{head}Run <b>{direction}</b> by <b>{abs(err):.1f} s/day</b>.<br><br>{instr}{extra}")
+
     def _advise(self):
         c = self._current_caliber()
         if not c:
