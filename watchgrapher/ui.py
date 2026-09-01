@@ -53,6 +53,7 @@ class AnalysisWorker(QtCore.QObject):
         self.recorder = None
         self.cfg = AnalyzerConfig()
         self.window_s = 20.0
+        self.tune_budget_s = 15.0
         self._running = False
         # A plain flag rather than a queued slot call: run() below is a
         # blocking loop, so it owns the thread and never returns to an event
@@ -90,7 +91,8 @@ class AnalysisWorker(QtCore.QObject):
                             best, rows = autotune(
                                 data, rec.samplerate, self.cfg,
                                 progress=lambda a, b: self.tune_progress.emit(a, b),
-                                cancelled=self._tune_cancel.is_set)
+                                cancelled=self._tune_cancel.is_set,
+                                deadline=time.monotonic() + self.tune_budget_s)
                             if self._tune_cancel.is_set():
                                 self.tune_failed.emit("Tuning cancelled.")
                             else:
@@ -744,9 +746,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.recorder = None
         self.last = None
         self.readings = []
-        self.rate_history = []
+        self._rate_hist = []       # (elapsed_s, rate_spd) for the rate-history plot
+        self._listen_t0 = None     # wall-clock start of the current listen session
+        self._rate_last_update = None   # monotonic() of the last appended rate point
         self._last_rate_for_calib = None
         self._tuning = False       # a self-tune sweep is in flight
+        self._selftune_session = False       # one-press auto run active
+        self._selftune_started_listen = False  # this feature opened the recorder
+        self._selftune_baseline = None       # tuning_score(self.last) at session start
+        self._selftune_deadline = 0.0        # monotonic() escape time for the sweep
         self._suppress_finish = False   # internal stream restarts, not user stops
         self._closing = False
         self._run_t0 = None        # timed run start, or None
@@ -1342,39 +1350,46 @@ alongside the application.</p>
     def _device_changed(self):
         is_sim = self.cmb_dev.currentData() == "SIM"
         self.g_sim.setVisible(is_sim)
-        if not self._tuning:
+        if not self._tuning and not self._selftune_session:
             self.btn_tune.setEnabled(not is_sim)
         self.btn_tune.setToolTip(
             "Not useful on the simulator -- it generates clean beats by construction."
             if is_sim else
-            "Listens to what the pickup is actually delivering and sweeps the filter\n"
-            "band, envelope window and sub-noise threshold to find the settings that\n"
-            "resolve the escapement most cleanly. Takes about 10 seconds.")
+            "One press: starts listening, sweeps the filter band, envelope window and\n"
+            "sub-noise threshold for the cleanest reading, applies the result and stops.\n"
+            "About 10 seconds; gives up after 15.")
 
     def _self_tune(self):
-        if self._tuning:
+        if self._selftune_session:
             # Second click cancels. Leaving the button dead during a sweep gives
             # you no way out if the pickup is bad enough to make it slow.
             self.worker.cancel_tune()
             self.btn_tune.setText("Cancelling...")
+            self._selftune_finish(reason="cancelled")
             return
-        if not self.recorder:
-            QtWidgets.QMessageBox.information(
-                self, "Self-tune", "Start listening first, then let it run for about "
-                "ten seconds so there is something to tune against.")
+        if self.cmb_dev.currentData() == "SIM":
             return
-        if self.recorder.seconds_buffered < 5:
-            QtWidgets.QMessageBox.information(
-                self, "Self-tune",
-                f"Only {self.recorder.seconds_buffered:.0f} seconds captured so far. "
-                f"Give it about ten before tuning.")
-            return
-        self._tuning = True
-        self.btn_tune.setText("Tuning... (click to cancel)")
-        # Watchdog: if the worker dies without reporting, the button still comes
-        # back rather than stranding the user.
-        self._tune_watchdog.start(120000)
-        self.worker.request_tune()
+
+        self._selftune_started_listen = self.recorder is None
+        if self.recorder is None:
+            self._suppress_finish = True
+            try:
+                self._toggle_listen(True)
+            finally:
+                self._suppress_finish = False
+            if self.recorder is None:      # audio error already shown
+                self._selftune_started_listen = False
+                return
+            self._set_go(True)             # reflect that we are now listening
+
+        self._selftune_session = True
+        self._selftune_baseline = (tuning_score(self.last)
+                                   if self.last is not None and self.last.ok else None)
+        self.btn_tune.setText("Waiting for audio... (click to cancel)")
+        self.btn_tune.setEnabled(True)
+        # Backstop for "the buffer never fills"; the sweep itself is bounded by
+        # its own 15 s deadline, checked in _tick_ui.
+        self._tune_watchdog.start(25000)
 
     def _reset_tune_button(self):
         self._tuning = False
@@ -1382,7 +1397,41 @@ alongside the application.</p>
         self.btn_tune.setText("Self-tune pickup")
         self.btn_tune.setEnabled(self.cmb_dev.currentData() != "SIM")
 
+    def _selftune_finish(self, reason):
+        """End a one-press self-tune session. reason: done|timeout|failed|cancelled."""
+        was_session = self._selftune_session
+        started_listen = self._selftune_started_listen
+        self._selftune_session = False
+        self._selftune_started_listen = False
+        self._reset_tune_button()
+        if not was_session:
+            return
+        if reason != "done":
+            self.worker.cancel_tune()
+            if reason == "timeout":
+                QtWidgets.QMessageBox.warning(
+                    self, "Self-tune",
+                    "Self-tune did not finish within 15 seconds and has been stopped.\n\n"
+                    "Settings are unchanged. The pickup is still listening, so you can "
+                    "set the filter band and sub-noise threshold by hand while watching "
+                    "the beat waveform panel.")
+            elif reason == "failed":
+                self.status.showMessage("Self-tune stopped -- audio unavailable.", 6000)
+            else:
+                self.status.showMessage("Self-tune cancelled -- settings unchanged.", 5000)
+            return
+        if started_listen:
+            # "start a run, tune, then end" -- only tear down the stream this
+            # feature opened; a session already listening is left as we found it.
+            self._suppress_finish = True
+            self._toggle_listen(False)
+            self._suppress_finish = False
+
     def _on_tune_failed(self, msg):
+        if self._selftune_session:
+            self._selftune_finish(
+                reason="cancelled" if msg.startswith("Tuning cancelled") else "failed")
+            return
         self._reset_tune_button()
         if msg.startswith("Tuning cancelled"):
             self.status.showMessage("Tuning cancelled -- settings unchanged.", 5000)
@@ -1390,23 +1439,27 @@ alongside the application.</p>
         QtWidgets.QMessageBox.warning(self, "Self-tune", msg)
 
     def _tune_timed_out(self):
+        if self._selftune_session:
+            self._selftune_finish(reason="timeout")
+            return
         self._reset_tune_button()
         self.worker.cancel_tune()
         QtWidgets.QMessageBox.warning(
             self, "Self-tune",
-            "Tuning did not finish within two minutes and has been stopped.\n\n"
+            "Tuning did not finish in time and has been stopped.\n\n"
             "Settings are unchanged. Try a shorter rolling window, or set the filter "
             "band and sub-noise threshold by hand while watching the beat waveform "
             "panel.")
 
     def _on_tune_progress(self, done, total):
-        if self._tuning:
+        if self._tuning or self._selftune_session:
             self.btn_tune.setText(f"Tuning... {done}/{total} (click to cancel)")
 
     def _on_tuned(self, cfg, rows):
+        session = self._selftune_session
         self._reset_tune_button()
-        before = None
-        if self.last is not None and self.last.ok:
+        before = self._selftune_baseline if session else None
+        if not session and self.last is not None and self.last.ok:
             before = tuning_score(self.last)
 
         for w, v in ((self.spn_lo, int(cfg.band_lo)), (self.spn_hi, int(cfg.band_hi)),
@@ -1426,6 +1479,8 @@ alongside the application.</p>
                 "The pickup is not resolving an escapement at all. Press the case back "
                 "firmly against the sensor, check the level meter is moving without "
                 "hitting red, and silence anything running nearby.")
+            if session:
+                self._selftune_finish(reason="done")
             return
         best = max(usable, key=lambda r: r[1])
         m = best[2]
@@ -1446,6 +1501,14 @@ alongside the application.</p>
                 "a pickup that is hearing the room: press the case back harder against "
                 "the sensor, kill background noise, and back the input gain off if the "
                 "level meter is anywhere near red.")
+
+        if session:
+            improved = before is None or best[1] > before
+            self.status.showMessage(
+                "Self-tune complete -- settings improved." if improved else
+                "Self-tune complete -- no better settings found; left as they were.", 8000)
+            self._selftune_finish(reason="done")
+            return
         QtWidgets.QMessageBox.information(self, "Pickup tuned", "\n".join(msg))
 
     def _save_session(self):
@@ -1513,6 +1576,7 @@ alongside the application.</p>
 
         self.p_hist = pg.PlotWidget(title="Rate history")
         self.p_hist.setLabel("left", "s/day")
+        self.p_hist.setLabel("bottom", "run time", units="min")
         self.p_hist.showGrid(x=True, y=True, alpha=0.2)
         self.c_hist = self.p_hist.plot(pen=pg.mkPen(ACCENT, width=2))
         right.addWidget(self.p_hist)
@@ -1871,12 +1935,17 @@ alongside the application.</p>
                 return
             self._pending_buffer = 0
             self.worker.recorder = self.recorder
-            self.rate_history.clear()
+            self._rate_hist = []
+            self._listen_t0 = time.time()
+            self._rate_last_update = None
+            self.c_hist.setData([], [])
         else:
             if self._run_t0 is not None:
                 self._finish_run(stopped_early=True)
-            if self._tuning:
+            if self._tuning or self._selftune_session:
                 self.worker.cancel_tune()
+                self._selftune_session = False
+                self._selftune_started_listen = False
                 self._reset_tune_button()
             self.worker.recorder = None
             if self.recorder:
@@ -2068,6 +2137,21 @@ alongside the application.</p>
 
     # --------------------------------------------------------------- events
     def _tick_ui(self):
+        if self._selftune_session:
+            if not self._tuning:
+                buffered = self.recorder.seconds_buffered if self.recorder else 0.0
+                if buffered >= 6.0:
+                    self._tuning = True
+                    self._selftune_deadline = time.monotonic() + 15.0
+                    self.worker.tune_budget_s = 15.0
+                    self.btn_tune.setText("Tuning... (click to cancel)")
+                    self.worker.request_tune()
+                elif not self.recorder:
+                    self._selftune_finish(reason="failed")
+            elif time.monotonic() >= self._selftune_deadline + 3.0:
+                # Sweep wedged inside analyze() past its own deadline.
+                self._selftune_finish(reason="timeout")
+
         if self._run_t0 is not None:
             el = time.time() - self._run_t0
             frac = min(1.0, el / max(self._run_len, 1e-6))
@@ -2082,6 +2166,11 @@ alongside the application.</p>
             self.lvl.setStyleSheet(
                 f"QProgressBar{{background:#1a1f27;border:none;}}"
                 f"QProgressBar::chunk{{background:{col};}}")
+            if self._rate_last_update is not None and hasattr(self, "lbl_live"):
+                age = time.monotonic() - self._rate_last_update
+                if age > 4.0:
+                    self.lbl_live.setText(f"no new reading for {age:.0f} s")
+                    self.lbl_live.setStyleSheet("color:#ffb648;font-size:12px;")
 
     def _on_result(self, m):
         self.last = m
@@ -2115,10 +2204,13 @@ alongside the application.</p>
                 self.l_p1.setPos((m.p1_idx - m.shape_pre) / m.shape_fs * 1000.0)
                 self.l_p3.setPos((m.p3_idx - m.shape_pre) / m.shape_fs * 1000.0)
 
-        if m.rate == m.rate:
-            self.rate_history.append(m.rate)
-            self.rate_history = self.rate_history[-400:]
-            self.c_hist.setData(np.arange(len(self.rate_history)), np.array(self.rate_history))
+        if m.rate == m.rate and self._listen_t0 is not None:
+            el = time.time() - self._listen_t0
+            self._rate_hist.append((el, float(m.rate)))
+            self._rate_hist = self._decimate_rate_hist(self._rate_hist)
+            a = np.asarray(self._rate_hist, dtype=float)
+            self.c_hist.setData(a[:, 0] / 60.0, a[:, 1])
+            self._rate_last_update = time.monotonic()
 
         self._check_stable(m)
         self._log_reserve(m)
@@ -2142,6 +2234,24 @@ alongside the application.</p>
         self.status.showMessage("   |   ".join(bits))
 
     # -------------------------------------------------------- new features
+
+    @staticmethod
+    def _decimate_rate_hist(pts):
+        """
+        Age-tiered thinning so a multi-day run keeps scrolling without the
+        point count (or the redraw cost) growing without bound: full
+        resolution for the last 10 minutes, one point per 5 s out to 2 hours,
+        one per 30 s beyond that. ~8k points at 48 h.
+        """
+        now = pts[-1][0]
+        out, last_t = [], -1e9
+        for t, r in pts:
+            age = now - t
+            step = 0.0 if age < 600.0 else (5.0 if age < 7200.0 else 30.0)
+            if t - last_t >= step:
+                out.append((t, r))
+                last_t = t
+        return out
 
     def _check_stable(self, m):
         """

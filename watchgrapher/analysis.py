@@ -11,6 +11,7 @@ Sign convention for rate: positive means the watch is GAINING.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field, replace
 from typing import Optional
 
@@ -404,7 +405,7 @@ def _try(samples, fs, cfg):
 
 
 def autotune(samples: np.ndarray, fs: int, base: AnalyzerConfig,
-             progress=None, cancelled=None):
+             progress=None, cancelled=None, deadline=None):
     """
     Sweep filter band, envelope window and sub-noise threshold; return the
     best-scoring configuration plus the trial table.
@@ -412,7 +413,15 @@ def autotune(samples: np.ndarray, fs: int, base: AnalyzerConfig,
     Two stages, because the full grid is too slow to sit through: first find
     the band and envelope window that make the beats themselves cleanest,
     then tune the sub-noise threshold against that band.
+
+    `deadline`, if given, is an absolute ``time.monotonic()`` value; the sweep
+    returns the best result so far once it is reached. `autotune` cannot be
+    interrupted mid-``analyze()``, so the caller's own timeout should allow a
+    little slack beyond this.
     """
+    def _stop():
+        return ((cancelled is not None and cancelled())
+                or (deadline is not None and time.monotonic() >= deadline))
     bands = [(600, 6000), (1000, 8000), (1500, 12000), (2500, 12000),
              (3000, 16000), (800, 16000)]
     envs = [0.20, 0.35, 0.60, 1.00]
@@ -422,14 +431,22 @@ def autotune(samples: np.ndarray, fs: int, base: AnalyzerConfig,
     bands = [(lo, min(hi, nyq * 0.9)) for lo, hi in bands if lo < nyq * 0.85]
 
     rows = []
-    trials = len(bands) * len(envs) + len(thresholds)
+    trials = len(bands) * len(envs) + len(thresholds) + 1
     done = 0
 
-    best, best_score = None, -1e18
+    # Score the current settings first and seed `best` with them, so a sweep
+    # that finds nothing better can never regress what the user already has.
+    sc0, m0 = _try(samples, fs, base)
+    rows.append(("current settings", sc0, m0))
+    best, best_score = base, sc0
+    done += 1
+    if progress:
+        progress(done, trials)
+
     for lo, hi in bands:
         for ew in envs:
-            if cancelled is not None and cancelled():
-                return best or base, rows
+            if _stop():
+                return best, rows
             cfg = replace(base, band_lo=lo, band_hi=hi, env_win_ms=ew)
             sc, m = _try(samples, fs, cfg)
             rows.append((f"{lo:.0f}-{hi:.0f} Hz, env {ew:.2f} ms", sc, m))
@@ -439,11 +456,8 @@ def autotune(samples: np.ndarray, fs: int, base: AnalyzerConfig,
             if progress:
                 progress(done, trials)
 
-    if best is None:
-        return base, rows
-
     for th in thresholds:
-        if cancelled is not None and cancelled():
+        if _stop():
             return best, rows
         cfg = replace(best, sub_threshold=th)
         sc, m = _try(samples, fs, cfg)
