@@ -1523,6 +1523,15 @@ alongside the application.</p>
         self.btn_tune.clicked.connect(self._self_tune)
         g4.addPersistent(self.btn_tune)
 
+        self.btn_noise = QtWidgets.QPushButton("Room noise check")
+        self.btn_noise.setMinimumHeight(26)
+        self.btn_noise.setToolTip(
+            "Lift the watch off the pickup and press this. It measures the noise\n"
+            "floor for two seconds and tells you whether the room is quiet enough\n"
+            "to trust an amplitude reading.")
+        self.btn_noise.clicked.connect(self._noise_check)
+        g4.addPersistent(self.btn_noise)
+
         self.spn_win = QtWidgets.QDoubleSpinBox()
         self.spn_win.setRange(4, 120)
         self.spn_win.setValue(20)
@@ -1719,6 +1728,46 @@ alongside the application.</p>
         # Backstop for "the buffer never fills"; the sweep itself is bounded by
         # its own 15 s deadline, checked in _tick_ui.
         self._tune_watchdog.start(25000)
+
+    def _noise_check(self):
+        if self.recorder is None:
+            QtWidgets.QMessageBox.information(
+                self, "Room noise check", "Press Start first so the pickup is listening.")
+            return
+        if QtWidgets.QMessageBox.question(
+                self, "Room noise check",
+                "Lift the watch off the pickup, then press OK. Keep still and quiet "
+                "for two seconds.",
+                QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel
+                ) != QtWidgets.QMessageBox.Ok:
+            return
+        deadline = time.time() + 2.2
+        while time.time() < deadline:
+            QtWidgets.QApplication.processEvents()
+            time.sleep(0.05)
+        data = self.recorder.read(2.0)
+        if data.size < self.recorder.samplerate:
+            QtWidgets.QMessageBox.warning(self, "Room noise check", "Not enough audio.")
+            return
+        data = np.asarray(data, dtype=np.float64)
+        rms = float(np.sqrt(np.mean(data * data))) + 1e-12
+        peak = float(np.max(np.abs(data)))
+        db = 20.0 * np.log10(rms)
+        if db < -60:
+            verdict = ("Very quiet -- excellent conditions for amplitude.")
+        elif db < -48:
+            verdict = ("Quiet enough. Amplitude readings should be trustworthy.")
+        elif db < -38:
+            verdict = ("Borderline. Faint sub-noises may be lost -- amplitude could read "
+                       "low and jump around. Close doors, stop fans, try again.")
+        else:
+            verdict = ("Too loud. The unlocking noise will be buried under the room. "
+                       "Move somewhere quieter or improve the pickup's acoustic isolation "
+                       "before trusting amplitude.")
+        QtWidgets.QMessageBox.information(
+            self, "Room noise check",
+            f"Noise floor: {db:.0f} dBFS RMS  (peak {20*np.log10(peak+1e-12):.0f} dBFS)\n\n"
+            + verdict)
 
     def _reset_tune_button(self):
         self._tuning = False
@@ -2717,6 +2766,10 @@ alongside the application.</p>
 
         good = m.quality > 0.8
         self.r_rate.set(f"{m.rate:+.1f}", "#e8eef7" if abs(m.rate) < 15 else "#ffb648")
+        if m.rate_ci == m.rate_ci:
+            self.r_rate.u.setText(f"seconds / day   ±{m.rate_ci:.1f} (95%)")
+        else:
+            self.r_rate.u.setText("seconds / day")
         self.r_amp.set("--" if m.amplitude != m.amplitude else f"{m.amplitude:.0f}",
                        "#ff5d5d" if m.amplitude > 330 else
                        ("#ffb648" if m.amplitude < 220 else "#e8eef7"))
@@ -2757,6 +2810,9 @@ alongside the application.</p>
                 f"color:{'#ffb648' if warn else '#5a6472'};font-size:12px;")
 
         bits = [f"{m.beats} beats", f"SNR {m.snr_db:.0f} dB", f"match {m.quality:.2f}"]
+        if m.rate_ci == m.rate_ci:
+            bits.append(f"rate +/-{m.rate_ci:.1f} s/d (95%)"
+                        + (" -- run longer for a firm figure" if m.rate_ci > 3.0 else ""))
         if m.amplitude_spread == m.amplitude_spread:
             bits.append(f"amp scatter +/-{m.amplitude_spread/2:.0f} deg")
         if abs(m.parity_correction) > 0.15:
