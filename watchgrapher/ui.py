@@ -1568,9 +1568,30 @@ alongside the application.</p>
         plots.addWidget(self.p_trace)
 
         right = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        self.p_wave = pg.PlotWidget(title="Averaged beat  --  markers are the unlocking and drop noises")
+
+        wave_box = QtWidgets.QWidget()
+        wave_lay = QtWidgets.QVBoxLayout(wave_box)
+        wave_lay.setContentsMargins(0, 0, 0, 0)
+        wave_lay.setSpacing(2)
+        whead = QtWidgets.QHBoxLayout()
+        self.lbl_wave = QtWidgets.QLabel()
+        self.lbl_wave.setStyleSheet("color:#c8d0dc;font-size:12px;")
+        self.cmb_wave = QtWidgets.QComboBox()
+        self.cmb_wave.addItems(["Average", "Live beat", "Mic"])
+        self.cmb_wave.setToolTip(
+            "Average -- every beat in the rolling window, stacked and averaged (drives amplitude).\n"
+            "Live beat -- the band-passed waveform of the most recent single beat.\n"
+            "Mic -- the raw signal the pickup is delivering right now.")
+        self.cmb_wave.currentTextChanged.connect(self._set_wave_mode)
+        whead.addWidget(self.lbl_wave, 1)
+        whead.addWidget(self.cmb_wave, 0)
+        wave_lay.addLayout(whead)
+
+        self.p_wave = pg.PlotWidget()
         self.p_wave.setLabel("bottom", "time within beat", units="ms")
         self.p_wave.showGrid(x=True, y=True, alpha=0.2)
+        self.p_wave.setDownsampling(auto=True, mode="peak")
+        self.p_wave.setClipToView(True)
         self.c_wave = self.p_wave.plot(pen=pg.mkPen("#57d38c", width=2))
         self.l_p1 = pg.InfiniteLine(angle=90, pen=pg.mkPen(TICK_C, width=2, style=QtCore.Qt.DashLine),
                                     label="unlock", labelOpts={"color": TICK_C, "position": 0.9})
@@ -1578,7 +1599,10 @@ alongside the application.</p>
                                     label="drop", labelOpts={"color": TOCK_C, "position": 0.9})
         self.p_wave.addItem(self.l_p1)
         self.p_wave.addItem(self.l_p3)
-        right.addWidget(self.p_wave)
+        wave_lay.addWidget(self.p_wave)
+        right.addWidget(wave_box)
+        self._wave_mode = "Average"
+        self._set_wave_mode("Average")
 
         self.p_hist = pg.PlotWidget(title="Rate history")
         self.p_hist.setLabel("left", "s/day")
@@ -2183,6 +2207,7 @@ alongside the application.</p>
                     self.lbl_live.setText(f"no new reading for {age:.0f} s")
                     self.lbl_live.setStyleSheet("color:#ffb648;font-size:12px;")
             self._watch_stream()
+            self._draw_mic_scope()
 
     def _watch_stream(self):
         """
@@ -2239,6 +2264,47 @@ alongside the application.</p>
             f"Audio stream stalled and was restarted (#{self._stream_restarts}). "
             f"Rate history and the power-reserve log continue uninterrupted.", 6000)
 
+    _WAVE_TITLES = {
+        "Average": "Averaged beat  --  every beat in the window, stacked; markers are the "
+                   "unlocking and drop noises",
+        "Live beat": "Live beat  --  band-passed waveform of the most recent single beat",
+        "Mic": "Microphone  --  raw signal the pickup is delivering, last 0.6 s",
+    }
+
+    def _set_wave_mode(self, mode):
+        self._wave_mode = mode
+        self.lbl_wave.setText(self._WAVE_TITLES.get(mode, ""))
+        show_markers = mode == "Average"
+        self.l_p1.setVisible(show_markers)
+        self.l_p3.setVisible(show_markers)
+        self.p_wave.setLabel("bottom", "time" if mode == "Mic" else "time within beat", units="ms")
+        self.c_wave.setData([], [])
+        if mode != "Mic" and getattr(self, "last", None) is not None and self.last.ok:
+            self._render_wave(self.last)
+
+    def _render_wave(self, m):
+        if self._wave_mode == "Average":
+            if m.mean_shape is not None and m.shape_fs:
+                t = (np.arange(len(m.mean_shape)) - m.shape_pre) / m.shape_fs * 1000.0
+                self.c_wave.setData(t, m.mean_shape)
+                if m.p3_idx > m.p1_idx > 0:
+                    self.l_p1.setPos((m.p1_idx - m.shape_pre) / m.shape_fs * 1000.0)
+                    self.l_p3.setPos((m.p3_idx - m.shape_pre) / m.shape_fs * 1000.0)
+        elif self._wave_mode == "Live beat":
+            if m.beat_wave is not None and m.beat_wave_fs:
+                t = (np.arange(m.beat_wave.size) - m.beat_wave_pre) / m.beat_wave_fs * 1000.0
+                self.c_wave.setData(t, np.asarray(m.beat_wave, dtype=float))
+
+    def _draw_mic_scope(self):
+        if self._wave_mode != "Mic" or self.recorder is None:
+            return
+        raw = self.recorder.read(0.6)
+        if raw.size < 16:
+            return
+        raw = raw - float(np.mean(raw))
+        t = np.arange(raw.size) / self.recorder.samplerate * 1000.0
+        self.c_wave.setData(t, raw)
+
     def _on_result(self, m):
         self.last = m
         if not m.ok:
@@ -2264,12 +2330,8 @@ alongside the application.</p>
         half = self.spn_trace.value() / 2
         self.p_trace.setXRange(-half, half, padding=0.02)
 
-        if m.mean_shape is not None and m.shape_fs:
-            t = (np.arange(len(m.mean_shape)) - m.shape_pre) / m.shape_fs * 1000.0
-            self.c_wave.setData(t, m.mean_shape)
-            if m.p3_idx > m.p1_idx > 0:
-                self.l_p1.setPos((m.p1_idx - m.shape_pre) / m.shape_fs * 1000.0)
-                self.l_p3.setPos((m.p3_idx - m.shape_pre) / m.shape_fs * 1000.0)
+        if self._wave_mode != "Mic":
+            self._render_wave(m)
 
         if m.rate == m.rate and self._listen_t0 is not None:
             el = time.time() - self._listen_t0
