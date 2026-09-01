@@ -17,6 +17,12 @@ That is the whole installation. If Python 3.10+ is not already present,
 installer from python.org), then builds a virtual environment and installs
 dependencies. First run takes a few minutes; later runs start in seconds.
 
+If Windows shows a *"publisher could not be verified"* warning on `run.bat`,
+that is the Mark of the Web on files extracted from a downloaded zip -- right
+click the folder, or run
+`Get-ChildItem -Recurse . | Unblock-File` in PowerShell, once. Files from
+`git clone` are not flagged.
+
 Manual install if you prefer:
 
 ```
@@ -58,20 +64,31 @@ interface supports it; it will not fix a bad pickup.
 
 ## Self-tuning the pickup
 
-**Start listening**, let five seconds of audio accumulate, then press
-**Self-tune pickup**. It sweeps the filter band, the envelope window and the
-sub-noise threshold, scoring each combination on signal-quality evidence only:
-how well beats match their own averaged template, what fraction yield a usable
-impulse interval, how many noises per beat are being resolved, and how much the
+Press **Self-tune**. From idle it starts listening on its own, waits for a
+few seconds of audio, sweeps the filter band, the envelope window and the
+sub-noise threshold, applies the best result and stops the run it started --
+one press, start to finish, no need to press Start yourself first.
+
+Each combination is scored on signal-quality evidence only: how well beats
+match their own averaged template, what fraction yield a usable impulse
+interval, how many noises per beat are being resolved, and how much the
 per-beat amplitude estimate scatters. It deliberately does not reward a
 particular amplitude or rate -- tuning toward a number you were hoping to see
-is how you talk yourself into a wrong reading.
+is how you talk yourself into a wrong reading. It also scores your current
+settings first and keeps them as a candidate, so a sweep can never leave you
+worse off than you started.
 
-Takes about ten seconds; click the button again to cancel. If a filter setting
-makes the analysis fail -- some bands leave too little signal for the peak
-finder, which is common on a noisy pickup -- that trial scores zero and the
-sweep carries on rather than aborting. If every trial fails it says so and
-changes nothing.
+Takes about ten seconds; it gives up after fifteen. Click the button again to
+cancel. If a filter setting makes the analysis fail -- some bands leave too
+little signal for the peak finder, which is common on a noisy pickup -- that
+trial scores zero and the sweep carries on rather than aborting. If every
+trial fails it says so and changes nothing.
+
+**Room noise** works the same way: lift the watch off the pickup, press it,
+and it starts listening if nothing is running, measures the noise floor for a
+couple of seconds, tells you whether the room is quiet enough to trust an
+amplitude reading, and stops. Below about -48 dBFS is fine; above -38 the
+unlocking noise will be buried.
 
 The report afterwards tells you what it chose and,
 crucially, the **noises per beat**. A lever escapement makes exactly three:
@@ -89,8 +106,8 @@ measurement it destroys first.
 
 Two ways, both exercising the real analysis chain.
 
-**Simulated watch (best).** Pick `-- Simulated watch (no microphone) --` from the
-Device dropdown and hit Start listening. The **Simulated watch** panel on the
+**Simulated watch (best).** Pick the simulated watch from the
+Device dropdown and press Start. The **Simulated watch** panel on the
 left lets you dial in beat rate, amplitude, rate and beat error, and the
 readouts should come back with exactly those numbers. It generates audio into
 the same ring buffer a real microphone feeds, so the live trace, level meter,
@@ -113,7 +130,11 @@ PortAudio's "default" is usually the MME copy -- which resamples to 44100
 behind your back and costs about a third of your amplitude resolution. The app
 therefore honours your chosen *device* but takes the best route to it,
 preferring WASAPI. Override from the Device dropdown if you want a different
-one.
+one; **View -> Rescan audio devices** (Ctrl+R) re-enumerates after you plug
+something in. If a stream stalls mid-run -- USB power management, a WASAPI
+timeout, a burst of overflows -- the app notices the capture buffer has
+stopped advancing and rebuilds the stream in place, so a long run survives a
+glitch instead of quietly freezing.
 
 **Test WAV files.** Generate a set with known values baked into the filenames:
 
@@ -126,6 +147,13 @@ knocking, Seiko, vintage, co-axial, hi-beat and a deliberately noisy pickup.
 Load them with **Analyze a WAV file** and check the readouts against the
 filename. Set the lift angle to match the filename first, or amplitude will be
 scaled wrong.
+
+**Scrubbing a recording.** A WAV longer than the rolling window opens in a
+scrubber instead of just analysing the first few seconds: an overview of the
+whole file, a draggable/resizable window, prev/next, and *Analyse window* to
+run the full chain on any slice. Lets you find the clean stretch of a noisy or
+intermittent recording. *Send window to main view* pushes that reading to the
+readouts and trace.
 
 ---
 
@@ -146,6 +174,14 @@ scaled wrong.
    - **Duration 0** ("open-ended") runs until you press Stop, which is what you
      want while turning a regulator and watching a number move. Stopping asks
      the same question.
+   - **Settle before timing** (tick box beside the duration) holds the timed
+     run off until five consecutive readings agree on rate and amplitude, so
+     the run records the watch rather than the transient from setting it down.
+     Falls back to starting anyway after 90 s.
+
+   The RATE readout carries a 95% confidence figure (`+2.3 +/-0.4 s/day`).
+   It shrinks as the capture lengthens -- when it is wider than a couple of
+   s/day, a 20 s window is not enough and you want a timed run.
 
    Do not confuse the duration with the **rolling window** in Pickup tuning:
    that is how far back each *live* reading looks while a measurement is in
@@ -171,10 +207,16 @@ scaled wrong.
 4. Check the **beat rate** readout matches the caliber before you believe
    anything else. If it doesn't, the pickup is mistracking or the caliber is
    wrong.
-5. Capture each of the six positions with **Capture this position**. Move the
+5. Capture each of the six positions with **Capture position**. Move the
    watch and set the position dropdown yourself between captures; it defaults
-   to Dial up and stays where you leave it.
-6. Hit **Analyze and advise**.
+   to Dial up and stays where you leave it. The Positions tab plots the
+   captured rates as a bar chart against the mean, so a poise problem is
+   obvious at a glance.
+6. Hit **Analyze and advise**. The Advice tab also carries a live
+   **regulation assistant** -- current rate versus target, the direction and
+   amount to move, and the regulator-specific instruction for the caliber --
+   and grades the run against a standard (COSC-style, METAS-style,
+   manufacture-typical or serviceable/vintage).
 
 ### Reading the trace
 
@@ -187,12 +229,21 @@ Two dot lines, one for the tick and one for the tock.
 - **Wandering, non-straight lines** point at a real fault -- a bent pivot, a
   hairspring catching, dirt in the train.
 
-### Reading the beat waveform panel
+### Reading the beat panel
 
-This is the averaged sound of one beat with the two markers the amplitude
-calculation uses: the **unlock** noise and the **drop** noise. If those markers
-aren't sitting on obvious peaks, your amplitude number is wrong and you should
-fix that before believing it.
+Three views, switched from the selector on the panel:
+
+- **Average** -- every beat in the rolling window stacked and averaged, with
+  the two markers the amplitude calculation uses: the **unlock** noise and the
+  **drop** noise. This is the one that drives amplitude. If those markers
+  aren't sitting on obvious peaks, your amplitude number is wrong and you
+  should fix that before believing it.
+- **Live beat** -- the band-passed waveform of the most recent single beat,
+  refreshed each cycle. Shows attack transients, ringing, a fourth noise or
+  clipping the average smooths away.
+- **Mic** -- the raw signal the pickup is delivering right now, last 0.6 s. A
+  real-time scope: tick spikes marching across the noise floor. Use it to
+  judge coupling before you trust anything.
 
 The **sub-noise threshold** control is the knob:
 
@@ -319,11 +370,15 @@ measured impulse interval.
 ## Command line
 
 ```
+python -m watchgrapher --version                      print the version
 python -m watchgrapher --devices                      list input devices
 python -m watchgrapher --wav run.wav --caliber eta_2824_2
 python -m watchgrapher --listen 30 --caliber rolex_3135
 python -m watchgrapher --selftest                     validate the DSP chain
 ```
+
+The running version is also shown in the title bar and at the foot of the
+Help page, so a local build can be checked against the repo.
 
 `--selftest` generates synthetic escapement audio with known rate, beat error
 and amplitude and checks the analyzer recovers them. Useful after any change,
@@ -388,34 +443,46 @@ beat error, tick/tock asymmetry and spurious extra noises: rate within
 
 ## My Watches
 
-The app has three pages, switched from the buttons at the top left: **MEASURE**
-is the live instrument, **MY WATCHES** is your collection, **HELP** is the
-quick reference. Ctrl+1/2/3 switch between them. They are different
-activities with different rhythms, and the collection gets a full page rather
-than a strip below the trace.
+The app has four pages, switched from the buttons at the top left: **MEASURE**
+is the live instrument, **MY WATCHES** is your collection, **SYNC** is the
+reference clock, **HELP** is the quick reference. Ctrl+1/2/3/4 switch between
+them. They are different activities with different rhythms, and the collection
+gets a full page rather than a strip below the trace.
 
-My Watches keeps a profile and a timing history for each watch you own.
+My Watches keeps a profile, a timing history and a service log for each watch
+you own. The right pane is tabbed: **Timing history** (the trend chart and the
+run table) and **Service log**.
 
 **Printable report.** *Print / save watch report* produces one self-contained
 HTML page: the photo, the full profile, the movement and its regulating
 hardware, ownership and service dates, the whole timing history as a table,
-a trend chart, the most recent run position by position, and the trend verdicts.
-Print to PDF from the browser. The photo is embedded as a data URI, so the file
-survives being emailed on its own.
+a trend chart, the most recent run position by position, the trend verdicts,
+the standard the run was graded against, and the service history with any
+scanned invoices embedded. Print to PDF from the browser. Images are embedded
+as data URIs, so the file survives being emailed on its own.
+
+**Portfolio report.** *Portfolio report (all watches)* is one page over the
+whole collection: purchase-value and service-spend totals by currency, an
+at-a-glance table of every watch, then a card each with identity, movement,
+the latest run and its trend verdicts, and a service summary.
+
+**Backup.** *File -> Back up collection* writes a zip of `collection.json`
+plus the photos and documents folders; *Restore collection* replaces the
+current collection from one, keeping a timestamped copy of the old file first.
 
 **Attributing a run.** Pick the watch from the dropdown in Test conditions
 before you measure. That applies its caliber and lift angle automatically, and
 "Save current run to this watch" files the results into its history. The
 My Watches button beside it jumps straight to the tab.
 
-Both this tab and **Find by watch model** read one shared catalog -- around
-350 references across 280 models and 73 brands -- so anything you can look up
-is something you can save, and vice versa. It covers Rolex, Omega, Tudor,
+Both this tab and **Find by watch model** read one shared catalogue -- roughly
+475 model/reference entries across 80-plus brands -- so anything you can look
+up is something you can save, and vice versa. It covers Rolex, Omega, Tudor,
 Seiko, Grand Seiko, Citizen, Orient, Hamilton, Tissot, Certina, Mido, Rado,
 Longines, Oris, Sinn, Stowa, Laco, Damasko, Nomos, Junghans, IWC, JLC, Zenith,
 Panerai, Breitling, TAG Heuer, Blancpain, AP, Cartier, the Russian and Chinese
-makers, and the microbrands from Baltic and Lorier through to San Martin and
-Steeldive.
+makers, and the microbrands from Baltic and Lorier through to San Martin,
+Halios, Monta, Zodiac, Serica and anOrdain.
 
 **Profiles.** Brand, model, reference, serial, movement serial, caliber, case
 material, bezel, crystal, size, water resistance, bracelet, production year,
@@ -448,13 +515,50 @@ that is the whole reason to keep the history.
 Runs can be marked post-service, since comparing the runs either side of a
 service is the clearest read on whether it achieved anything.
 
-Storage is `watches/collection.json` plus a photos folder -- plain text on
-purpose, because a collection record should outlive the software that made it.
-Reports, exports and recordings default to the `reports/` folder.
+**Service log.** Each entry records the date, type (full service, regulation,
+repair, warranty...), who did it and where, cost and currency, warranty
+period, notes, and any number of attached documents -- a scanned invoice or
+service report, PDF or image. Logging a service updates the watch's
+last-serviced date, so the service-due reminder and the trend markers follow.
+Attachments are copied into the collection when you save them, so deleting the
+original file elsewhere does not lose them.
+
+Storage is `watches/collection.json` plus `photos/` and `docs/` folders --
+plain text on purpose, because a collection record should outlive the software
+that made it. When you pick a photo or a document the app copies it into those
+folders and stores only the filename, so the record is self-contained. Reports,
+exports and recordings default to the `reports/` folder.
+
+---
+
+## Sync
+
+A reference clock for hand-setting a watch to true time. Pick a time source --
+this computer's clock, a public NTP server (the pool, Cloudflare, Google,
+Apple, or a regional pool), or a manual offset -- and press **Sync now**. It
+runs a small SNTP query, corrects for the network round trip, and shows the
+corrected time on an analog face and a digital readout. The panel also reports
+how far the computer's own clock is off from the source.
+
+Turn on **flash the face on every second** or **beep on every second** to land
+the seconds hand precisely against a hack. **Mark** when you set the watch,
+come back later, type in what it reads, and it works out the daily rate.
 
 ---
 
 ## Beyond the four numbers
+
+**Diagnostics tab -- live plots.** Above the fault scanner, three plots update
+every analysis cycle:
+
+- **Per-beat amplitude** -- a histogram of the individual amplitude estimates
+  behind the single median. Wide or bimodal points at poor coupling, a
+  tick/tock mismatch, or a real escapement fault.
+- **Beat error over the run** -- the beat-error figure tracked across the
+  session, so a drift or a settling watch is visible.
+- **Audio spectrum** -- a log-binned spectrum of the raw signal with the
+  current filter band shaded, so you can see where the escapement energy sits
+  and whether rotor or case-resonance energy is leaking in.
 
 **Diagnostics tab -- periodic fault scan.** Rate, amplitude and beat error
 describe a movement's average behaviour. They say nothing about whether that
@@ -498,6 +602,24 @@ At the end it reports the amplitude and rate change across the run, and flags
 the point amplitude crossed 200 degrees. That crossing, not the moment the
 watch stops, is the practical end of the useful reserve.
 
+Below the plot, the **Isochronism** panel turns that same data into the tests
+a hobby timegrapher usually cannot do: a scatter of rate against amplitude
+with a fitted line (graded good / fair / poor by how much the rate swings as
+amplitude falls), the beat-error-versus-amplitude slope, and a projected
+runway to 220 and 200 degrees from the end-of-run decay.
+
+**Per-pickup profiles.** *Save profile* stores the filter band, envelope
+window and sub-noise threshold against the selected input device; picking that
+device again loads them. A piezo disc and an open-air microphone want very
+different bands, and this remembers each.
+
+**Escapement animation** (View menu). A schematic lever escapement -- balance,
+pallet fork, escape wheel -- driven from the live amplitude, beat rate and
+unlocking interval, with a 1x to 1/50 speed slider and the unlock / impulse /
+drop stages lit as the beat passes through them. *Play the beat, slowed* plays
+the most recent beat back at a reduced sample rate so the three noises are
+audible separately.
+
 **Demagnetiser A/B** (Tools tab). Capture before, demagnetise, capture after.
 The signature to look for is a large rate drop with amplitude roughly
 unchanged: magnetised hairspring coils cling together and behave like a shorter
@@ -505,10 +627,11 @@ spring. The app names the pattern and reminds you that any regulation done
 while magnetised is now wrong.
 
 **Service report** (Tools tab). One self-contained HTML file -- readings,
-six-position table, the trace redrawn as inline SVG, assessment, fault scan and
-measurement conditions. No external assets, so it survives being emailed. Print
-to PDF from the browser if you need one; that avoids dragging a PDF library
-into the dependency list for something used once a job.
+six-position table, the trace redrawn as inline SVG, assessment, the standard
+grade, fault scan and measurement conditions. No external assets, so it
+survives being emailed. Print to PDF from the browser if you need one; that
+avoids dragging a PDF library into the dependency list for something used once
+a job.
 
 ---
 
@@ -524,7 +647,7 @@ Then check, in this order:
    comparable. This app shows the measured value, not the one you selected.
 2. **Lift angle.** Amplitude scales with it and rate does not. If amplitude
    disagrees but rate and beat error match, suspect the lift angle first.
-3. **The beat waveform panel.** The two markers show exactly which noises the
+3. **The beat panel, Average view.** The two markers show exactly which noises the
    amplitude calculation used. If they are not on obvious peaks, that number
    is wrong regardless of what any other tool says.
 4. **The status line.** It reports a tick/tock anchor correction and a
