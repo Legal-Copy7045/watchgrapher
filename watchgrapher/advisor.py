@@ -26,6 +26,63 @@ POSITIONS = ["Dial up", "Dial down", "Crown down", "Crown left", "Crown right", 
 HORIZONTAL = {"Dial up", "Dial down"}
 
 
+# --------------------------------------------------------------------------
+# Timekeeping standards -- indicative grading from a hobby six-position run
+# --------------------------------------------------------------------------
+
+# A real COSC / METAS test runs 15+ days at three temperatures on a lab rig.
+# These check the handful of criteria a bench six-position set can actually
+# speak to: mean rate, positional spread, the dial-up/dial-down pair,
+# amplitude and beat error. Treat a pass as "consistent with", not certified.
+STANDARDS = {
+    "COSC-style (indicative)":  dict(mean=(-4.0, 6.0), maxdev=10.0, dudd=8.0,
+                                     amp_min=200.0, be_max=None),
+    "METAS-style (0 / +5)":     dict(mean=(0.0, 5.0), maxdev=8.0, dudd=6.0,
+                                     amp_min=220.0, be_max=0.6),
+    "Manufacture typical":      dict(mean=(-5.0, 8.0), maxdev=15.0, dudd=12.0,
+                                     amp_min=200.0, be_max=0.8),
+    "Serviceable / vintage OK": dict(mean=(-20.0, 20.0), maxdev=30.0, dudd=25.0,
+                                     amp_min=170.0, be_max=1.2),
+}
+
+
+@dataclass
+class GradeRow:
+    name: str
+    value: str
+    limit: str
+    ok: bool
+
+
+def grade(readings, spec) -> "tuple[bool, list]":
+    """spec is one of STANDARDS' dicts (or a custom one of the same shape)."""
+    rates = [r.rate for r in readings if r.rate == r.rate]
+    if not rates:
+        return False, [GradeRow("Position data", "none", "at least dial up", False)]
+    mean = sum(rates) / len(rates)
+    maxdev = max(abs(x - mean) for x in rates)
+    lo, hi = spec["mean"]
+    rows = [GradeRow("Mean daily rate", f"{mean:+.1f} s/d",
+                     f"{lo:+.0f} to {hi:+.0f}", lo <= mean <= hi)]
+    if len(rates) >= 2 and spec.get("maxdev") is not None:
+        rows.append(GradeRow("Largest deviation from mean", f"{maxdev:.1f} s/d",
+                             f"<= {spec['maxdev']:.0f}", maxdev <= spec["maxdev"]))
+    du = next((r.rate for r in readings if r.position == "Dial up"), None)
+    dd = next((r.rate for r in readings if r.position == "Dial down"), None)
+    if du is not None and dd is not None and spec.get("dudd") is not None:
+        rows.append(GradeRow("Dial up vs dial down", f"{abs(du - dd):.1f} s/d",
+                             f"<= {spec['dudd']:.0f}", abs(du - dd) <= spec["dudd"]))
+    amps = [r.amplitude for r in readings if r.amplitude == r.amplitude]
+    if amps and spec.get("amp_min") is not None:
+        rows.append(GradeRow("Lowest amplitude", f"{min(amps):.0f} deg",
+                             f">= {spec['amp_min']:.0f}", min(amps) >= spec["amp_min"]))
+    bes = [r.beat_error for r in readings if r.beat_error == r.beat_error]
+    if bes and spec.get("be_max") is not None:
+        rows.append(GradeRow("Beat error (worst)", f"{max(bes):.2f} ms",
+                             f"<= {spec['be_max']:.2f}", max(bes) <= spec["be_max"]))
+    return all(r.ok for r in rows), rows
+
+
 @dataclass
 class Reading:
     position: str = "Dial up"
