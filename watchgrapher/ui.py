@@ -17,7 +17,7 @@ from . import __version__
 from . import (audio, advisor, catalog as catdb, collection as coll,
                faults, references as refdb, report as reportmod)
 from .analysis import (AnalyzerConfig, analyze, autotune, trace_points,
-                       solve_lift_angle, tuning_score)
+                       solve_lift_angle, tuning_score, reserve_analytics)
 from .calibers import (CALIBERS, GROUP_ORDER, STANDARD_BPH, grouped,
                        load_user_calibers, search)
 
@@ -1736,7 +1736,7 @@ alongside the application.</p>
         self.res_rate_vb.addItem(self.c_res_rate)
         self.p_res.plotItem.vb.sigResized.connect(
             lambda: self.res_rate_vb.setGeometry(self.p_res.plotItem.vb.sceneBoundingRect()))
-        rl.addWidget(self.p_res)
+        rl.addWidget(self.p_res, 2)
         rb = QtWidgets.QHBoxLayout()
         self.btn_res = QtWidgets.QPushButton("Start power reserve log")
         self.btn_res.setCheckable(True)
@@ -1766,6 +1766,26 @@ alongside the application.</p>
         self.lbl_res.setStyleSheet("color:#8a94a4;")
         rb.addWidget(self.lbl_res)
         rl.addLayout(rb)
+
+        iso = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.p_iso = pg.PlotWidget(
+            title="Isochronism -- rate against amplitude as the mainspring runs down")
+        self.p_iso.setLabel("bottom", "amplitude", units="deg")
+        self.p_iso.setLabel("left", "rate", units="s/d")
+        self.p_iso.showGrid(x=True, y=True, alpha=0.25)
+        self.s_iso = pg.ScatterPlotItem(size=5, brush=pg.mkBrush("#ff9d4d"), pen=None)
+        self.c_iso_fit = self.p_iso.plot(pen=pg.mkPen("#e8eef7", width=1, style=QtCore.Qt.DashLine))
+        self.p_iso.addItem(self.s_iso)
+        iso.addWidget(self.p_iso)
+        self.txt_iso = QtWidgets.QTextBrowser()
+        self.txt_iso.setMaximumWidth(360)
+        self.txt_iso.setHtml("<p style='color:#8a94a4;font-family:Segoe UI'>"
+                             "Run a power-reserve log. Once amplitude has fallen far enough "
+                             "to see a spread, the isochronism slope, the beat-error / "
+                             "amplitude link and the projected runway to 220 deg appear here.</p>")
+        iso.addWidget(self.txt_iso)
+        iso.setSizes([620, 360])
+        rl.addWidget(iso, 3)
         tabs.addTab(rw, "Power reserve")
 
         # ---- diagnostics ----
@@ -2585,8 +2605,12 @@ alongside the application.</p>
                          f"({rates[-1]-rates[0]:+.1f}). A large swing here is poor "
                          f"isochronism: the hairspring is not developing evenly as "
                          f"the mainspring torque falls.")
-        lines.append("\nExport CSV keeps the raw samples.")
+        st = reserve_analytics(self._reserve)
+        lines.extend(st.verdict)
+        lines.append("\nExport CSV keeps the raw samples; the Isochronism panel below "
+                     "keeps the rate-vs-amplitude plot.")
         self.lbl_res.setText(lines[0])
+        self._update_iso()
         QtWidgets.QApplication.beep()
         QtWidgets.QMessageBox.information(self, "Power reserve run finished",
                                           "\n\n".join(lines))
@@ -2596,6 +2620,7 @@ alongside the application.</p>
             self.c_res_amp.setData([], [])
             self.c_res_rate.setData([], [])
             self.lbl_res.setText("Not logging.")
+            self._update_iso()
             return
         a = np.array(self._reserve, dtype=float)
         hrs = a[:, 0] / 3600.0
@@ -2608,6 +2633,34 @@ alongside the application.</p>
             drop = f", amplitude {amp[ok][0]:.0f} -> {amp[ok][-1]:.0f} deg"
         self.lbl_res.setText(
             f"{len(self._reserve)} samples over {hrs[-1]:.2f} h{drop}")
+        self._update_iso()
+
+    def _update_iso(self):
+        if not self._reserve:
+            self.s_iso.setData([], [])
+            self.c_iso_fit.setData([], [])
+            self.txt_iso.setHtml("<p style='color:#8a94a4;font-family:Segoe UI'>"
+                                 "Run a power-reserve log; the isochronism analysis appears "
+                                 "here once amplitude has fallen far enough to see a spread.</p>")
+            return
+        st = reserve_analytics(self._reserve)
+        a = np.array(self._reserve, dtype=float) if self._reserve else np.zeros((0, 4))
+        if a.shape[0]:
+            m = np.isfinite(a[:, 2]) & np.isfinite(a[:, 1])
+            self.s_iso.setData(a[m, 2], a[m, 1])
+        else:
+            self.s_iso.setData([], [])
+        if st.iso_fit:
+            sl, ic = st.iso_fit
+            xs = np.array([np.nanmin(a[:, 2]), np.nanmax(a[:, 2])])
+            self.c_iso_fit.setData(xs, sl * xs + ic)
+        else:
+            self.c_iso_fit.setData([], [])
+        if st.verdict:
+            body = "".join(f"<p style='margin:6px 0'>{ln}</p>" for ln in st.verdict)
+            self.txt_iso.setHtml(
+                "<div style='color:#c8d0dc;font-family:Segoe UI;font-size:12px'>"
+                f"<h4 style='color:#4da3ff;margin:0 0 4px'>Isochronism &amp; torque</h4>{body}</div>")
 
     def _clear_reserve(self):
         self._reserve.clear()
