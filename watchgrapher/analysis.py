@@ -11,6 +11,7 @@ Sign convention for rate: positive means the watch is GAINING.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field, replace
 from typing import Optional
@@ -155,6 +156,7 @@ class Measurement:
     nominal_bph: Optional[int] = None     # what rate was computed against
     raw_bph: float = float("nan")
     rate: float = float("nan")            # s/day, + = gaining
+    rate_ci: float = float("nan")         # 95% confidence half-width on rate, s/day
     beat_error: float = float("nan")      # ms
     amplitude: float = float("nan")       # degrees
     amplitude_spread: float = float("nan")  # IQR of per-beat amplitude, degrees
@@ -339,6 +341,21 @@ def analyze(samples: np.ndarray, fs: int, cfg: AnalyzerConfig) -> Measurement:
     m.times, m.index, m.resid = times, idx, resid
     m.rate = rate_spd(fitted_period, nominal)
     m.beat_error = beat_error_ms(idx, resid)
+
+    # 95% confidence half-width on the rate, from the scatter of the beat
+    # times about the fitted line. This is what tells you a 20 s window is
+    # not enough and a timed run is needed -- precision scales with capture
+    # length, so it shrinks as the run gets longer.
+    if idx.size >= 8 and fitted_period > 0:
+        ix = idx - idx.mean()
+        ss = float(np.sum(ix * ix))
+        if ss > 0:
+            dof = max(1, idx.size - 2)
+            sigma = math.sqrt(float(np.sum(resid * resid)) / dof)
+            se_period = sigma / math.sqrt(ss)
+            nominal_period = 3600.0 / nominal
+            drate_dperiod = nominal_period / (fitted_period ** 2) * 86400.0
+            m.rate_ci = float(1.96 * drate_dperiod * se_period)
 
     if imp.valid.sum() >= 8:
         dts = imp.dt[imp.valid]
