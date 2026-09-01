@@ -1,3 +1,3 @@
 """WatchGrapher -- an acoustic timegrapher for mechanical watches."""
 
-__version__ = "0.17.1"
+__version__ = "0.18.0"
