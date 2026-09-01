@@ -192,6 +192,174 @@ Cartier|Santos / Ballon Bleu|cal 1847 MC (Kenissi)|2016-|cartier_1904|check
 Cartier|Tank / Santos|cal 1904 MC|2010-|cartier_1904|sure
 Breitling|Superocean / Navitimer|ETA 2824-2 / 7750 base|1990-|eta_7750|check
 Eterna|KonTiki|Eterna 3902A / SW200|2010-|eterna_3902|check
+
+Rolex|Submariner (No Date)|ref 14060 / 14060M|1990-2012|rolex_3130|check
+Rolex|Sea-Dweller|ref 1665|1967-1983|rolex_1570|sure
+Rolex|Sea-Dweller|ref 16660 / 16600|1983-2008|rolex_3135|sure
+Rolex|GMT-Master|ref 1675|1959-1980|rolex_1570|sure
+Rolex|GMT-Master II|ref 16710 / 16760|1983-2007|rolex_3186|check
+Rolex|Yacht-Master 42|ref 226658 / 226659|2019-|rolex_3235|sure
+Rolex|Datejust 36|ref 116200 / 116234|2005-2018|rolex_3135|sure
+Rolex|Milgauss|ref 116400GV|2007-2023|rolex_3131|sure
+Rolex|Day-Date 40|ref 228238 / 228239|2015-|rolex_3255|check
+Rolex|Sky-Dweller|ref 326934 / 336934|2017-|rolex_3235|check
+
+Tudor|Black Bay GMT|ref 79830RB|2018-|tudor_mt5602|sure
+Tudor|Black Bay Pro|ref 79470|2022-|tudor_mt5602|sure
+Tudor|Black Bay Chrono|ref 79360N / 79360DK|2017-|breitling_b01|check
+Tudor|1926|ref 91350 / 91450|2018-|sw200_1|check
+Tudor|Royal|ref 28500 / 28600|2020-|sw200_1|check
+Tudor|Glamour Date / Date+Day|ref 55000 / 56000|2011-|sw221_1|check
+
+Omega|Speedmaster '57 / Chronoscope|cal 9900 / 9906|2011-|omega_8500|check
+Omega|Seamaster 300 Master Co-Axial|cal 8400 / 8912|2014-|omega_8500|sure
+Omega|Seamaster PloProf 1200M|cal 8500 / 8912|2009-|omega_8500|sure
+Omega|De Ville Prestige / Hour Vision|cal 2500 / 8500|2002-|omega_8500|check
+Omega|Speedmaster Mark II / 125|cal 1040 / 1041|1970-1980|lemania_5100|check
+Omega|Seamaster Cosmic / Geneve|cal 552 / 565|1968-1975|omega_565|sure
+Omega|Constellation Pie-Pan|cal 551 / 561|1958-1966|omega_565|check
+Omega|Seamaster Aqua Terra Worldtimer|cal 8938|2017-|omega_8500|check
+Omega|Speedmaster '57 Co-Axial (pre-2021)|cal 9300|2013-2021|omega_8500|check
+
+Seiko|Prospex 62MAS reissue|SPB143 / SPB185 / SPB149|2020-|seiko_6r15|sure
+Seiko|Prospex Sumo|SPB321 / SPB323|2022-|seiko_6r15|sure
+Seiko|Prospex Marinemaster 300|SBDX017 / SBDX023 / SLA021|2015-|seiko_8l35|sure
+Seiko|Prospex 1968 Hi-Beat Diver|SLA025 / SLA037 / SLA063|2018-|seiko_8l35|check
+Seiko|Prospex Alpinist|SPB121 / SPB199 / SPB201|2020-|seiko_6r15|sure
+Seiko|Presage Sharp Edged|SPB165 / SPB167 / SPB227|2020-|seiko_6r15|sure
+Seiko|Presage Craftsmanship / Arita|SPB393 / SPB399|2022-|seiko_6r15|check
+Seiko|King Seiko KSK reissue|SPB279 / SPB281 / SPB285|2022-|seiko_6r15|check
+Seiko|King Seiko|SJE083 / SJE087 / SJE089|2021-|seiko_6l35|check
+Seiko|5 Sports GMT|SSK001 / SSK003 / SSK005|2022-|seiko_nh35|check
+Seiko|5 Sports|SRPD / SRPG / SRPJ (4R36)|2019-|seiko_nh35|sure
+Seiko|Seiko 5|SNXS / SNK / SNKE / SNKL (7S26)|1996-2019|seiko_7s26|sure
+Seiko|Seiko 5 Sea Urchin|SNZF17 / SNZF15 (7S36)|2007-|seiko_7s26|sure
+Seiko|SARB033 / SARB035|6R15|2008-2018|seiko_6r15|sure
+Seiko|6138 Bullhead / Panda|6138-0040 / 6138-8020|1969-1979|seiko_6139|check
+Seiko|6309 Turtle|6309-7040 / 6309-729x|1976-1988|seiko_6309|sure
+Seiko|6105 Willard (first gen)|6105-8000 / 6105-8009|1968-1970|seiko_6105|sure
+Seiko|6119 5 Sports / 6106|6119-8100 / 6106-8100|1968-1978|seiko_6119|check
+Seiko|SCVS Spirit|4S15|1996-2005|seiko_4s15|check
+
+Grand Seiko|Evolution 9 White Birch|SLGH005 / SLGH017|2021-|seiko_9sa5|sure
+Grand Seiko|Hi-Beat 36000|SBGH / SBGJ (9S85 / 9S86)|2009-|seiko_9s85|sure
+Grand Seiko|Heritage 62GS / 44GS|SBGR / SBGH|2016-|seiko_9s65|sure
+Grand Seiko|Elegance hand-wind|SBGW231 / SBGW235 / SBGW291 (9S64)|2016-|seiko_9s65|check
+
+Citizen|Series 8 831 / 870|Miyota 9051|2022-|miyota_9110|check
+Citizen|Tsuyosa|NJ0150 / NJ0170 (Miyota 8210)|2022-|miyota_8215|check
+Citizen|Promaster Mechanical Diver Fugu|NY0040 / NY0100 (Miyota 8203/8204)|1989-|miyota_8215|check
+Citizen|The Citizen|NC0000 / NC0060 (Cal. 0950)|2021-|citizen_0950|check
+
+Hamilton|Khaki Field Murph|H-10|2021-|eta_c07|sure
+Hamilton|Khaki Field Titanium Auto|H-10|2020-|eta_c07|sure
+Hamilton|Khaki Navy Frogman / Scuba Auto|H-10|2018-|eta_c07|check
+Hamilton|Jazzmaster Open Heart / Auto|H-10|2015-|eta_c07|check
+Hamilton|Ventura Auto / Elvis80|H-10|2018-|eta_c07|check
+Hamilton|Pan Europ Auto|H-30 (ETA 2824-2)|2011-|eta_2824_2|check
+Hamilton|Khaki Aviation Chrono / Intra-Matic Chrono|H-31 (ETA 7753)|2012-|eta_7750|check
+
+Longines|Spirit Zulu Time|L899 (ETA A31 GMT)|2022-|eta_a31|check
+Longines|Master Collection Annual Calendar|L897|2019-|eta_a31|check
+Longines|Record|L888.4 chronometer, silicon|2018-|eta_a31|sure
+Longines|Heritage Legend Diver 39 / Skin Diver|L888.5|2022-|eta_a31|sure
+Longines|Conquest (2023-)|L888.5 / L788|2023-|eta_a31|sure
+Longines|Flagship Heritage|L609 / L704 (ETA 2892)|2017-|eta_2892a2|check
+
+Tissot|PRX Powermatic 80|T137.407 / T137.207|2021-|eta_c07|sure
+Tissot|Chemin des Tourelles Powermatic 80|T139.807|2016-|eta_c07|sure
+Tissot|Seastar 1000 Powermatic 80 / 36|T120.407 / T120.807|2018-|eta_c07|sure
+Tissot|Heritage 1973 / Navigator Chrono|A05.231 (Valjoux 7750)|2019-|eta_7750|check
+Tissot|PRX Chronograph Automatic|A05.H31 (Valjoux 7753)|2023-|eta_7750|check
+
+Certina|DS-1 / DS Action Diver / DS PH200M|Powermatic 80 (C07.611)|2016-|eta_c07|sure
+Certina|DS Podium Chrono|Valjoux 7750|2012-|eta_7750|check
+Mido|Ocean Star 200 / 200C / GMT|Caliber 80 (C07.621 / C07.661)|2016-|eta_c07|sure
+Mido|Multifort Patrimony / Datometer|Caliber 80|2018-|eta_c07|sure
+Mido|Commander / Baroncelli|Caliber 80|2017-|eta_c07|check
+Rado|Captain Cook 42 / 39 / Ceramic|R734 (C07.611)|2017-|eta_c07|sure
+Rado|True / DiaMaster / Anatom Automatic|R764 (C07)|2016-|eta_c07|check
+
+Oris|Aquis Date Calibre 400|Oris 400|2020-|oris_400|sure
+Oris|ProPilot X Calibre 400|Oris 400|2021-|oris_400|sure
+Oris|Big Crown Pointer Date Calibre 403 / 473|Oris 403 (Cal 400 base)|2022-|oris_400|sure
+Oris|Divers Sixty-Five 40 / 42 / 38|Oris 733 (Sellita SW200-1)|2015-|sw200_1|sure
+Oris|Big Crown ProPilot Big Date|Oris 751 (Sellita SW220)|2014-|sw221_1|check
+Oris|Artelier / Artix Date|Oris 733 (Sellita SW200-1)|2010-|sw200_1|check
+
+Sinn|556 I / 556 A / 556 RS|Sellita SW200-1|2010-|sw200_1|sure
+Sinn|104 St Sa / 105 St Sa / 856|Sellita SW220-1|2013-|sw221_1|check
+Sinn|EZM 3 / U50 / U1 SE / T50|Sellita SW300-1|2005-|sw300_1|check
+Sinn|103 St Sa (chrono)|ETA 7750 / Sellita SW500|1996-|eta_7750|check
+Sinn|140 / 142 (space chrono)|Lemania 5100|1985-1998|lemania_5100|check
+
+Squale|1521 / Y1545 / Master / Super-Squale|Sellita SW200-1|2010-|sw200_1|check
+Doxa|SUB 300 / 300T / 200 / 600T|Sellita SW200-1|2019-|sw200_1|check
+Steinhart|Ocean One / Ocean 39 / OVM|Sellita SW200-1|2008-|sw200_1|check
+Steinhart|Ocean One GMT|ETA 2893-2 / Soprod C125|2012-|eta_2893_2|check
+
+Christopher Ward|C60 Trident Pro 300 / 600|Sellita SW200-1|2016-|sw200_1|sure
+Christopher Ward|C65 Aquitaine / Dune / Super Compressor|Sellita SW200-1|2020-|sw200_1|sure
+Christopher Ward|C63 Sealander GMT|Sellita SW330-2|2021-|sw330_2|check
+Christopher Ward|C1 Bel Canto|CW / La Joux-Perret G100 base|2022-|ljp_g100|check
+Christopher Ward|The Twelve / C1 Morgan|Sellita SW200-1 / SW300-1|2019-|sw200_1|check
+
+Halios|Seaforth / Fairwind / Universa|Sellita SW200-1|2016-|sw200_1|sure
+Monta|Oceanking / Atlas / Noble / Triumph|Sellita SW300-1 (Monta M-22)|2018-|sw300_1|sure
+Baltic|Aquascaphe / Aquascaphe GMT / Dual-Crown|Miyota 9039 / 9075|2019-|miyota_9015|sure
+Baltic|MR01 Micro-rotor|Peseux 7040 / Hangzhou micro-rotor|2021-|hangzhou_5000a|check
+Nodus|Sector / Contrail / Avalon / Retrospect|Miyota 9039 (regulated) / Seiko NH35|2018-|miyota_9015|check
+Lorier|Neptune / Falcon / Hyperion / Gemini|Miyota 9039|2018-|miyota_9015|sure
+Traska|Freediver / Summiteer / Venturer|Miyota 9039|2019-|miyota_9015|sure
+Farer|Aqua Compressor / Automatic / Lander|Sellita SW200-1 / SW300-1|2018-|sw200_1|check
+Formex|Essence / Reef / Field Automatic|Sellita SW300-1 chronometer|2018-|sw300_1|check
+Zelos|Swordfish / Abyss / Mako / Blacktip|Seiko NH35 / Miyota 9015|2016-|seiko_nh35|check
+Unimatic|Modello Uno / Due / Tre|Seiko NH35A|2015-|seiko_nh35|sure
+Serica|4512 / 5303 / 8315|Soprod M100 / La Joux-Perret G100|2019-|soprod_a10|check
+anOrdain|Model 1 / Model 2|Sellita SW210-1 (hand-wind)|2018-|sw210_1|sure
+Vertex|M100 / M100B / M60 AquaLion|Sellita SW200-1|2016-|sw200_1|check
+Yema|Superman / Navygraf / Urban Traveller|Yema MBP1000 / Seiko NH35|2019-|seiko_nh35|check
+Autodromo|Group B / Intereuropa / Prototipo|Miyota 9015 / Seiko NH35|2016-|miyota_9015|check
+
+Zodiac|Super Sea Wolf 53 / 68 / Skin|STP 1-11|2016-|stp_1_11|sure
+Zodiac|Sea Wolf GMT|STP 6-15|2021-|stp_1_11|check
+Bulova|Oceanographer Devil Diver / Snorkel|Miyota 8215 / Sellita SW200|2020-|miyota_8215|check
+
+IWC|Pilot's Watch Mark XX|cal 32111|2023-|iwc_32110|sure
+IWC|Pilot's Watch Automatic 41|cal 32111|2021-|iwc_32110|sure
+IWC|Ingenieur 40|cal 32111|2023-|iwc_32110|sure
+IWC|Big Pilot 43 / Portugieser Auto 40|cal 82100 / 82200|2020-|iwc_52010|check
+IWC|Aquatimer Automatic / Portofino|cal 30120 / 35111 (Sellita base)|2011-|sw300_1|check
+
+Breitling|Navitimer B01 / Chronomat B01 42 / Premier B01|B01|2018-|breitling_b01|sure
+Breitling|Superocean Heritage / Superocean Automatic 42|B20 (Kenissi / Tudor MT base)|2017-|tudor_mt5602|sure
+Breitling|Avenger Automatic 43 / 45|B17 / Sellita SW200|2019-|sw200_1|check
+
+Panerai|Luminor Marina 44 / Submersible 42|P.9010 / P.900|2016-|panerai_p9000|sure
+Panerai|Radiomir California / Luminor Base Logo|P.6000 (hand-wind)|2017-|panerai_p3000|check
+
+Zenith|Chronomaster Sport / Original|El Primero 3600|2021-|zenith_400|sure
+Zenith|Defy Skyline|El Primero 3620|2022-|zenith_400|check
+Zenith|Elite Classic / Captain / Pilot Type 20|Elite 670 / 679|2003-|zenith_elite|check
+
+Frederique Constant|Classics Index / Runabout / Highlife Auto|FC-303 (Sellita SW200)|2010-|fc_303|check
+Frederique Constant|Slimline Automatic|FC-306|2014-|fc_303|check
+Baume & Mercier|Clifton Baumatic|BM12 / BM13 / BM14|2018-|baumatic_bm13|sure
+Baume & Mercier|Riviera Automatic|Baumatic BM13 / Sellita SW300|2021-|baumatic_bm13|check
+Baume & Mercier|Classima Automatic|Sellita SW200-1|2015-|sw200_1|check
+
+Nomos|Tangente / Club Campus / Orion / Ludwig|Alpha (hand-wind)|2005-|nomos_alpha|sure
+Nomos|Tangente neomatik / Metro / Club Sport|DUW 3001|2015-|nomos_alpha|check
+Nomos|Ahoi / Club Automat|DUW 5001 / Epsilon|2013-|nomos_alpha|check
+
+Jaeger-LeCoultre|Master Ultra Thin / Master Control Date|cal 899 / 938|2013-|jlc_889|sure
+Jaeger-LeCoultre|Polaris Automatic / Date|cal 898 / 899|2018-|jlc_889|sure
+Jaeger-LeCoultre|Reverso Tribute Duoface|cal 854 / 1000|2016-|jlc_889|check
+
+TAG Heuer|Carrera Calibre 5 / Aquaracer Calibre 5|Sellita SW200-1 / ETA 2824|2010-|sw200_1|check
+TAG Heuer|Carrera Calibre 16 / Aquaracer Calibre 16|ETA 7750 / Valjoux|2004-|eta_7750|check
+Heuer|Autavia / Carrera / Camaro (vintage)|Valjoux 72 / 7730 / 7734|1962-1985|valjoux_72|check
+Universal Geneve|Polerouter / Polerouter Date|cal 215 / 218 microrotor|1955-1969|generic_18000|check
 """
 
 
