@@ -951,6 +951,10 @@ class EscapementView(QtWidgets.QWidget):
         if dt == dt and dt > 0:
             self.dt = float(dt)
 
+    def resync(self):
+        """Drop the elapsed gap so the phase does not jump after being hidden."""
+        self._t0 = time.monotonic()
+
     def advance(self):
         now = time.monotonic()
         self._phase += (now - self._t0) * self.slowdown
@@ -1064,7 +1068,15 @@ class EscapementDialog(QtWidgets.QDialog):
         self._tmr = QtCore.QTimer(self)
         self._tmr.setInterval(33)
         self._tmr.timeout.connect(self._tick)
+
+    def showEvent(self, e):
+        self.view.resync()
         self._tmr.start()
+        super().showEvent(e)
+
+    def hideEvent(self, e):
+        self._tmr.stop()
+        super().hideEvent(e)
 
     def _tick(self):
         m = getattr(self._parent, "last", None)
@@ -1080,7 +1092,8 @@ class EscapementDialog(QtWidgets.QDialog):
         m = getattr(self._parent, "last", None)
         if m is None or m.beat_wave is None or not m.beat_wave_fs:
             QtWidgets.QMessageBox.information(
-                self, "Slowed playback", "Take a live reading first so there is a beat to play.")
+                self, "Slowed playback",
+                "No beat captured yet -- take a reading (live or from a recording) first.")
             return
         import sounddevice as sd
         w = np.asarray(m.beat_wave, dtype=np.float32)
@@ -1093,9 +1106,6 @@ class EscapementDialog(QtWidgets.QDialog):
         except Exception as e:                       # noqa: BLE001
             QtWidgets.QMessageBox.warning(self, "Slowed playback", str(e))
 
-    def closeEvent(self, e):
-        self._tmr.stop()
-        super().closeEvent(e)
 
 
 class _NtpProbe(QtCore.QObject):
