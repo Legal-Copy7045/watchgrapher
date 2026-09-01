@@ -171,8 +171,9 @@ scaled wrong.
 4. Check the **beat rate** readout matches the caliber before you believe
    anything else. If it doesn't, the pickup is mistracking or the caliber is
    wrong.
-5. Capture each of the six positions with **Capture this position**. The
-   position dropdown advances automatically.
+5. Capture each of the six positions with **Capture this position**. Move the
+   watch and set the position dropdown yourself between captures; it defaults
+   to Dial up and stays where you leave it.
 6. Hit **Analyze and advise**.
 
 ### Reading the trace
@@ -466,8 +467,9 @@ Two-beat cycles are excluded on purpose -- that IS beat error, reported as its
 own number. A genuine impulse-jewel fault also lands at two beats and is not
 separable from beat error by this method.
 
-**Auto-capture when stable.** Ticks over in Test conditions. It captures a
-position once six consecutive readings agree, then advances the dropdown. It
+**Auto-capture when stable.** Ticks over in Test conditions. It captures the
+position shown in the dropdown once six consecutive readings agree; move the
+watch and change the dropdown yourself for the next one. It
 refuses to fire on a beat-rate mismatch, a low template match, a missing
 amplitude, or more than four noises per beat -- a bad pickup produces perfectly
 steady numbers, and steady wrong numbers are exactly what an unguarded
