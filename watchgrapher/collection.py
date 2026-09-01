@@ -63,6 +63,38 @@ class TestRecord:
             return None
 
 
+SERVICE_KINDS = ["Full service", "Partial service", "Regulation only", "Repair",
+                 "Warranty service", "Water resistance test", "Other"]
+
+
+@dataclass
+class ServiceRecord:
+    """One visit to a watchmaker, with any scanned paperwork attached."""
+    when: str = ""                    # ISO date
+    kind: str = "Full service"
+    performed_by: str = ""            # watchmaker or service centre
+    location: str = ""
+    cost: str = ""                    # numeric string, or blank
+    currency: str = "GBP"
+    warranty_months: str = ""
+    notes: str = ""
+    documents: List[str] = field(default_factory=list)   # filenames inside <root>/docs/
+
+    @property
+    def date(self) -> Optional[datetime]:
+        try:
+            return datetime.fromisoformat(self.when)
+        except (ValueError, TypeError):
+            return None
+
+    @property
+    def cost_value(self) -> Optional[float]:
+        try:
+            return float(str(self.cost).replace(",", "").replace("£", "").replace("$", "").strip())
+        except (ValueError, TypeError):
+            return None
+
+
 @dataclass
 class Watch:
     id: str = ""
@@ -92,6 +124,7 @@ class Watch:
     photo: str = ""                       # filename inside the photos folder
     notes: str = ""
     history: List[TestRecord] = field(default_factory=list)
+    services: List[ServiceRecord] = field(default_factory=list)
 
     @property
     def label(self) -> str:
@@ -102,12 +135,29 @@ class Watch:
             base = f"{self.nickname} -- {base}" if base else self.nickname
         return base or "Untitled watch"
 
+    @property
+    def effective_last_service(self) -> str:
+        """The newest of the logged service dates and the manual field."""
+        dates = [s.when for s in self.services if s.when] + \
+                ([self.last_service] if self.last_service else [])
+        return max(dates) if dates else ""
+
+    def total_service_cost(self):
+        """{currency: total} across logged services with a parseable cost."""
+        out = {}
+        for s in self.services:
+            v = s.cost_value
+            if v is not None:
+                out[s.currency or "GBP"] = out.get(s.currency or "GBP", 0.0) + v
+        return out
+
     def service_due(self) -> Optional[str]:
         """Plain-language note on service timing, or None if unknown."""
-        if not self.last_service:
+        eff = self.effective_last_service
+        if not eff:
             return None
         try:
-            last = datetime.fromisoformat(self.last_service)
+            last = datetime.fromisoformat(eff)
         except ValueError:
             return None
         try:
@@ -126,12 +176,20 @@ class Watch:
 # Storage
 # --------------------------------------------------------------------------
 
+def _pick(d: dict, cls) -> dict:
+    """Only the keys `cls` actually declares -- forward-compatible loading."""
+    fields = set(cls.__dataclass_fields__)
+    return {k: v for k, v in d.items() if k in fields}
+
+
 class Collection:
     def __init__(self, root: str):
         self.root = root
         self.path = os.path.join(root, "collection.json")
         self.photos = os.path.join(root, "photos")
-        os.makedirs(self.photos, exist_ok=True)
+        self.docs = os.path.join(root, "docs")
+        for d in (self.photos, self.docs):
+            os.makedirs(d, exist_ok=True)
         self.watches: Dict[str, Watch] = {}
         self.load()
 
@@ -145,10 +203,12 @@ class Collection:
         except (OSError, ValueError):
             return
         for d in raw.get("watches", []):
-            hist = [TestRecord(**h) for h in d.pop("history", [])]
+            hist = [TestRecord(**_pick(h, TestRecord)) for h in d.pop("history", [])]
+            svcs = [ServiceRecord(**_pick(s, ServiceRecord)) for s in d.pop("services", [])]
             known = {f for f in Watch.__dataclass_fields__}
             w = Watch(**{k: v for k, v in d.items() if k in known})
             w.history = hist
+            w.services = svcs
             self.watches[w.id] = w
 
     def save(self):
@@ -158,6 +218,7 @@ class Collection:
         for w in self.watches.values():
             d = asdict(w)
             d["history"] = [asdict(h) for h in w.history]
+            d["services"] = [asdict(s) for s in w.services]
             data["watches"].append(d)
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)
@@ -179,6 +240,13 @@ class Collection:
                 os.remove(os.path.join(self.photos, w.photo))
             except OSError:
                 pass
+        if w:
+            for s in w.services:
+                for doc in s.documents:
+                    try:
+                        os.remove(os.path.join(self.docs, doc))
+                    except OSError:
+                        pass
         self.save()
 
     def sorted_watches(self) -> List[Watch]:
@@ -195,6 +263,19 @@ class Collection:
         if not w.photo:
             return None
         p = os.path.join(self.photos, w.photo)
+        return p if os.path.exists(p) else None
+
+    def store_document(self, watch_id: str, src: str) -> str:
+        """Copy a service document into the collection; returns the stored filename."""
+        ext = os.path.splitext(src)[1].lower() or ".pdf"
+        name = f"{watch_id}_{uuid.uuid4().hex[:8]}{ext}"
+        shutil.copyfile(src, os.path.join(self.docs, name))
+        return name
+
+    def document_path(self, name: str) -> Optional[str]:
+        if not name:
+            return None
+        p = os.path.join(self.docs, name)
         return p if os.path.exists(p) else None
 
 
