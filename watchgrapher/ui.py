@@ -2796,21 +2796,40 @@ alongside the application.</p>
                 f"Testing:  {self.cmb_watch.currentText()}"
                 if self.cmb_watch.currentData() else "No watch selected")
 
+    def _list_thumb(self, path, px):
+        """
+        A fixed px-by-px thumbnail: the photo scaled to fit without distortion
+        and centred on a white square, so the list reads as an even column
+        whatever shape the source images are. A watch with no photo gets the
+        same white square, so the text still lines up.
+        """
+        dpr = self.devicePixelRatioF() if hasattr(self, "devicePixelRatioF") else 1.0
+        dpr = dpr or 1.0
+        n = max(1, int(round(px * dpr)))
+        canvas = QtGui.QPixmap(n, n)
+        canvas.setDevicePixelRatio(dpr)
+        canvas.fill(QtGui.QColor("white"))
+        src = QtGui.QPixmap(path) if path else QtGui.QPixmap()
+        if not src.isNull():
+            scaled = src.scaled(n, n, QtCore.Qt.KeepAspectRatio,
+                                QtCore.Qt.SmoothTransformation)
+            p = QtGui.QPainter(canvas)
+            p.drawPixmap((n - scaled.width()) // 2, (n - scaled.height()) // 2, scaled)
+            p.end()
+        return canvas
+
     def _refresh_watches(self, select_id=None):
         self.lst_watches.blockSignals(True)
         self.lst_watches.clear()
         self._watch_ids = []
+        px = self.lst_watches.iconSize().height()
         for w in self.collection.sorted_watches():
             n = len(w.history)
             sub = (f"{n} run{'s' if n != 1 else ''}"
                    + (f", last {sorted(h.when for h in w.history)[-1][:10]}" if n else
                       " -- never measured"))
             it = QtWidgets.QListWidgetItem(f"{w.label}\n{sub}")
-            ph = self.collection.photo_path(w)
-            if ph:
-                pm = QtGui.QPixmap(ph)
-                if not pm.isNull():
-                    it.setIcon(QtGui.QIcon(pm))
+            it.setIcon(QtGui.QIcon(self._list_thumb(self.collection.photo_path(w), px)))
             self.lst_watches.addItem(it)
             self._watch_ids.append(w.id)
         self.lst_watches.blockSignals(False)
@@ -2893,9 +2912,7 @@ alongside the application.</p>
 
         p = self.collection.photo_path(w)
         if p:
-            pm = QtGui.QPixmap(p)
-            self.lbl_wphoto.setPixmap(pm.scaled(
-                148, 148, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+            self.lbl_wphoto.setPixmap(self._list_thumb(p, 148))
         else:
             self.lbl_wphoto.setPixmap(QtGui.QPixmap())
             self.lbl_wphoto.setText("no photo")
