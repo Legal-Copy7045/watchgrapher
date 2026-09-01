@@ -1140,6 +1140,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._selftune_started_listen = False  # this feature opened the recorder
         self._selftune_baseline = None       # tuning_score(self.last) at session start
         self._selftune_deadline = 0.0        # monotonic() escape time for the sweep
+        self._noise_session = False          # room-noise check running
+        self._noise_started_listen = False   # this feature opened the recorder
+        self._noise_deadline = 0.0
         self._suppress_finish = False   # internal stream restarts, not user stops
         self._closing = False
         self._sync_offset = 0.0     # seconds to add to time.time() for true time
@@ -2161,44 +2164,94 @@ alongside the application.</p>
         self._tune_watchdog.start(25000)
 
     def _noise_check(self):
-        if self.recorder is None:
+        """
+        Self-contained, like Self-tune: it opens the stream if nothing is
+        listening, measures the noise floor for a couple of seconds off the
+        UI tick, reports, and closes the stream again if it was the one that
+        opened it. Second click cancels; it gives up after 12 s.
+        """
+        if self._noise_session:
+            self._noise_finish(reason="cancelled")
+            return
+        if self._selftune_session or self._run_t0 is not None:
             QtWidgets.QMessageBox.information(
-                self, "Room noise check", "Press Start first so the pickup is listening.")
+                self, "Room noise check",
+                "Finish the current run or self-tune first, then check the room noise "
+                "between runs.")
             return
         if QtWidgets.QMessageBox.question(
                 self, "Room noise check",
                 "Lift the watch off the pickup, then press OK. Keep still and quiet "
-                "for two seconds.",
+                "for a couple of seconds while it measures.",
                 QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel
                 ) != QtWidgets.QMessageBox.Ok:
             return
-        deadline = time.time() + 2.2
-        while time.time() < deadline:
-            QtWidgets.QApplication.processEvents()
-            time.sleep(0.05)
-        data = self.recorder.read(2.0)
-        if data.size < self.recorder.samplerate:
-            QtWidgets.QMessageBox.warning(self, "Room noise check", "Not enough audio.")
+
+        self._noise_started_listen = self.recorder is None
+        if self.recorder is None:
+            self._suppress_finish = True
+            try:
+                self._toggle_listen(True)
+            finally:
+                self._suppress_finish = False
+            if self.recorder is None:            # audio error already shown
+                self._noise_started_listen = False
+                return
+            self._set_go(True)
+
+        self._noise_session = True
+        self._noise_deadline = time.monotonic() + 12.0
+        self.btn_noise.setText("Measuring... (click to cancel)")
+        self.recorder.clear()                    # measure fresh air, not a stale buffer
+        self.status.showMessage("Room noise check: measuring the noise floor...")
+
+    def _noise_finish(self, reason):
+        was = self._noise_session
+        started = self._noise_started_listen
+        self._noise_session = False
+        self._noise_started_listen = False
+        self.btn_noise.setText("Room noise")
+        if not was:
             return
-        data = np.asarray(data, dtype=np.float64)
+        verdict = None
+        if reason == "done" and self.recorder is not None:
+            data = np.asarray(self.recorder.read(2.0), dtype=np.float64)
+            if data.size >= self.recorder.samplerate:
+                verdict = self._noise_verdict(data)
+        if started and self.recorder is not None:
+            self._suppress_finish = True
+            self._toggle_listen(False)
+            self._suppress_finish = False
+        if verdict:
+            QtWidgets.QMessageBox.information(self, "Room noise check", verdict)
+        elif reason == "timeout":
+            QtWidgets.QMessageBox.warning(
+                self, "Room noise check",
+                "Could not capture two seconds of audio within twelve seconds. "
+                "The pickup may not be delivering -- check the device and the level meter.")
+        elif reason == "failed":
+            self.status.showMessage("Room noise check stopped -- audio unavailable.", 5000)
+        else:
+            self.status.showMessage("Room noise check cancelled.", 4000)
+
+    @staticmethod
+    def _noise_verdict(data):
         rms = float(np.sqrt(np.mean(data * data))) + 1e-12
         peak = float(np.max(np.abs(data)))
         db = 20.0 * np.log10(rms)
         if db < -60:
-            verdict = ("Very quiet -- excellent conditions for amplitude.")
+            v = "Very quiet -- excellent conditions for amplitude."
         elif db < -48:
-            verdict = ("Quiet enough. Amplitude readings should be trustworthy.")
+            v = "Quiet enough. Amplitude readings should be trustworthy."
         elif db < -38:
-            verdict = ("Borderline. Faint sub-noises may be lost -- amplitude could read "
-                       "low and jump around. Close doors, stop fans, try again.")
+            v = ("Borderline. Faint sub-noises may be lost -- amplitude could read low "
+                 "and jump around. Close doors, stop fans, try again.")
         else:
-            verdict = ("Too loud. The unlocking noise will be buried under the room. "
-                       "Move somewhere quieter or improve the pickup's acoustic isolation "
-                       "before trusting amplitude.")
-        QtWidgets.QMessageBox.information(
-            self, "Room noise check",
-            f"Noise floor: {db:.0f} dBFS RMS  (peak {20*np.log10(peak+1e-12):.0f} dBFS)\n\n"
-            + verdict)
+            v = ("Too loud. The unlocking noise will be buried under the room. Move "
+                 "somewhere quieter or improve the pickup's acoustic isolation before "
+                 "trusting amplitude.")
+        return (f"Noise floor: {db:.0f} dBFS RMS  "
+                f"(peak {20 * np.log10(peak + 1e-12):.0f} dBFS)\n\n" + v)
 
     def _reset_tune_button(self):
         self._tuning = False
@@ -2903,6 +2956,10 @@ alongside the application.</p>
                 self._selftune_session = False
                 self._selftune_started_listen = False
                 self._reset_tune_button()
+            if self._noise_session:
+                self._noise_session = False
+                self._noise_started_listen = False
+                self.btn_noise.setText("Room noise")
             self.worker.recorder = None
             if self.recorder:
                 self.recorder.stop()
@@ -3110,6 +3167,14 @@ alongside the application.</p>
             elif time.monotonic() >= self._selftune_deadline + 3.0:
                 # Sweep wedged inside analyze() past its own deadline.
                 self._selftune_finish(reason="timeout")
+
+        if self._noise_session:
+            if self.recorder is None:
+                self._noise_finish(reason="failed")
+            elif self.recorder.seconds_buffered >= 2.2:
+                self._noise_finish(reason="done")
+            elif time.monotonic() >= self._noise_deadline:
+                self._noise_finish(reason="timeout")
 
         if self._run_t0 is not None:
             el = time.time() - self._run_t0
