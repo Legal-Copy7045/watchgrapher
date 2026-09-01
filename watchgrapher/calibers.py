@@ -181,8 +181,10 @@ _LIST = [
        "Vintage. Microstella, but often fitted with a regulator on early variants."),
     _c("rolex_2235", "Rolex", "2235 / 2236", 28800, 52, "freesprung", True, (260, 300)),
     _c("rolex_4130", "Rolex", "4130 (Daytona)", 28800, 52, "freesprung", True, (270, 310)),
-    _c("tudor_mt5602", "Tudor", "MT5602 / MT5612 / MT5652", 28800, 52, "freesprung", False, (270, 315),
-       "In-house, free-sprung, silicon hairspring, COSC. Weights only -- no index."),
+    _c("tudor_mt5602", "Tudor", "MT5602 / MT5612 / MT5652", 28800, 49, "freesprung", False, (270, 315),
+       "In-house, free-sprung, silicon hairspring, COSC. Weights only -- no index. "
+       "Tudor does not publish a lift angle; 49 is the service-centre / enthusiast "
+       "consensus (using the 52 default reads amplitude ~15 deg high).", "community"),
     _c("tudor_2824", "Tudor", "ETA 2824-2 based (pre-MT)", 28800, 50, "etachron", True, (270, 315)),
 
     # ---- Omega ------------------------------------------------------------
@@ -360,14 +362,16 @@ _LIST = [
        "Small automatic, 11.5 lignes."),
     _c("sw330_2", "Sellita", "SW330-2", 28800, 52, "etachron", True, (250, 300),
        "GMT / second time zone on an SW300 base, 56h reserve."),
-    _c("soprod_a10", "Soprod", "A10 / M100", 28800, 52, "etachron", True, (250, 305),
-       "ETA 2892-A2 form factor. Common in independents and mid-tier Swiss brands."),
-    _c("stp_1_11", "STP", "STP 1-11", 28800, 52, "etachron", True, (250, 300),
-       "Fossil Group's 2824-2 clone (Swiss Technology Production). Used by Zodiac "
-       "and some Fossil/Michele automatics.", "documented"),
-    _c("ljp_g100", "La Joux-Perret", "G100 / G101", 28800, 52, "etachron", False, (250, 305),
+    _c("soprod_a10", "Soprod", "A10 / M100", 28800, 49, "etachron", True, (250, 305),
+       "ETA 2892-A2 form factor. Common in independents and mid-tier Swiss brands. "
+       "Soprod lists 47 for the A10 and confirmed 49 for the current M100.", "documented"),
+    _c("stp_1_11", "STP", "STP 1-11", 28800, 52, "etachron", True, (240, 310),
+       "Fossil Group's 2824-2 clone (Swiss Technology Production). Published lift "
+       "angle 52, acceptable amplitude 200-320. Used by Zodiac and some Fossil/"
+       "Michele automatics.", "documented"),
+    _c("ljp_g100", "La Joux-Perret", "G100 / G101", 28800, 51, "etachron", True, (250, 305),
        "68h automatic, SW200 form factor. Base for many 2020s microbrand and "
-       "Swiss-mid pieces (Formex, Circula, Christopher Ward C-series successors)."),
+       "Swiss-mid pieces (Formex, Circula, Christopher Ward Bel Canto).", "documented"),
     _c("baumatic_bm13", "Baume & Mercier", "Baumatic BM12 / BM13", 28800, 52, "index", False,
        (250, 300), "120h reserve, silicon balance spring, antimagnetic. Richemont/ValFleurier."),
     _c("fc_303", "Frederique Constant", "FC-303 / FC-710 (Sellita base)", 28800, 50, "etachron",
@@ -375,17 +379,21 @@ _LIST = [
     _c("iwc_32110", "IWC", "32110 / 32111 / 32115", 28800, 52, "index", True, (255, 305),
        "72h in-house automatic (ValFleurier-derived) in the 2020s Mark XX, Pilot 41, "
        "Ingenieur 40."),
-    _c("breitling_b01", "Breitling", "B01 / B02", 28800, 50, "index", True, (255, 305),
-       "In-house column-wheel chronograph, 70h. Expect the usual chrono amplitude drop."),
+    _c("breitling_b01", "Breitling", "B01 / B02", 28800, 50, "index", False, (255, 305),
+       "In-house column-wheel chronograph, 70h. Breitling does not publish a lift "
+       "angle; 50 is the typical value for a Swiss column-wheel chrono. Expect the "
+       "usual amplitude drop with the chrono running.", "community"),
     _c("zenith_elite", "Zenith", "Elite 670 / 679 / 6150", 28800, 52, "index", False, (255, 305),
        "Thin automatic time-only family. The El Primero (zenith_400) is the separate "
        "36,000 bph chronograph."),
     _c("panerai_p9000", "Panerai", "P.9000 / P.9010 / P.9100", 28800, 52, "index", False,
        (250, 300), "3-day automatic in-house family. P.9100 adds a flyback chrono."),
-    _c("valjoux_7734", "ETA/Valjoux", "Valjoux 7734 / 7733 / 7736", 18000, 50, "index", False,
-       (240, 290), "Vintage cam-lever hand-wind chronograph, 1960s-70s."),
-    _c("valjoux_72", "ETA/Valjoux", "Valjoux 72 / 726", 18000, 52, "index", False, (240, 290),
-       "Column-wheel hand-wind chronograph -- pre-Zenith Daytona, vintage Carrera, Autavia."),
+    _c("valjoux_7734", "ETA/Valjoux", "Valjoux 7734 / 7733 / 7736", 18000, 48, "index", True,
+       (240, 290), "Vintage cam-lever hand-wind chronograph, 1960s-70s. Lift angle 48 "
+       "(Caliber Corner).", "documented"),
+    _c("valjoux_72", "ETA/Valjoux", "Valjoux 72 / 726", 18000, 50, "index", False, (240, 290),
+       "Column-wheel hand-wind chronograph -- pre-Zenith Daytona, vintage Carrera, "
+       "Autavia. Lift angle not published; 50 by analogy with the 773x family."),
     _c("eta_2472", "ETA", "2472 / 2452 / 2451", 18000, 52, "index", True, (240, 300),
        "1960s full-rotor automatic family that followed the bumper calibers."),
     _c("eta_2846", "ETA", "2846 / 2472 unidirectional", 18000, 52, "index", True, (240, 295)),
@@ -401,9 +409,10 @@ _LIST = [
     _c("seiko_6l35", "Seiko", "6L35 / 6L37", 28800, 52, "index_stud", False, (240, 290),
        "Thin 45h automatic by Seiko Instruments. King Seiko SPB, some Presage and "
        "grey-market Swiss-brand use."),
-    _c("seiko_8l35", "Seiko", "8L35 / 8L55 / 8L45", 28800, 52, "index_stud", True, (260, 305),
+    _c("seiko_8l35", "Seiko", "8L35 / 8L55 / 8L45", 28800, 53, "index_stud", False, (260, 305),
        "Undecorated Grand Seiko 9S-family movement. Marinemaster 300 (SBDX), "
-       "some Prospex LX and SLA divers."),
+       "some Prospex LX and SLA divers. Commonly timed at 53 (some watchmakers "
+       "use 52).", "community"),
     _c("seiko_9sa5", "Grand Seiko", "9SA5", 36000, 52, "freesprung", False, (250, 300),
        "Dual-impulse escapement, 80h, 36,000 bph. High-beat -- 250-280 is healthy."),
     _c("miyota_9110", "Miyota", "9110 / 9120 / 9122 / 9132", 28800, 51, "index", True, (245, 295),
