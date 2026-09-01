@@ -800,6 +800,7 @@ class Collapsible(QtWidgets.QWidget):
         self.form = QtWidgets.QFormLayout(self.content)
         self.form.setContentsMargins(8, 2, 2, 8)
         self.form.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
+        self.form.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -1749,7 +1750,7 @@ alongside the application.</p>
         self.btn_mywatches = QtWidgets.QPushButton("My Watches...")
         self.btn_mywatches.setMinimumHeight(30)
         self.btn_mywatches.clicked.connect(self._goto_watches)
-        self.btn_model = QtWidgets.QPushButton("Find by watch model...")
+        self.btn_model = QtWidgets.QPushButton("Find by model...")
         self.btn_model.setMinimumHeight(28)
         self.btn_model.setToolTip(
             "Do not know the caliber? Search by the watch instead -- Air King,\n"
@@ -1757,6 +1758,8 @@ alongside the application.</p>
             "with references and years, so you can pick the right generation.")
         self.btn_model.clicked.connect(self._find_model)
         self.cmb_watch = QtWidgets.QComboBox()
+        self.cmb_watch.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_watch.setMinimumContentsLength(12)
         self.cmb_watch.setToolTip(
             "Attribute this run to one of your watches. Selecting one applies its\n"
             "caliber and lift angle, and saving files the results into its history.")
@@ -1770,6 +1773,8 @@ alongside the application.</p>
         self.lbl_hint.setStyleSheet("color:#7fb2ff;font-size:11px;")
         self.cmb_cal = QtWidgets.QComboBox()
         self.cmb_cal.setMaxVisibleItems(25)
+        self.cmb_cal.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.cmb_cal.setMinimumContentsLength(12)
         self.cmb_cal.currentIndexChanged.connect(self._caliber_changed)
         self.spn_lift = QtWidgets.QDoubleSpinBox()
         self.spn_lift.setRange(20, 90)
@@ -1782,18 +1787,28 @@ alongside the application.</p>
         for b in STANDARD_BPH:
             self.cmb_bph.addItem(str(b), b)
         self.cmb_bph.currentIndexChanged.connect(self._push_cfg)
-        self.lbl_reg = QtWidgets.QLabel("--")
-        self.lbl_reg.setWordWrap(True)
-        self.lbl_reg.setStyleSheet("color:#8a94a4;font-size:11px;")
+        self.lbl_calinfo = QtWidgets.QLabel("--")
+        self.lbl_calinfo.setWordWrap(True)
+        self.lbl_calinfo.setStyleSheet("color:#8a94a4;font-size:11px;")
+
+        lb_row = QtWidgets.QWidget()
+        lb_lay = QtWidgets.QHBoxLayout(lb_row)
+        lb_lay.setContentsMargins(0, 0, 0, 0)
+        lb_lay.setSpacing(6)
+        lb_lay.addWidget(self.spn_lift, 1)
+        _bl = QtWidgets.QLabel("beat")
+        _bl.setStyleSheet("color:#8a94a4;font-size:11px;")
+        lb_lay.addWidget(_bl, 0)
+        lb_lay.addWidget(self.cmb_bph, 1)
+
         g2.addRow(self.btn_mywatches)
         g2.addRow(self.btn_model)
         g2.addRow("My watch", self.cmb_watch)
         g2.addRow("Search", self.txt_search)
         g2.addRow("", self.lbl_hint)
         g2.addRow("Caliber", self.cmb_cal)
-        g2.addRow("Lift angle", self.spn_lift)
-        g2.addRow("Beat rate", self.cmb_bph)
-        g2.addRow(self.lbl_reg)
+        g2.addRow("Lift / bph", lb_row)
+        g2.addRow(self.lbl_calinfo)
         lay.addWidget(g2)
 
         # ---------- 3. test conditions ----------
@@ -1803,22 +1818,30 @@ alongside the application.</p>
         self.cmb_pos.setCurrentText("Dial up")
         self.cmb_wind = QtWidgets.QComboBox()
         self.cmb_wind.addItems(["Full wind", "6h", "12h", "24h", "36h"])
-        self.btn_capture = QtWidgets.QPushButton("Capture this position")
+        self.btn_capture = QtWidgets.QPushButton("Capture position")
         self.btn_capture.setMinimumHeight(28)
+        self.btn_capture.setToolTip("Record the current live reading as this position/wind state.")
         self.btn_capture.clicked.connect(self._capture)
         self.chk_auto = QtWidgets.QCheckBox("Auto-capture when stable")
         self.chk_auto.setToolTip(
             "Captures the position by itself once several consecutive readings agree.")
         self.chk_auto.toggled.connect(lambda _: self._stable.clear())
-        g3.addRow("Position", self.cmb_pos)
-        g3.addRow("Wind state", self.cmb_wind)
+
+        pos_row = QtWidgets.QWidget()
+        pr_lay = QtWidgets.QHBoxLayout(pos_row)
+        pr_lay.setContentsMargins(0, 0, 0, 0)
+        pr_lay.setSpacing(6)
+        pr_lay.addWidget(self.cmb_pos, 3)
+        pr_lay.addWidget(self.cmb_wind, 2)
+
+        g3.addRow("Pos / wind", pos_row)
         g3.addRow(self.btn_capture)
         g3.addRow(self.chk_auto)
         lay.addWidget(g3)
 
         # ---------- 4. pickup tuning: button out front, dials folded away ----
         g4 = Collapsible("4.  PICKUP TUNING", False)
-        self.btn_tune = QtWidgets.QPushButton("Self-tune pickup")
+        self.btn_tune = QtWidgets.QPushButton("Self-tune")
         self.btn_tune.setMinimumHeight(30)
         self.btn_tune.setToolTip(
             "Listens to what the pickup is actually delivering and sweeps the filter\n"
@@ -1827,7 +1850,7 @@ alongside the application.</p>
         self.btn_tune.clicked.connect(self._self_tune)
         g4.addPersistent(self.btn_tune)
 
-        self.btn_noise = QtWidgets.QPushButton("Room noise check")
+        self.btn_noise = QtWidgets.QPushButton("Room noise")
         self.btn_noise.setMinimumHeight(26)
         self.btn_noise.setToolTip(
             "Lift the watch off the pickup and press this. It measures the noise\n"
@@ -1878,9 +1901,10 @@ alongside the application.</p>
             "Removes the offset caused by the detector locking onto a different\n"
             "sub-noise for ticks than for tocks. Untick to see the raw beat error.")
         self.chk_parity.toggled.connect(self._push_cfg)
-        b_reset = QtWidgets.QPushButton("Reset to defaults")
+        b_reset = QtWidgets.QPushButton("Reset")
+        b_reset.setToolTip("Filter band, envelope window and sub-noise threshold back to defaults.")
         b_reset.clicked.connect(self._reset_tuning)
-        b_prof = QtWidgets.QPushButton("Remember for this pickup")
+        b_prof = QtWidgets.QPushButton("Save profile")
         b_prof.setToolTip(
             "Save the filter band, envelope window and sub-noise threshold against the\n"
             "selected input device. They load automatically whenever you pick that\n"
@@ -1894,15 +1918,24 @@ alongside the application.</p>
         prow.addWidget(b_forget, 0)
         pw2 = QtWidgets.QWidget()
         pw2.setLayout(prow)
-        g4.addRow("Rolling window", self.spn_win)
-        g4.addRow("Filter low", self.spn_lo)
-        g4.addRow("Filter high", self.spn_hi)
-        g4.addRow("Envelope window", self.spn_env)
-        g4.addRow("Sub-noise thresh", self.spn_thr)
-        g4.addRow("Trace width", self.spn_trace)
+        band_row = QtWidgets.QWidget()
+        bd_lay = QtWidgets.QHBoxLayout(band_row)
+        bd_lay.setContentsMargins(0, 0, 0, 0)
+        bd_lay.setSpacing(6)
+        bd_lay.addWidget(self.spn_lo, 1)
+        _dash = QtWidgets.QLabel("to")
+        _dash.setStyleSheet("color:#8a94a4;font-size:11px;")
+        bd_lay.addWidget(_dash, 0)
+        bd_lay.addWidget(self.spn_hi, 1)
+
+        g4.addRow("Window", self.spn_win)
+        g4.addRow("Band", band_row)
+        g4.addRow("Envelope", self.spn_env)
+        g4.addRow("Threshold", self.spn_thr)
+        g4.addRow("Trace", self.spn_trace)
         g4.addRow(self.chk_parity)
+        g4.addRow(pw2)
         g4.addRow(b_reset)
-        g4.addRow("Pickup profile", pw2)
         lay.addWidget(g4)
 
         # ---------- simulator, only with the simulated device ----------
@@ -1938,10 +1971,9 @@ alongside the application.</p>
         self.g_sim.addRow("Noise", self.sim_snr)
         lay.addWidget(self.g_sim)
         self.g_sim.setVisible(False)
-
         lay.addStretch(1)
 
-        # ---------- 5. start, pinned at the bottom ----------
+        # ---------- 5. start -- pinned below the scroll area, always visible ----
         startbox = QtWidgets.QFrame()
         startbox.setStyleSheet(
             "QFrame{background:#1a1f27;border:1px solid #2a323e;border-radius:8px;}")
@@ -1966,7 +1998,7 @@ alongside the application.</p>
         durrow.addWidget(lab)
         durrow.addWidget(self.spn_runlen, 1)
         sv.addLayout(durrow)
-        self.chk_settle = QtWidgets.QCheckBox("Wait for the watch to settle before timing")
+        self.chk_settle = QtWidgets.QCheckBox("Settle before timing")
         self.chk_settle.setStyleSheet("color:#8a94a4;font-size:11px;")
         self.chk_settle.setToolTip(
             "After a timed run is started, hold off resetting the capture until rate and\n"
@@ -1990,20 +2022,26 @@ alongside the application.</p>
         self.prg_run.setFixedHeight(16)
         self.prg_run.setFormat("idle")
         sv.addWidget(self.prg_run)
-        lay.addWidget(startbox)
 
         self._fill_calibers()
 
-        want = inner.sizeHint().width() + 24
-        self._sidebar_width = max(380, min(520, want))
+        want = inner.sizeHint().width() + 20
+        self._sidebar_width = max(340, min(430, want))
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(inner)
         scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        scroll.setMinimumWidth(300)
-        scroll.setMaximumWidth(560)
-        return scroll
+
+        col = QtWidgets.QWidget()
+        cl = QtWidgets.QVBoxLayout(col)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(6)
+        cl.addWidget(scroll, 1)
+        cl.addWidget(startbox, 0)      # Start stays put no matter how the sections expand
+        col.setMinimumWidth(300)
+        col.setMaximumWidth(560)
+        return col
 
     def _reset_tuning(self):
         for w, v in ((self.spn_lo, 1500), (self.spn_hi, 12000),
@@ -2165,7 +2203,7 @@ alongside the application.</p>
     def _reset_tune_button(self):
         self._tuning = False
         self._tune_watchdog.stop()
-        self.btn_tune.setText("Self-tune pickup")
+        self.btn_tune.setText("Self-tune")
         self.btn_tune.setEnabled(self.cmb_dev.currentData() != "SIM")
 
     def _selftune_finish(self, reason):
@@ -2423,12 +2461,12 @@ alongside the application.</p>
         # advice
         aw = QtWidgets.QWidget()
         al = QtWidgets.QVBoxLayout(aw)
-        self.lbl_reg = QtWidgets.QLabel("Regulation assistant: take a reading.")
-        self.lbl_reg.setWordWrap(True)
-        self.lbl_reg.setStyleSheet(
+        self.lbl_regassist = QtWidgets.QLabel("Regulation assistant: take a reading.")
+        self.lbl_regassist.setWordWrap(True)
+        self.lbl_regassist.setStyleSheet(
             "background:#1a1f27;border:1px solid #2a323e;border-radius:6px;"
             "padding:10px;color:#c8d0dc;font-size:12px;")
-        al.addWidget(self.lbl_reg)
+        al.addWidget(self.lbl_regassist)
         self.txt_advice = QtWidgets.QTextBrowser()
         self.txt_advice.setOpenExternalLinks(True)
         al.addWidget(self.txt_advice)
@@ -3750,7 +3788,7 @@ alongside the application.</p>
         }.get(src, "")
         if c.notes:
             txt += f"\n{c.notes}"
-        self.lbl_reg.setText(txt)
+        self.lbl_calinfo.setText(txt)
         self._push_cfg()
 
     # ------------------------------------------------------------ collection
@@ -4337,22 +4375,24 @@ alongside the application.</p>
         return 0.0
 
     def _update_regulation(self, m):
-        if not hasattr(self, "lbl_reg"):
+        if not hasattr(self, "lbl_regassist"):
             return
         c = self._current_caliber()
         if c is None or not m.ok or m.rate != m.rate:
             return
         if m.nominal_bph and m.detected_bph != m.nominal_bph:
-            self.lbl_reg.setText("Regulation assistant: beat rate does not match the caliber, "
-                                 "so the rate figure is not usable yet.")
+            self.lbl_regassist.setText(
+                "Regulation assistant: beat rate does not match the caliber, "
+                "so the rate figure is not usable yet.")
             return
         target = self._regulation_target()
         err = m.rate - target
         ci = f" ±{m.rate_ci:.1f}" if m.rate_ci == m.rate_ci else ""
         head = (f"<b>Now {m.rate:+.1f}{ci} s/day</b>, target {target:+.1f}. ")
         if abs(err) <= max(2.0, (m.rate_ci if m.rate_ci == m.rate_ci else 0.0)):
-            self.lbl_reg.setText(head + "Within tolerance of the target -- leave the regulator "
-                                 "alone and confirm across positions.")
+            self.lbl_regassist.setText(
+                head + "Within tolerance of the target -- leave the regulator "
+                "alone and confirm across positions.")
             return
         direction = "slower" if err > 0 else "faster"
         instr = advisor.rate_adjust_instructions(c, direction)
@@ -4361,7 +4401,7 @@ alongside the application.</p>
             extra = ("<br><br><i>From your Tools-tab calibration:</i> "
                      + advisor.regulator_sensitivity(self.spn_before.value(),
                                                      self.spn_after.value()))
-        self.lbl_reg.setText(
+        self.lbl_regassist.setText(
             f"{head}Run <b>{direction}</b> by <b>{abs(err):.1f} s/day</b>.<br><br>{instr}{extra}")
 
     def _current_grade(self, readings):
