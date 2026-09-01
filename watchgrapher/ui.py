@@ -856,6 +856,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_last_sec = 0
         self._sync_thread = None
         self._watch_set_ref = None  # (true_epoch, watch_epoch) when the watch was set
+        self._settle_pending = False
+        self._settle_buf = []
+        self._settle_secs = 0
+        self._settle_deadline = 0.0
         self._run_t0 = None        # timed run start, or None
         self._run_len = 0.0
         self._stable = []          # recent readings, for auto-capture
@@ -933,6 +937,12 @@ class MainWindow(QtWidgets.QMainWindow):
             act.triggered.connect(slot)
             if key:
                 act.setShortcut(key)
+            fm.addAction(act)
+        fm.addSeparator()
+        for label, slot in (("Back up collection...", self._backup_collection),
+                            ("Restore collection...", self._restore_collection)):
+            act = QtGui.QAction(label, self)
+            act.triggered.connect(slot)
             fm.addAction(act)
         fm.addSeparator()
         quit_act = QtGui.QAction("Exit", self)
@@ -1647,6 +1657,13 @@ alongside the application.</p>
         durrow.addWidget(lab)
         durrow.addWidget(self.spn_runlen, 1)
         sv.addLayout(durrow)
+        self.chk_settle = QtWidgets.QCheckBox("Wait for the watch to settle before timing")
+        self.chk_settle.setStyleSheet("color:#8a94a4;font-size:11px;")
+        self.chk_settle.setToolTip(
+            "After a timed run is started, hold off resetting the capture until rate and\n"
+            "amplitude have stopped drifting -- so the run records the watch, not the\n"
+            "transient from setting it down. Falls back to starting anyway after 90 s.")
+        sv.addWidget(self.chk_settle)
         self.btn_go = QtWidgets.QPushButton("Start")
         self.btn_go.setCheckable(True)
         self.btn_go.setMinimumHeight(40)
@@ -2362,7 +2379,17 @@ alongside the application.</p>
                 self.btn_go.blockSignals(False)
                 return
             self.btn_go.setText("Stop")
-            if secs:
+            self._settle_pending = False
+            self._settle_buf = []
+            if secs and self.chk_settle.isChecked():
+                self._run_t0 = None
+                self._settle_pending = True
+                self._settle_secs = secs
+                self._settle_deadline = time.time() + 90.0
+                self.prg_run.setValue(0)
+                self.prg_run.setFormat("settling...")
+                self.status.showMessage("Waiting for rate and amplitude to settle...")
+            elif secs:
                 self.recorder.clear()
                 self._run_t0 = time.time()
                 self._run_len = float(secs)
@@ -2375,10 +2402,35 @@ alongside the application.</p>
                 self.status.showMessage("Listening, open-ended")
         else:
             self.btn_go.setText("Start")
+            self._settle_pending = False
             if self._run_t0 is not None:
                 self._finish_run(stopped_early=True)
             else:
                 self._toggle_listen(False)
+
+    def _settle_check(self, m):
+        if not self._settle_pending or self.recorder is None:
+            return
+        forced = time.time() >= self._settle_deadline
+        if m is not None and m.ok and m.rate == m.rate:
+            self._settle_buf.append((m.rate, m.amplitude))
+            self._settle_buf = self._settle_buf[-5:]
+        rates = [x[0] for x in self._settle_buf]
+        amps = [x[1] for x in self._settle_buf if x[1] == x[1]]
+        steady = (len(rates) >= 5 and max(rates) - min(rates) < 2.0
+                  and (len(amps) < 4 or max(amps) - min(amps) < 8.0))
+        if steady or forced:
+            self._settle_pending = False
+            self.recorder.clear()
+            self._run_t0 = time.time()
+            self._run_len = float(self._settle_secs)
+            self.prg_run.setValue(0)
+            self.status.showMessage(
+                (f"Settled. Timed run: {self._settle_secs} s" if steady else
+                 f"Did not fully settle in 90 s -- starting the {self._settle_secs} s run anyway"),
+                6000)
+        else:
+            self.prg_run.setFormat(f"settling... {len(self._settle_buf)}/5")
 
     def _set_go(self, on):
         """Move the Start button without re-entering _on_go."""
@@ -2659,6 +2711,8 @@ alongside the application.</p>
                     self.lbl_live.setStyleSheet("color:#ffb648;font-size:12px;")
             self._watch_stream()
             self._draw_mic_scope()
+            if self._settle_pending:
+                self._settle_check(self.last)
 
     def _watch_stream(self):
         """
@@ -2781,6 +2835,8 @@ alongside the application.</p>
 
     def _on_result(self, m):
         self.last = m
+        if self._settle_pending:
+            self._settle_check(m)
         if not m.ok:
             self.status.showMessage(m.message, 4000)
             return
@@ -3819,6 +3875,65 @@ alongside the application.</p>
         self.status.showMessage(f"Wrote {path}", 5000)
 
     # --------------------------------------------------------------- advice
+    def _backup_collection(self):
+        import zipfile
+        self.collection.save()
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Back up collection",
+            os.path.join(REPORT_DIR, f"watch_collection_{datetime.now():%Y%m%d}.zip"),
+            "Zip archive (*.zip)")
+        if not path:
+            return
+        root = self.collection.root
+        out_abs = os.path.abspath(path)
+        try:
+            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+                for dirpath, _dirs, files in os.walk(root):
+                    for fn in files:
+                        full = os.path.join(dirpath, fn)
+                        if os.path.abspath(full) == out_abs or ".pre-restore-" in fn \
+                                or fn.endswith(".tmp"):
+                            continue
+                        z.write(full, os.path.relpath(full, root))
+        except OSError as e:
+            QtWidgets.QMessageBox.warning(self, "Back up collection", str(e))
+            return
+        n = len(self.collection.watches)
+        self.status.showMessage(f"Backed up {n} watches to {os.path.basename(path)}", 6000)
+
+    def _restore_collection(self):
+        import zipfile
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Restore collection", REPORT_DIR, "Zip archive (*.zip)")
+        if not path:
+            return
+        if QtWidgets.QMessageBox.warning(
+                self, "Restore collection",
+                "This replaces your current collection and photos with the contents of "
+                "the archive. A backup of the current collection.json is kept alongside "
+                "it. Continue?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No) != QtWidgets.QMessageBox.Yes:
+            return
+        root = self.collection.root
+        try:
+            if os.path.exists(self.collection.path):
+                os.replace(self.collection.path,
+                           self.collection.path + f".pre-restore-{datetime.now():%Y%m%d%H%M%S}")
+            with zipfile.ZipFile(path) as z:
+                bad = next((n for n in z.namelist() if n.startswith(("/", "..")) or ":" in n), None)
+                if bad:
+                    raise ValueError(f"archive contains an unsafe path: {bad}")
+                z.extractall(root)
+        except (OSError, ValueError, zipfile.BadZipFile) as e:
+            QtWidgets.QMessageBox.warning(self, "Restore collection", str(e))
+            return
+        self.collection.load()
+        self._refresh_watches()
+        QtWidgets.QMessageBox.information(
+            self, "Restore collection",
+            f"Restored {len(self.collection.watches)} watches.")
+
     def _regulation_target(self):
         w = self._current_watch() if hasattr(self, "_current_watch") else None
         if w and str(getattr(w, "target_rate", "")).strip():
