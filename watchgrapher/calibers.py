@@ -205,6 +205,14 @@ _LIST = [
 
     # ---- Other Swiss ------------------------------------------------------
     _c("jlc_889", "Jaeger-LeCoultre", "889 / 899", 28800, 50, "freesprung", False, (260, 305)),
+    _c("jlc_938", "Jaeger-LeCoultre", "938 / 938A (Master Ultra Thin Power Reserve)", 28800, 50,
+       "freesprung", False, (250, 300),
+       "Thin automatic with power-reserve indication, 43h, 41 jewels, ~273 parts. "
+       "Free-sprung balance adjusted by four rim screws (hairspring laser-welded, no "
+       "index), ceramic rotor bearings, unidirectional winding. Derived from the 899 "
+       "family -- JLC does not publish a lift angle, so 50 is carried over from the "
+       "899 (jlc_889). Powers the Master Ultra Thin Reserve de Marche / Power Reserve "
+       "and Master Control Power Reserve.", "inherited"),
     _c("jlc_920", "Jaeger-LeCoultre", "920 / AP 2120", 19800, 56, "freesprung", True, (250, 300),
        "Ultra-thin automatic. Lift angle 56."),
     _c("iwc_79350", "IWC", "79350 (7750 base)", 28800, 49, "etachron", True, (260, 310)),
