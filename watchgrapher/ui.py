@@ -2056,6 +2056,13 @@ alongside the application.</p>
         self.txt_advice = QtWidgets.QTextBrowser()
         self.txt_advice.setOpenExternalLinks(True)
         al.addWidget(self.txt_advice)
+        grow = QtWidgets.QHBoxLayout()
+        grow.addWidget(QtWidgets.QLabel("Grade against"))
+        self.cmb_standard = QtWidgets.QComboBox()
+        self.cmb_standard.addItems(list(advisor.STANDARDS.keys()))
+        self.cmb_standard.currentTextChanged.connect(lambda _: self._advise())
+        grow.addWidget(self.cmb_standard, 1)
+        al.addLayout(grow)
         b = QtWidgets.QPushButton("Analyze and advise")
         b.setStyleSheet(
             f"QPushButton{{background:{ACCENT};color:#08101c;font-weight:bold;padding:8px;border-radius:6px;}}")
@@ -3240,13 +3247,15 @@ alongside the application.</p>
             detected_bph=m.detected_bph if m and m.ok else None,
             quality=m.quality if m and m.ok else None,
             amplitude_spread=m.amplitude_spread if m and m.ok else None)
+        gkey, gpassed, grows = self._current_grade(readings)
         out = reportmod.build(
             path, c, readings, measurement=m, findings=findings,
             fault_report=getattr(self, "_fault_report", None),
             tuning={"band_lo": self.spn_lo.value(), "band_hi": self.spn_hi.value(),
                     "env_win_ms": self.spn_env.value(),
                     "sub_threshold": self.spn_thr.value()},
-            reserve_log=self._reserve, watch_label=label)
+            reserve_log=self._reserve, watch_label=label,
+            grade={"standard": gkey, "passed": gpassed, "rows": grows} if grows else None)
         QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
         self.status.showMessage(
             f"Wrote {out} -- print to PDF from the browser if you need one", 9000)
@@ -3971,6 +3980,33 @@ alongside the application.</p>
         self.lbl_reg.setText(
             f"{head}Run <b>{direction}</b> by <b>{abs(err):.1f} s/day</b>.<br><br>{instr}{extra}")
 
+    def _current_grade(self, readings):
+        key = self.cmb_standard.currentText()
+        spec = advisor.STANDARDS.get(key)
+        if not spec:
+            return key, False, []
+        passed, rows = advisor.grade(readings, spec)
+        return key, passed, rows
+
+    def _grade_html(self, readings):
+        key, passed, rows = self._current_grade(readings)
+        if not rows:
+            return f"<p style='color:#8a94a4'>Grade vs {key}: capture at least one position.</p>"
+        head = ("#57d38c", "PASS") if passed else ("#ff5d5d", "OUTSIDE")
+        out = [f"<p style='margin:2px 0'><b style='color:{head[0]}'>{head[1]}</b> "
+               f"&nbsp;<span style='color:#8a94a4'>vs {key} &mdash; indicative, "
+               f"not a lab test</span></p>",
+               "<table style='border-collapse:collapse'>"]
+        for r in rows:
+            col = "#57d38c" if r.ok else "#ff5d5d"
+            out.append(
+                f"<tr><td style='color:#8a94a4;padding:2px 12px 2px 0'>{r.name}</td>"
+                f"<td style='padding:2px 12px 2px 0'>{r.value}</td>"
+                f"<td style='color:#8a94a4;padding:2px 12px 2px 0'>{r.limit}</td>"
+                f"<td style='color:{col}'>{'ok' if r.ok else 'no'}</td></tr>")
+        out.append("</table>")
+        return "".join(out)
+
     def _advise(self):
         c = self._current_caliber()
         if not c:
@@ -3988,6 +4024,7 @@ alongside the application.</p>
             amplitude_spread=m.amplitude_spread if m and m.ok else None)
 
         html = [f"<div style='font-family:Segoe UI,sans-serif;color:#c8d0dc'>",
+                self._grade_html(readings), "<hr>",
                 f"<pre style='color:#8a94a4'>{advisor.workflow_summary(c)}</pre><hr>"]
         for f in findings:
             col = SEV_COLOR.get(f.severity, "#c8d0dc")

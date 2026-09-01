@@ -98,7 +98,7 @@ def trace_svg(m, nominal_bph, width_ms=20.0, w=820, h=300):
 
 def build(path, caliber, readings, measurement=None, findings=None,
           fault_report=None, tuning=None, reserve_log=None,
-          watch_label="", technician="", notes=""):
+          watch_label="", technician="", notes="", grade=None):
     """Write the report and return its path."""
     e = html.escape
     now = datetime.now().strftime("%d %B %Y, %H:%M")
@@ -143,6 +143,22 @@ def build(path, caliber, readings, measurement=None, findings=None,
                      f"{sum(rates)/len(rates):+.1f}</b></td>"
                      f"<td class='n'><b>{(f'{max(amps)-min(amps):.0f} drop' if len(amps)>=2 else '--')}"
                      f"</b></td><td></td></tr>")
+        p.append("</table>")
+
+    if grade and grade.get("rows"):
+        verdict = "PASS" if grade["passed"] else "OUTSIDE SPEC"
+        colour = "var(--good)" if grade["passed"] else "var(--bad)"
+        p.append(f"<h2>Certificate &mdash; {e(grade['standard'])}</h2>")
+        p.append(f"<p class='sub'><b style='color:{colour}'>{verdict}</b> &nbsp; "
+                 f"Indicative grading from this six-position run, not a certified "
+                 f"laboratory test.</p>")
+        p.append("<table><tr><th>Criterion</th><th class='n'>Measured</th>"
+                 "<th class='n'>Limit</th><th>Result</th></tr>")
+        for r in grade["rows"]:
+            rc = "var(--good)" if r.ok else "var(--bad)"
+            p.append(f"<tr><td>{e(r.name)}</td><td class='n'>{e(r.value)}</td>"
+                     f"<td class='n'>{e(r.limit)}</td>"
+                     f"<td style='color:{rc}'>{'pass' if r.ok else 'fail'}</td></tr>")
         p.append("</table>")
 
     if reserve_log:
