@@ -3241,6 +3241,7 @@ alongside the application.</p>
         tl.addRow("Demagnetiser A/B", hw)
         tl.addRow(self.lbl_demag)
         self._demag_before = None
+        self._demag_delta = None
 
         tl.addRow(QtWidgets.QLabel(""))
         b_rep = QtWidgets.QPushButton("Build service report")
@@ -3446,6 +3447,18 @@ alongside the application.</p>
             "padding:8px;border-radius:6px;}")
         b_fault.clicked.connect(self._scan_faults)
         flt_l.addWidget(b_fault)
+
+        self.txt_sig = QtWidgets.QTextBrowser()
+        self.txt_sig.setHtml(
+            "<p style='color:#8a94a4;font-family:Segoe UI'>Press below to weigh the "
+            "current reading, the captured positions, the last fault scan and any "
+            "demagnetiser A/B against the known fault signatures.</p>")
+        flt_l.addWidget(self.txt_sig, 2)
+        b_sig = QtWidgets.QPushButton("Match fault signatures")
+        b_sig.setStyleSheet(
+            "QPushButton{background:#2a323e;color:#e8eef7;padding:8px;border-radius:6px;}")
+        b_sig.clicked.connect(self._match_signatures)
+        flt_l.addWidget(b_sig)
         self.diag_tabs.addTab(flt_w, "Faults")
         tabs.addTab(dw, "Diagnostics")
 
@@ -4564,6 +4577,7 @@ alongside the application.</p>
             return
         r0, a0 = self._demag_before
         dr, da = m.rate - r0, m.amplitude - a0
+        self._demag_delta = (float(dr), float(da))
         lines = [f"Rate {r0:+.1f} -> {m.rate:+.1f}  ({dr:+.1f} s/d)",
                  f"Amplitude {a0:.0f} -> {m.amplitude:.0f}  ({da:+.0f} deg)", ""]
         if dr < -8 and abs(da) < 25:
@@ -4637,6 +4651,54 @@ alongside the application.</p>
                         f"{rep.message.replace(chr(10), '<br>')}</p>")
         html.append("</div>")
         self.txt_fault.setHtml("".join(html))
+
+    def _match_signatures(self):
+        from . import signatures as sigs
+        m = self.last
+        if m is None or not m.ok:
+            self.txt_sig.setPlainText("Need a valid current reading first.")
+            return
+        c = self._current_caliber()
+        ctx = sigs.SymptomContext(
+            rate=m.rate, amplitude=m.amplitude, beat_error=m.beat_error,
+            amplitude_spread=m.amplitude_spread, extra_peaks=m.extra_peaks,
+            quality=m.quality, snr_db=m.snr_db,
+            amp_full_wind=getattr(c, "amp_full_wind", (250.0, 315.0)) if c else (250.0, 315.0),
+            bph=m.nominal_bph or m.detected_bph,
+            positions={r.position: (r.rate, r.amplitude, r.beat_error)
+                       for r in self.readings if r.position},
+            demag_delta=self._demag_delta)
+        rep = getattr(self, "_fault_report", None)
+        if rep is not None and rep.periods:
+            ctx.periodic = [(p.component, p.amplitude_ms, p.snr) for p in rep.periods]
+        if self._reserve:
+            st = reserve_analytics(self._reserve)
+            ctx.iso_span = st.iso_span
+        kick = getattr(self, "_postwind_kick", None)
+        if kick is not None:
+            ctx.kick_deg_per_h = kick
+
+        matches = sigs.match(ctx)
+        html = ["<div style='font-family:Segoe UI,sans-serif;color:#c8d0dc;font-size:12px'>"]
+        if not matches:
+            html.append("<p>Nothing lines up with a stored fault signature. The reading "
+                        "looks unremarkable, or there is not enough of it -- capture the "
+                        "six positions and run a fault scan for a fuller picture.</p>")
+        for s in matches:
+            pct = int(round(s.confidence * 100))
+            bar = int(round(s.confidence * 120))
+            col = "#ff5d5d" if s.confidence > 0.65 else "#ffb648" if s.confidence > 0.4 else "#7fb2ff"
+            html.append(
+                f"<p style='margin:10px 0 2px'><b style='color:{col}'>{s.name}</b> "
+                f"<span style='color:#8a94a4'>&nbsp;{pct}% match</span><br>"
+                f"<span style='display:inline-block;height:4px;width:{bar}px;"
+                f"background:{col}'></span><br>"
+                f"<span style='color:#b6bfcc'>{s.why}.</span><br>"
+                f"<span style='color:#8a94a4'>Check: {s.check}</span></p>")
+        html.append("<p style='color:#5a6472;margin-top:12px'>Signatures are weighted "
+                    "guesses from the numbers, not a diagnosis. Confirm by eye before "
+                    "you touch anything.</p></div>")
+        self.txt_sig.setHtml("".join(html))
 
     def _build_report(self):
         c = self._current_caliber()
