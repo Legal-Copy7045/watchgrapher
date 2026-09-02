@@ -754,6 +754,11 @@ that made it. When you pick a photo or a document the app copies it into those
 folders and stores only the filename, so the record is self-contained. Reports,
 exports and recordings default to the `reports/` folder.
 
+To keep all of that somewhere else -- a synced drive, a separate data
+partition -- set the `WATCHGRAPHER_HOME` environment variable to a folder of
+your choice before launching; the collection, reports and `settings.json` move
+there.
+
 ---
 
 ## Chrono
