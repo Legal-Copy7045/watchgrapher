@@ -77,7 +77,9 @@ interface supports it; it will not fix a bad pickup.
 
 There is no app to install on the phone. WatchGrapher runs a small web server
 on your local network and the phone's browser opens it and streams its
-microphone back.
+microphone back -- and the same page doubles as a remote control: pick a watch
+from your collection, start the test, watch the four numbers, and save the run,
+all without walking back to the computer.
 
 Phone browsers only allow microphone access on a **secure** page (HTTPS), so
 the app serves HTTPS using a throwaway self-signed certificate. That means the
@@ -92,34 +94,43 @@ so the URL stays the same between recordings -- bookmark it on the phone. It
 only moves to the next free port if something else is already using that one.
 
 1. On the computer running WatchGrapher, open the **audio input** dropdown and
-   choose **"Phone / browser pickup (over Wi-Fi)"**.
-2. Press **Start**. A dialog shows a URL like `https://192.168.1.42:8477`.
+   choose **"Phone / browser pickup (over Wi-Fi)"**, then press **Start** on
+   the computer once. A dialog shows a URL like `https://192.168.1.42:8477`.
    The computer and the phone must be on the **same Wi-Fi network** (a guest
    network that isolates clients will not work).
-3. On the phone, open that URL in any browser (Safari, Chrome, whatever) and
+2. On the phone, open that URL in any browser (Safari, Chrome, whatever) and
    bookmark it. Mind the `https`. There is no QR code.
-4. The phone warns the certificate is not trusted. This is expected for a
+3. The phone warns the certificate is not trusted. This is expected for a
    local self-signed cert -- tap **Advanced** / **Show details** and
    **proceed** / **visit this website**.
-5. On the page, leave the transport on **PCM** or switch to **WebRTC** if PCM
-   keeps dropping out on your Wi-Fi.
-6. Tap **Start** on the page and allow microphone access when the browser asks.
-7. Set **Boost**. A watch tick through a phone mic is very quiet -- turn the
-   Boost slider up until the meter on the page sits high but the red **CLIP**
-   line stays quiet. The app also applies its own auto-gain on top (subject to
-   *View -> Auto-gain*). Leave **"Let the phone auto-level"** off unless the
-   signal is hopeless -- it can pump and distort the amplitude reading.
-8. Hold the phone with its **microphone port pressed against the watch case**
+4. The page shows the desktop's status, a **watch dropdown** filled from your
+   collection, and four live readout tiles. Under **Audio settings** are the
+   PCM/WebRTC transport, the **Boost** slider and the phone-auto-level toggle.
+5. Pick the watch you are testing.
+6. Hold the phone with its **microphone port pressed against the watch case**
    -- the bottom edge on most phones. Contact matters as much as it does for a
-   piezo. Keep the screen awake (set a long auto-lock).
-9. Press **Stop** in the app when done. The server and the phone's connection
-   stay up between runs -- press Start again and it picks straight back up, no
-   need to touch the phone. It shuts down when you change the input device or
-   close WatchGrapher.
+   piezo.
+7. Tap **Start test**. Allow microphone access when asked. The phone starts
+   streaming and tells the desktop to begin listening on the chosen watch; the
+   tiles fill in within a second or two.
+8. Set **Boost** so the meter sits high but the red **CLIP** line stays quiet.
+   The desktop applies its own auto-gain on top (subject to *View ->
+   Auto-gain*). Leave **"Let the phone auto-level"** off unless the signal is
+   hopeless -- it pumps and distorts amplitude.
+9. When the numbers are steady, tap **Save run to watch** -- it files the
+   reading into that watch's history on the desktop.
+10. Tap **Stop**. The server and the phone's connection stay up between runs,
+    so the next test is just Start test again. Everything shuts down when you
+    change the input device or close WatchGrapher.
 
-The phone page reconnects on its own if the Wi-Fi blips or WatchGrapher
-restarts, so you rarely have to re-tap Start on the phone. If it does give up
-it says so.
+You can also drive it the other way: press Start on the desktop and the phone
+page just shows the live numbers and lets you save. The page reconnects on its
+own if the Wi-Fi blips or WatchGrapher restarts.
+
+**Security.** The remote commands (start, stop, select watch, save) carry a
+token that is baked into the page the server hands out, so a random device that
+finds the URL cannot drive your session -- but anyone who can load the page on
+your LAN can. Treat it like any other device on your home network.
 
 **What to expect.** A phone mic through this path is roughly as good as a decent
 USB condenser mic: solid for rate and beat error, marginal for amplitude unless

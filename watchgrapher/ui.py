@@ -1755,6 +1755,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.recorder = None
         self._net_recorder = None       # persistent phone-pickup server for the session
         self._net_fresh = False
+        self._phone_last_save = ""
         self.last = None
         self.readings = []
         self._rate_hist = []       # (elapsed_s, rate_spd) for the rate-history plot
@@ -2086,6 +2087,82 @@ class MainWindow(QtWidgets.QMainWindow):
             self.cmb_preset.blockSignals(True)
             self.cmb_preset.setCurrentText("Custom")
             self.cmb_preset.blockSignals(False)
+
+    # ---------------------------------------------------- phone remote control
+    def _phone_watch_payload(self):
+        return [{"id": w.id, "label": w.label} for w in self.collection.sorted_watches()]
+
+    def _publish_phone_watches(self):
+        nr = getattr(self, "_net_recorder", None)
+        if nr is not None:
+            import json
+            try:
+                nr.watches_json = json.dumps(self._phone_watch_payload())
+            except Exception:
+                pass
+
+    def _phone_state(self):
+        def num(v):
+            return None if v is None or v != v else round(float(v), 3)
+        m = self.last
+        good = m is not None and m.ok
+        wlabel = ""
+        if hasattr(self, "cmb_watch") and self.cmb_watch.currentData():
+            wlabel = self.cmb_watch.currentText()
+        st = {
+            "device_is_net": self.cmb_dev.currentData() == "NET",
+            "listening": self.recorder is not None,
+            "watch": wlabel,
+            "elapsed": round(time.time() - self._listen_t0, 1) if self._listen_t0 else 0.0,
+            "have_reading": bool(good and m.rate == m.rate),
+            "last_save": getattr(self, "_phone_last_save", ""),
+        }
+        if good:
+            st["rate"] = num(m.rate)
+            st["amplitude"] = num(m.amplitude)
+            st["beat_error"] = num(m.beat_error)
+            st["bph"] = m.detected_bph
+            st["quality"] = num(m.quality)
+        return st
+
+    def _handle_phone_cmd(self, cmd):
+        c = (cmd or {}).get("cmd")
+        if c == "select":
+            i = self.cmb_watch.findData(cmd.get("id") or None)
+            if i >= 0:
+                self.cmb_watch.setCurrentIndex(i)
+        elif c == "start":
+            self._phone_last_save = ""
+            if self.cmb_dev.currentData() == "NET" and self.recorder is None:
+                self.btn_go.setChecked(True)
+        elif c == "stop":
+            if self.recorder is not None:
+                self._suppress_finish = True
+                self.btn_go.setChecked(False)
+                self._suppress_finish = False
+        elif c == "save":
+            self._phone_save()
+
+    def _phone_save(self):
+        wid = self.cmb_watch.currentData() if hasattr(self, "cmb_watch") else None
+        w = self.collection.watches.get(wid) if wid else None
+        m = getattr(self, "_last_good", None) or self.last
+        if not w:
+            self._phone_last_save = "pick a watch first"
+            return
+        if m is None or not m.ok or m.rate != m.rate:
+            self._phone_last_save = "no steady reading to save yet"
+            return
+        rd = [advisor.Reading(self.cmb_pos.currentText(), m.rate, m.amplitude,
+                              m.beat_error, self.cmb_wind.currentText())]
+        c = self._current_caliber()
+        rec = coll.record_from_readings(
+            rd, c.key if c else w.caliber_key, float(self.spn_lift.value()),
+            notes="Saved from phone", service_event=False)
+        w.history.append(rec)
+        self.collection.save()
+        self._refresh_watches(w.id)
+        self._phone_last_save = f"saved to {w.label} ({len(w.history)} runs)"
 
     def _settings_get(self, key, default=None):
         import json
@@ -4768,11 +4845,13 @@ alongside the application.</p>
                         nr.start()
                         self._net_recorder = nr
                         self._net_fresh = True
+                        self._publish_phone_watches()
                     else:
                         nr.clear()
                         nr.peak = 0.0
                         nr.gain = 1.0
                         self._net_fresh = False
+                    self._phone_last_save = ""
                     self.recorder = nr
                 else:
                     self.recorder = audio.Recorder(
@@ -5075,6 +5154,19 @@ alongside the application.</p>
 
     # --------------------------------------------------------------- events
     def _tick_ui(self):
+        nr = getattr(self, "_net_recorder", None)
+        if nr is not None:
+            import json
+            for cmd in nr.drain_commands():
+                try:
+                    self._handle_phone_cmd(cmd)
+                except Exception:
+                    pass
+            try:
+                nr.state_json = json.dumps(self._phone_state())
+            except Exception:
+                pass
+
         if self._selftune_session:
             if not self._tuning:
                 buffered = self.recorder.seconds_buffered if self.recorder else 0.0
@@ -6197,6 +6289,7 @@ alongside the application.</p>
         keep = select_id or self.cmb_watch.currentData() if hasattr(self, "cmb_watch") else None
         if hasattr(self, "cmb_watch"):
             self._sync_watch_combo(keep)
+        self._publish_phone_watches()
 
     def _current_watch(self):
         r = self.lst_watches.currentRow()
