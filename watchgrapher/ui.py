@@ -4579,16 +4579,34 @@ alongside the application.</p>
             return
         c = self._current_caliber()
         teeth = getattr(c, "escape_teeth", 15) if c else 15
+        train = getattr(c, "train", None) if c else None
         bph = m.nominal_bph or m.detected_bph
-        rep = faults.analyze_periodicity(m.index, m.resid, bph, escape_teeth=teeth)
+        rep = faults.analyze_periodicity(m.index, m.resid, bph, escape_teeth=teeth,
+                                         train=train)
         self._fault_report = rep
         if rep.freqs is not None and rep.power is not None and rep.freqs.size:
             o = np.argsort(rep.freqs)
             self.c_fault.setData(rep.freqs[o], rep.power[o])
+
+        for ln in getattr(self, "_fault_markers", []):
+            self.p_fault.removeItem(ln)
+        self._fault_markers = []
+        for pb, label, in_horizon in rep.markers:
+            pen = pg.mkPen("#5a6472" if in_horizon else "#3a424e", width=1,
+                           style=QtCore.Qt.DashLine)
+            ln = pg.InfiniteLine(pos=np.log10(pb), angle=90, pen=pen, movable=False,
+                                 label=label + ("" if in_horizon else " (beyond capture)"),
+                                 labelOpts={"color": "#8a94a4", "position": 0.9})
+            self.p_fault.addItem(ln)
+            self._fault_markers.append(ln)
+
         html = [f"<div style='font-family:Segoe UI,sans-serif;color:#c8d0dc'>"]
-        html.append(f"<p style='color:#8a94a4'>Escape wheel assumed to have {teeth} teeth, "
-                    f"so one revolution spans {2*teeth} beats "
-                    f"({2*teeth*3600.0/bph:.2f} s at {bph} bph).</p>")
+        gears = (", ".join(f"{k} {v:g}s" for k, v in train.items()) if train
+                 else "fourth wheel assumed at 60 s, third wheel estimated")
+        html.append(f"<p style='color:#8a94a4'>Escape wheel assumed to have {teeth} teeth "
+                    f"(one revolution = {2*teeth} beats, {2*teeth*3600.0/bph:.2f} s). "
+                    f"Train: {gears}. Dashed lines mark where each part's fault would "
+                    f"land.</p>")
         if rep.periods:
             for q in rep.periods:
                 col = "#ffb648" if q.amplitude_ms > 0.15 else "#7fb2ff"

@@ -65,6 +65,10 @@ class Caliber:
     escape_teeth: int = 15
     # Manufacturer / practical amplitude expectation, dial-up, full wind.
     amp_full_wind: tuple = (250.0, 315.0)
+    # Optional gear-train periods, {wheel name: seconds per revolution}, for the
+    # periodic fault scan. None -> the fourth wheel is assumed to carry the
+    # seconds hand (60 s) and the third wheel is estimated.
+    train: Optional[dict] = None
     notes: str = ""
 
     @property
@@ -108,7 +112,7 @@ def _c(key, brand, name, bph, lift, reg="index", verified=True, amp=(250, 315),
     if src is None:
         src = "documented" if verified else "community"
     return Caliber(key, brand, name, bph, float(lift), reg, verified,
-                   src, group or _auto_group(brand), teeth, amp, notes)
+                   src, group or _auto_group(brand), teeth, amp, notes=notes)
 
 
 _LIST = [

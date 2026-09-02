@@ -45,47 +45,68 @@ class FaultReport:
     noise_floor_ms: float = 0.0
     residual_rms_ms: float = 0.0
     horizon_seconds: float = 0.0
+    markers: List[tuple] = field(default_factory=list)   # (period_beats, label, in_horizon)
+
+
+def train_markers(bph: float, escape_teeth: int = 15, train: Optional[dict] = None):
+    """
+    Expected fault periods for the moving parts, in beats.
+
+    `train` optionally overrides the gear periods for a specific caliber, as
+    {name: seconds_per_revolution}. Without it the fourth wheel is taken as
+    the seconds hand (one turn a minute, near-universal on a Swiss lever
+    train) and the third wheel as roughly 7.9 turns of the fourth -- a hint,
+    since ratios vary between calibers.
+    """
+    bps = bph / 3600.0
+    out = [
+        (2.0, "Balance / roller"),
+        (escape_teeth * 1.0, "Escape wheel (half)"),
+        (2.0 * escape_teeth, "Escape wheel"),
+    ]
+    gears = train or {"Fourth wheel": 60.0, "Third wheel": 60.0 * 7.9,
+                      "Centre wheel": 3600.0}
+    for name, secs in gears.items():
+        out.append((secs * bps, name))
+    return [(p, n) for p, n in out if p > 1.5]
 
 
 # --------------------------------------------------------------------------
 # Component identification
 # --------------------------------------------------------------------------
 
-def _candidates(bph: float, escape_teeth: int):
-    """
-    Expected modulation periods, in beats, for the parts that can realistically
-    show up inside a bench measurement.
-
-    An escape wheel tooth is released twice per revolution of the wheel per
-    tooth -- once by the entry stone and once by the exit -- so one revolution
-    spans 2 x teeth beats. Everything upstream of the escape wheel turns more
-    slowly and needs a correspondingly longer capture to see.
-    """
-    bps = bph / 3600.0
-    out = [
-        (2.0 * escape_teeth, "Escape wheel",
-         "One escape wheel revolution. The classic causes are a bent or chipped tooth, "
-         "an eccentric or out-of-round wheel, or a bent escape wheel pivot. Look at the "
-         "wheel under magnification while it runs -- a single damaged tooth usually "
-         "shows as one sharp disturbance per revolution rather than a smooth wave."),
-        (escape_teeth * 1.0, "Escape wheel (half cycle)",
-         "Half an escape wheel revolution. Often means the fault is symmetric about "
-         "the wheel, or that entry and exit stones are unequally worn or unequally "
-         "locked."),
-        (bps * 60.0, "Fourth wheel / seconds hand",
-         "One revolution of the fourth wheel, which carries the seconds hand. A bent "
-         "pivot or an eccentric pinion here modulates the whole train once a minute."),
-        (bps * 60.0 / 8.0, "Third wheel (approx)",
-         "Roughly one third wheel revolution on a typical Swiss train. Gear ratios "
-         "vary between calibers, so treat this identification as a hint rather than a "
-         "diagnosis."),
-    ]
-    return out
+_DETAIL = {
+    "Escape wheel": (
+        "One escape wheel revolution. Classic causes are a bent or chipped tooth, an "
+        "eccentric or out-of-round wheel, or a bent escape wheel pivot. Watch the wheel "
+        "under magnification while it runs -- a single damaged tooth shows as one sharp "
+        "disturbance per revolution rather than a smooth wave."),
+    "Escape wheel (half)": (
+        "Half an escape wheel revolution. Often means the fault is symmetric about the "
+        "wheel, or that the entry and exit stones are unequally worn or unequally locked."),
+    "Fourth wheel": (
+        "One turn of the fourth wheel, which carries the seconds hand. A bent pivot or an "
+        "eccentric pinion here modulates the whole train once a minute."),
+    "Third wheel": (
+        "Roughly one third wheel turn. Gear ratios vary between calibers, so treat this "
+        "as a hint -- work out which wheel actually turns at this period in your caliber."),
+    "Centre wheel": (
+        "About one centre wheel turn (an hour on a traditional layout). Usually beyond "
+        "what a bench capture can resolve; a long power-reserve style capture is needed."),
+    "Balance / roller": (
+        "A two-beat cycle. This is where beat error lives, and it is already reported as "
+        "its own number -- but an impulse-jewel or roller-table fault also lands here and "
+        "is not separable from beat error by this method."),
+}
 
 
-def _identify(period_beats: float, bph: float, escape_teeth: int):
+def _candidates(bph: float, escape_teeth: int, train=None):
+    return [(p, n, _DETAIL.get(n, "")) for p, n in train_markers(bph, escape_teeth, train)]
+
+
+def _identify(period_beats: float, bph: float, escape_teeth: int, train=None):
     best, best_err = None, 1e9
-    for expect, name, detail in _candidates(bph, escape_teeth):
+    for expect, name, detail in _candidates(bph, escape_teeth, train):
         if expect <= 1.5:
             continue
         err = abs(period_beats - expect) / expect
@@ -108,7 +129,8 @@ def _identify(period_beats: float, bph: float, escape_teeth: int):
 
 def analyze_periodicity(index: np.ndarray, resid: np.ndarray, bph: float,
                         escape_teeth: int = 15, min_snr: float = 4.0,
-                        max_report: int = 3, min_ms: float = 0.02) -> FaultReport:
+                        max_report: int = 3, min_ms: float = 0.02,
+                        train: Optional[dict] = None) -> FaultReport:
     """
     Periodogram of the timing residuals against beat number.
 
@@ -177,7 +199,7 @@ def analyze_periodicity(index: np.ndarray, resid: np.ndarray, bph: float,
             i = pk[j]
             pb = float(periods[usable][i])
             a = float(amp[usable][i])
-            name, detail = _identify(pb, bph, escape_teeth)
+            name, detail = _identify(pb, bph, escape_teeth, train)
             secs = pb * 3600.0 / bph
             # A timing swing of +/-a ms repeating every `secs` seconds is worth
             # this much instantaneous rate excursion.
@@ -185,6 +207,8 @@ def analyze_periodicity(index: np.ndarray, resid: np.ndarray, bph: float,
             rep.periods.append(Periodicity(pb, secs, a, spd, a / floor, name, detail))
 
     rep.ok = True
+    rep.markers = [(p, nm, p <= n / 3.0)
+                   for p, nm in train_markers(bph, escape_teeth, train)]
     # Be explicit about the horizon. A periodogram needs about three cycles to
     # call a period real, so a 60 second capture at 4 Hz cannot see a fourth
     # wheel at all -- and saying nothing would read as a clean bill of health.
