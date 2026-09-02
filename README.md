@@ -229,6 +229,15 @@ Two dot lines, one for the tick and one for the tock.
 - **Wandering, non-straight lines** point at a real fault -- a bent pivot, a
   hairspring catching, dirt in the train.
 
+### Comparing two runs
+
+**View -> Pin current reading as trace reference** (Ctrl+P) freezes the current
+tick/tock trace as a faint set of dots. The live trace then draws over it, and
+the rate / amplitude / beat-error readouts gain a `vs ref` delta. Use it for
+before and after a regulation, a demagnetise or a service -- pin the first
+reading, do the work, and the second run overlays it directly. Ctrl+P again
+with no live reading clears the reference.
+
 ### Reading the beat panel
 
 Three views, switched from the selector on the panel:

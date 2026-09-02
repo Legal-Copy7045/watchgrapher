@@ -1431,6 +1431,40 @@ class MainWindow(QtWidgets.QMainWindow):
             "template, the beat rate disagrees with the caliber, or the pickup is "
             "hearing the room. When off, they always show the current number.")
         vm.addAction(self.act_gate)
+        vm.addSeparator()
+        self.act_pin_ref = QtGui.QAction("Pin current reading as trace reference", self)
+        self.act_pin_ref.setShortcut("Ctrl+P")
+        self.act_pin_ref.setToolTip(
+            "Freeze the current tick/tock trace as a faint reference so the live trace "
+            "draws over it -- for before/after a regulation or a service. Triggering it "
+            "again with no reading clears the reference.")
+        self.act_pin_ref.triggered.connect(self._pin_reference)
+        vm.addAction(self.act_pin_ref)
+
+    def _pin_reference(self):
+        m = self._last_good if getattr(self, "_last_good", None) is not None else self.last
+        if self._ref_m is not None and (m is None or not m.ok):
+            self._ref_m = None
+        elif m is not None and m.ok:
+            self._ref_m = m
+        self._draw_ref_trace()
+        if self._ref_m is None:
+            self.status.showMessage("Trace reference cleared", 4000)
+        else:
+            self.status.showMessage(
+                f"Pinned reference: {self._ref_m.rate:+.1f} s/d, "
+                f"{self._ref_m.amplitude:.0f} deg, {self._ref_m.beat_error:.2f} ms", 6000)
+
+    def _draw_ref_trace(self):
+        m = self._ref_m
+        if m is None:
+            self.s_tick_ref.setData([], [])
+            self.s_tock_ref.setData([], [])
+            return
+        xt, yt, xk, yk = trace_points(m, m.nominal_bph or m.detected_bph,
+                                      float(self.spn_trace.value()))
+        self.s_tick_ref.setData(xt, yt)
+        self.s_tock_ref.setData(xk, yk)
 
     def _build_header(self):
         bar = QtWidgets.QFrame()
@@ -3044,11 +3078,14 @@ alongside the application.</p>
         self.p_trace.setLabel("left", "elapsed", units="s")
         self.p_trace.showGrid(x=True, y=True, alpha=0.25)
         self.p_trace.invertY(True)
+        self.s_tick_ref = pg.ScatterPlotItem(size=4, brush=pg.mkBrush((90, 163, 255, 70)), pen=None)
+        self.s_tock_ref = pg.ScatterPlotItem(size=4, brush=pg.mkBrush((255, 157, 77, 70)), pen=None)
         self.s_tick = pg.ScatterPlotItem(size=4, brush=pg.mkBrush(TICK_C), pen=None)
         self.s_tock = pg.ScatterPlotItem(size=4, brush=pg.mkBrush(TOCK_C), pen=None)
-        self.p_trace.addItem(self.s_tick)
-        self.p_trace.addItem(self.s_tock)
+        for it in (self.s_tick_ref, self.s_tock_ref, self.s_tick, self.s_tock):
+            self.p_trace.addItem(it)
         plots.addWidget(self.p_trace)
+        self._ref_m = None
 
         right = QtWidgets.QSplitter(QtCore.Qt.Vertical)
 
@@ -4192,6 +4229,8 @@ alongside the application.</p>
                                       float(self.spn_trace.value()))
         self.s_tick.setData(xt, yt)
         self.s_tock.setData(xk, yk)
+        if self._ref_m is not None:
+            self._draw_ref_trace()
         half = self.spn_trace.value() / 2
         self.p_trace.setXRange(-half, half, padding=0.02)
         if self._wave_mode != "Mic":
@@ -4221,8 +4260,21 @@ alongside the application.</p>
             self.r_be.set("--" if m.beat_error != m.beat_error else f"{m.beat_error:.2f}",
                           "#ff5d5d" if m.beat_error > 1.2 else
                           ("#ffb648" if m.beat_error > 0.6 else "#57d38c"))
+            self.r_be.u.setText("milliseconds")
             self.r_bph.set(str(m.detected_bph),
                            "#ff5d5d" if mismatch else ("#e8eef7" if good else "#ffb648"))
+
+            if self._ref_m is not None:
+                r = self._ref_m
+                if m.rate == m.rate and r.rate == r.rate:
+                    self.r_rate.u.setText(self.r_rate.u.text() +
+                                          f"   vs ref {m.rate - r.rate:+.1f}")
+                if m.amplitude == m.amplitude and r.amplitude == r.amplitude:
+                    self.r_amp.u.setText(self.r_amp.u.text() +
+                                         f"   vs ref {m.amplitude - r.amplitude:+.0f}")
+                if m.beat_error == m.beat_error and r.beat_error == r.beat_error:
+                    self.r_be.u.setText(self.r_be.u.text() +
+                                        f"   vs ref {m.beat_error - r.beat_error:+.2f}")
 
             if m.rate == m.rate and self._listen_t0 is not None:
                 el = time.time() - self._listen_t0
