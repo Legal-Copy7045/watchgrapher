@@ -776,6 +776,17 @@ window and sub-noise threshold against the selected input device; picking that
 device again loads them. A piezo disc and an open-air microphone want very
 different bands, and this remembers each.
 
+**Phone / browser pickup.** Pick "Phone / browser pickup (over Wi-Fi)" as the
+input device and press Start. The app runs a small web server on the local
+network and shows a URL; open it on a phone (or any laptop) on the same Wi-Fi,
+tap Start, and its microphone streams straight into the same buffer a USB mic
+would feed. No app to install. The page offers two transports: **PCM** over a
+WebSocket, which needs nothing and works everywhere, and **WebRTC**, steadier
+on a marginal link but only available if `aiortc` is installed on the machine
+running WatchGrapher. The server only ever receives audio, and nothing leaves
+the local network. Keep the phone screen awake and its mic close to the
+movement; a phone mic is fine for rate and beat error, marginal for amplitude.
+
 **Microphone response calibration** (Tools menu) plays a 4-second sine sweep
 out the default output and measures what the pickup returns, showing where it
 rolls off. It captures the whole chain -- speaker, room, mic -- so it is

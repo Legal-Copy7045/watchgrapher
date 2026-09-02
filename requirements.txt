@@ -3,3 +3,7 @@ scipy>=1.10
 sounddevice>=0.4.6
 PySide6-Essentials>=6.11
 pyqtgraph>=0.13
+
+# Optional: WebRTC transport for the phone/browser pickup. The PCM (WebSocket)
+# transport works without it. `pip install aiortc`
+# aiortc>=1.6
