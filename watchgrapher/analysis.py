@@ -695,6 +695,224 @@ def reserve_analytics(samples, iso_model: str = "linear") -> ReserveStats:
     return st
 
 
+# --------------------------------------------------------------------------
+# Power-reserve forecast -- projects full runtime, sharpening as the run goes
+# --------------------------------------------------------------------------
+
+@dataclass
+class ReserveForecast:
+    ready: bool = False
+    full_hours: float = float("nan")       # projected time to `stop_deg`
+    low: float = float("nan")              # rough lower / upper bound
+    high: float = float("nan")
+    stop_deg: float = 160.0
+    method: str = ""                       # "quadratic" | "linear (tail)"
+    curve_h: "np.ndarray" = field(default_factory=lambda: np.array([]))
+    curve_deg: "np.ndarray" = field(default_factory=lambda: np.array([]))
+    note: str = ""
+
+
+def reserve_forecast(samples, stop_deg: float = 160.0,
+                     min_points: int = 6, min_hours: float = 1.0) -> ReserveForecast:
+    """
+    From a power-reserve run in progress, project when amplitude will reach
+    `stop_deg` -- the level below which the watch keeps poor time or stops.
+
+    Fits a robust quadratic to amplitude vs elapsed hours (the decay
+    accelerates as torque falls, so a straight line under-reads the runtime
+    early on). Falls back to a straight line through the last 40% of the run
+    if the quadratic curls the wrong way. Re-run it as samples arrive: more
+    data, and especially data further down the decay, tightens the estimate.
+    """
+    fc = ReserveForecast(stop_deg=float(stop_deg))
+    a = np.asarray(list(samples), dtype=float)
+    if a.ndim != 2 or a.shape[0] < min_points:
+        return fc
+    t = a[:, 0] / 3600.0
+    amp = a[:, 2]
+    ok = np.isfinite(t) & np.isfinite(amp)
+    t, amp = t[ok], amp[ok]
+    if t.size < min_points or float(t[-1] - t[0]) < min_hours:
+        return fc
+    if float(amp[0] - amp.min()) < 3.0:
+        fc.note = "amplitude has not fallen enough yet to project a runtime."
+        return fc
+
+    def _root(coef, target, after):
+        c = list(coef)
+        c[-1] -= target
+        r = np.roots(c)
+        r = [float(x.real) for x in r if abs(x.imag) < 1e-6 and x.real > after]
+        return min(r) if r else None
+
+    full = None
+    method = ""
+    coef2, _ = _robust_polyfit(t, amp, 2)
+    if coef2[0] < 0:               # opens downward -- decay accelerating, good
+        full = _root(coef2, stop_deg, t[-1])
+        method = "quadratic"
+    if full is None:
+        tail = t >= (t[-1] - max(1.0, (t[-1] - t[0]) * 0.4))
+        if tail.sum() >= 3:
+            sl, ic = _polyfit(t[tail], amp[tail], 1)
+            if sl < -1e-3:
+                full = (stop_deg - ic) / sl
+                method = "linear (tail)"
+    if full is None or full <= t[-1] or full > t[-1] + 240.0:
+        fc.note = "decay is still too shallow to project -- keep the run going."
+        return fc
+
+    # bound it: refit on the first 80% and see how far the estimate moves
+    lo = hi = full
+    k = max(min_points, int(t.size * 0.8))
+    if k < t.size:
+        c_early, _ = _robust_polyfit(t[:k], amp[:k], 2)
+        early = _root(c_early, stop_deg, t[k - 1]) if c_early[0] < 0 else None
+        if early and early > t[-1]:
+            lo, hi = min(full, early), max(full, early)
+    if method == "quadratic":
+        plot_coef = coef2
+        resid = float(np.std(amp - np.polyval(coef2, t)))
+    else:
+        tail = t >= (t[-1] - max(1.0, (t[-1] - t[0]) * 0.4))
+        plot_coef = _polyfit(t[tail], amp[tail], 1)
+        resid = 0.0
+    pad = max(1.0, 0.08 * full, resid * 0.1)
+    fc.ready = True
+    fc.full_hours = float(full)
+    fc.low = float(max(t[-1], lo - pad))
+    fc.high = float(hi + pad)
+    fc.method = method
+    grid = np.linspace(float(t[0]), float(full), 60)
+    fc.curve_h = grid
+    fc.curve_deg = np.polyval(plot_coef, grid)
+    fc.note = (f"projected to {stop_deg:.0f} deg at ~{full:.1f} h "
+               f"({fc.low:.1f}-{fc.high:.1f}), {method} fit on {t.size} points.")
+    return fc
+
+
+# --------------------------------------------------------------------------
+# Escapement efficiency (impulse fraction)
+# --------------------------------------------------------------------------
+
+@dataclass
+class EscapementMetrics:
+    impulse_fraction: float = float("nan")   # lift angle as a % of the full swing
+    free_arc_deg: float = float("nan")       # degrees of unpowered swing per beat
+    rating: str = ""                         # excellent | good | fair | poor
+    note: str = ""
+
+
+def escapement_metrics(amplitude: float, lift_angle: float) -> EscapementMetrics:
+    """
+    The impulse fraction: the balance is pushed through the lift angle and
+    swings free for the rest of its arc. lift / (2*amplitude) is the fraction
+    of each swing under power. A healthy watch runs mostly free -- ~9-11%.
+    A high fraction means low amplitude: the escapement is doing more of the
+    work, which is exactly when rate stops holding across positions and wind.
+    """
+    em = EscapementMetrics()
+    if not (np.isfinite(amplitude) and amplitude > 0 and lift_angle > 0):
+        return em
+    frac = lift_angle / (2.0 * amplitude) * 100.0
+    em.impulse_fraction = float(frac)
+    em.free_arc_deg = float(2.0 * amplitude - lift_angle)
+    if frac < 11.0:
+        em.rating = "excellent"
+        em.note = ("The balance is running almost entirely free; the escapement is "
+                   "only topping up the losses. This is what a freshly serviced "
+                   "movement at healthy amplitude looks like.")
+    elif frac < 14.0:
+        em.rating = "good"
+        em.note = "Normal. The escapement's share of the swing is modest."
+    elif frac < 18.0:
+        em.rating = "fair"
+        em.note = ("Amplitude is low enough that the escapement is working a "
+                   "noticeable fraction of every swing. Expect the rate to drift "
+                   "more with position and as the mainspring runs down.")
+    else:
+        em.rating = "poor"
+        em.note = ("The escapement is carrying much of the arc. Rate and positional "
+                   "stability will be unreliable until amplitude is restored -- this "
+                   "is a service symptom, not a regulation one.")
+    return em
+
+
+# --------------------------------------------------------------------------
+# Long-term rate stability across a watch's whole test history
+# --------------------------------------------------------------------------
+
+@dataclass
+class HistoryStability:
+    n: int = 0
+    span_days: float = 0.0
+    stdev: float = float("nan")            # run-to-run rate scatter, s/day
+    taus: list = field(default_factory=list)     # averaging length in runs
+    dev: list = field(default_factory=list)      # overlapping deviation at each tau
+    floor: float = float("nan")           # where the curve levels off, s/day
+    verdict: str = ""
+
+
+def history_stability(series) -> HistoryStability:
+    """
+    `series`: [(timestamp_or_datetime, mean_rate), ...] across a watch's runs.
+
+    Overlapping Allan-style deviation keyed to RUN COUNT rather than seconds,
+    because the runs are sparse and irregular. If the deviation keeps falling
+    as you average more runs, the scatter is measurement noise and the watch's
+    true rate is steady. If it flattens, that floor is how much the rate itself
+    wanders between sessions -- no amount of averaging pins it down tighter.
+    """
+    hs = HistoryStability()
+    rows = []
+    for ts, rate in series:
+        try:
+            t = ts.timestamp() if hasattr(ts, "timestamp") else float(ts)
+        except (TypeError, ValueError):
+            continue
+        if rate == rate:
+            rows.append((t, float(rate)))
+    rows.sort()
+    hs.n = len(rows)
+    if hs.n < 2:
+        hs.verdict = "Two or more runs are needed."
+        return hs
+    y = np.array([r for _, r in rows])
+    hs.span_days = (rows[-1][0] - rows[0][0]) / 86400.0
+    hs.stdev = float(np.std(y, ddof=1))
+    if hs.n < 5:
+        hs.verdict = (f"{hs.n} runs over {hs.span_days:.0f} days; run-to-run scatter "
+                      f"{hs.stdev:.1f} s/day. Five or more runs unlock the stability curve.")
+        return hs
+    csum = np.concatenate([[0.0], np.cumsum(y)])
+    for m in (1, 2, 3, 4, 6, 8, 12):
+        if m > (hs.n - 1) // 2:
+            break
+        block = (csum[m:] - csum[:-m]) / m
+        d = block[m:] - block[:-m]
+        if d.size < 2:
+            break
+        hs.taus.append(m)
+        hs.dev.append(float(np.sqrt(np.mean(d ** 2) / 2.0)))
+    if len(hs.dev) >= 2:
+        hs.floor = min(hs.dev)
+        drop = hs.dev[0] - hs.dev[-1]
+        if hs.dev[-1] <= 0.4 * hs.dev[0]:
+            hs.verdict = (f"{hs.n} runs over {hs.span_days:.0f} days. The stability "
+                          f"curve keeps falling ({hs.dev[0]:.1f} -> {hs.dev[-1]:.1f} "
+                          f"s/day as runs are averaged) -- the scatter is measurement "
+                          f"noise and the underlying rate is steady.")
+        else:
+            hs.verdict = (f"{hs.n} runs over {hs.span_days:.0f} days. The stability "
+                          f"curve flattens near {hs.floor:.1f} s/day -- the watch's "
+                          f"rate genuinely wanders that much between sessions, "
+                          f"whatever the regulator is set to.")
+    else:
+        hs.verdict = (f"{hs.n} runs over {hs.span_days:.0f} days; scatter "
+                      f"{hs.stdev:.1f} s/day.")
+    return hs
+
+
 def tuning_score(m: Measurement) -> float:
     """
     How trustworthy does this settings combination look?
