@@ -3568,6 +3568,15 @@ alongside the application.</p>
             row.addWidget(b)
         left.addLayout(row)
 
+        row2 = QtWidgets.QHBoxLayout()
+        b_imp = QtWidgets.QPushButton("Import CSV...")
+        b_imp.clicked.connect(self._import_watches_csv)
+        b_tpl = QtWidgets.QPushButton("Save CSV template...")
+        b_tpl.clicked.connect(self._save_csv_template)
+        row2.addWidget(b_imp)
+        row2.addWidget(b_tpl)
+        left.addLayout(row2)
+
         self.btn_save_test = QtWidgets.QPushButton("Save current run to this watch")
         self.btn_save_test.setMinimumHeight(32)
         self.btn_save_test.setStyleSheet(
@@ -6844,6 +6853,36 @@ alongside the application.</p>
             w.photo = self.collection.store_photo(w.id, photo)
         self.collection.save()
         self._refresh_watches(w.id)
+
+    def _save_csv_template(self):
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save CSV template", os.path.join(REPORT_DIR, "watches_template.csv"),
+            "CSV (*.csv)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8", newline="") as fh:
+                fh.write(coll.CSV_TEMPLATE)
+        except OSError as e:
+            QtWidgets.QMessageBox.warning(self, "Template", str(e))
+            return
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path))
+        self.status.showMessage(
+            "Template saved. Fill in a row per watch; caliber_key is optional -- "
+            "the catalogue resolves it from the reference.", 9000)
+
+    def _import_watches_csv(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Import watches from CSV", "", "CSV (*.csv);;All files (*)")
+        if not path:
+            return
+        added, skipped, errors = coll.import_csv(self.collection, path)
+        self._refresh_watches()
+        msg = f"Imported {added} watch(es); skipped {skipped} (blank or duplicate)."
+        if errors:
+            msg += "\n\nProblems:\n" + "\n".join(errors[:10])
+        (QtWidgets.QMessageBox.warning if errors else QtWidgets.QMessageBox.information)(
+            self, "CSV import", msg)
 
     def _watch_delete(self):
         w = self._current_watch()

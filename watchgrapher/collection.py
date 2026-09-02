@@ -14,6 +14,7 @@ years.
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import shutil
@@ -241,6 +242,80 @@ def _pick(d: dict, cls) -> dict:
     """Only the keys `cls` actually declares -- forward-compatible loading."""
     fields = set(cls.__dataclass_fields__)
     return {k: v for k, v in d.items() if k in fields}
+
+
+CSV_COLUMNS = [
+    "brand", "model", "reference", "nickname", "serial", "movement_serial",
+    "caliber_key", "material", "bezel", "crystal", "case_size_mm",
+    "water_resistance", "bracelet", "production_year", "purchase_date",
+    "purchase_price", "purchase_currency", "purchase_condition", "purchased_from",
+    "last_service", "service_interval_years", "target_rate", "tags", "notes",
+]
+
+CSV_TEMPLATE = (
+    ",".join(CSV_COLUMNS) + "\n"
+    "Rolex,Submariner,124060,,,,rolex_3230,Oystersteel,Black ceramic,Sapphire,"
+    "41mm,300 m,Oyster,2021,,,GBP,,,,5,+2,\"daily, diver\",No-date Sub\n"
+    "Omega,Speedmaster Professional,310.30.42.50.01.001,Moonwatch,,,omega_1861,"
+    "Stainless steel,Tachymeter,Hesalite,42mm,50 m,,2022,,,GBP,,,,,,\"chrono\",\n"
+)
+
+
+def import_csv(collection, path):
+    """
+    Merge watches from a CSV. Header row must name the columns (see
+    CSV_COLUMNS); order does not matter and unknown columns are ignored.
+    A row with neither brand nor model is skipped. If caliber_key is blank the
+    catalogue is asked to resolve it from the reference or brand+model.
+
+    Returns (added, skipped, errors) -- errors is a list of "row N: message".
+    """
+    added = skipped = 0
+    errors = []
+    try:
+        fh = open(path, newline="", encoding="utf-8-sig")
+    except OSError as e:
+        return 0, 0, [str(e)]
+    with fh:
+        rows = list(csv.DictReader(fh))
+    field_names = set(Watch.__dataclass_fields__)
+    have = {(w.brand.lower().strip(), w.model.lower().strip(),
+             w.reference.lower().strip()) for w in collection.watches.values()}
+    for i, raw in enumerate(rows, start=2):
+        row = {(k or "").strip().lower().replace(" ", "_"): (v or "").strip()
+               for k, v in raw.items() if k}
+        if not row.get("brand") and not row.get("model"):
+            skipped += 1
+            continue
+        key = (row.get("brand", "").lower(), row.get("model", "").lower(),
+               row.get("reference", "").lower())
+        if key in have:
+            skipped += 1
+            continue
+        data = {k: v for k, v in row.items() if k in field_names and v != ""}
+        data["tags"] = [t.strip() for t in row.get("tags", "").split(",") if t.strip()]
+        if not data.get("caliber_key"):
+            try:
+                from . import catalog
+                hit = (catalog.lookup(row.get("reference", ""), row.get("brand", ""))
+                       or (catalog.search(f"{row.get('brand','')} {row.get('model','')}")
+                           or [None])[0])
+                if hit and getattr(hit, "caliber_key", ""):
+                    data["caliber_key"] = hit.caliber_key
+            except Exception:
+                pass
+        try:
+            w = Watch(**data)
+        except TypeError as e:
+            errors.append(f"row {i}: {e}")
+            continue
+        w.id = uuid.uuid4().hex[:12]
+        collection.watches[w.id] = w
+        have.add(key)
+        added += 1
+    if added:
+        collection.save()
+    return added, skipped, errors
 
 
 def _caliber_text(w) -> str:
