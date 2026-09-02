@@ -516,8 +516,14 @@ class WatchEditor(QtWidgets.QDialog):
                 self.lbl_photo.setPixmap(pm.scaledToHeight(
                     148, QtCore.Qt.SmoothTransformation))
                 return
-        self.lbl_photo.setText("No photo")
-        self.lbl_photo.setPixmap(QtGui.QPixmap())
+        pm = _schematic_pixmap(self.watch, 148) if getattr(self, "watch", None) else None
+        if pm is not None and not pm.isNull():
+            self.lbl_photo.setPixmap(pm)
+            self.lbl_photo.setToolTip("Schematic from the reference details -- "
+                                      "add your own photo above")
+        else:
+            self.lbl_photo.setText("No photo")
+            self.lbl_photo.setPixmap(QtGui.QPixmap())
 
     def result_watch(self):
         w = self.watch
@@ -1776,6 +1782,31 @@ def _qr_pixmap(text, box=6, dark="#0d1013", light="#ffffff"):
                 p.drawRect(c * box, r * box, box, box)
     p.end()
     return QtGui.QPixmap.fromImage(img)
+
+
+def _schematic_pixmap(obj, px):
+    """
+    A square px-by-px schematic illustration of `obj` (a Watch or a catalogue
+    entry -- anything with brand/model/material/... attributes), rendered on a
+    white ground. Used wherever there is no user photo. Returns None on failure.
+    """
+    try:
+        from PySide6 import QtSvg
+        from . import watchart
+        svg = watchart.watch_svg_for(obj, size=max(64, int(px))).encode("utf-8")
+        r = QtSvg.QSvgRenderer(QtCore.QByteArray(svg))
+        dpr = getattr(_schematic_pixmap, "_dpr", 1.0)
+        n = max(1, int(round(px * dpr)))
+        img = QtGui.QImage(n, n, QtGui.QImage.Format_ARGB32)
+        img.fill(QtGui.QColor("white"))
+        p = QtGui.QPainter(img)
+        r.render(p)
+        p.end()
+        pm = QtGui.QPixmap.fromImage(img)
+        pm.setDevicePixelRatio(dpr)
+        return pm
+    except Exception:
+        return None
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -6566,20 +6597,24 @@ alongside the application.</p>
                 f"Testing:  {self.cmb_watch.currentText()}"
                 if self.cmb_watch.currentData() else "No watch selected")
 
-    def _list_thumb(self, path, px):
+    def _list_thumb(self, path, px, fallback=None):
         """
         A fixed px-by-px thumbnail: the photo scaled to fit without distortion
         and centred on a white square, so the list reads as an even column
-        whatever shape the source images are. A watch with no photo gets the
-        same white square, so the text still lines up.
+        whatever shape the source images are. With no photo, `fallback` (a
+        Watch) gets a schematic illustration; failing that, a plain white
+        square so the text still lines up.
         """
         dpr = self.devicePixelRatioF() if hasattr(self, "devicePixelRatioF") else 1.0
         dpr = dpr or 1.0
+        _schematic_pixmap._dpr = dpr
         n = max(1, int(round(px * dpr)))
         canvas = QtGui.QPixmap(n, n)
         canvas.setDevicePixelRatio(dpr)
         canvas.fill(QtGui.QColor("white"))
         src = QtGui.QPixmap(path) if path else QtGui.QPixmap()
+        if src.isNull() and fallback is not None:
+            src = _schematic_pixmap(fallback, px) or QtGui.QPixmap()
         if not src.isNull():
             scaled = src.scaled(n, n, QtCore.Qt.KeepAspectRatio,
                                 QtCore.Qt.SmoothTransformation)
@@ -6599,7 +6634,8 @@ alongside the application.</p>
                    + (f", last {sorted(h.when for h in w.history)[-1][:10]}" if n else
                       " -- never measured"))
             it = QtWidgets.QListWidgetItem(f"{w.label}\n{sub}")
-            it.setIcon(QtGui.QIcon(self._list_thumb(self.collection.photo_path(w), px)))
+            it.setIcon(QtGui.QIcon(self._list_thumb(
+                self.collection.photo_path(w), px, fallback=w)))
             self.lst_watches.addItem(it)
             self._watch_ids.append(w.id)
         self.lst_watches.blockSignals(False)
@@ -6682,8 +6718,10 @@ alongside the application.</p>
             return
 
         p = self.collection.photo_path(w)
-        if p:
-            self.lbl_wphoto.setPixmap(self._list_thumb(p, 148))
+        thumb = self._list_thumb(p, 148, fallback=w)
+        if not thumb.isNull():
+            self.lbl_wphoto.setPixmap(thumb)
+            self.lbl_wphoto.setToolTip("" if p else "Schematic -- add a photo with Edit")
         else:
             self.lbl_wphoto.setPixmap(QtGui.QPixmap())
             self.lbl_wphoto.setText("no photo")
