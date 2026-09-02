@@ -319,14 +319,16 @@ def _service_section(watch, doc_dir=""):
         out.append("<p class='sub'>Total recorded spend: "
                    + ", ".join(f"{v:.0f} {k}" for k, v in totals.items()) + "</p>")
     out.append("<table><tr><th>Date</th><th>Type</th><th>By</th><th class='n'>Cost</th>"
-               "<th>Warranty</th><th>Notes</th></tr>")
+               "<th>Warranty</th><th>Water resistance</th><th>Notes</th></tr>")
     for s in svcs:
         cost = f"{s.cost} {s.currency}" if s.cost else "--"
         warr = f"{s.warranty_months} mo" if s.warranty_months else ""
         loc = f" &mdash; {e(s.location)}" if s.location else ""
+        wr = getattr(s, "wr_summary", "") or "--"
+        wr_extra = f" @ {e(s.wr_pressure)}" if getattr(s, "wr_pressure", "") else ""
         out.append(f"<tr><td>{e(s.when)}</td><td>{e(s.kind)}</td>"
                    f"<td>{e(s.performed_by)}{loc}</td><td class='n'>{e(cost)}</td>"
-                   f"<td>{e(warr)}</td><td>{e(s.notes)}</td></tr>")
+                   f"<td>{e(warr)}</td><td>{e(wr)}{wr_extra}</td><td>{e(s.notes)}</td></tr>")
     out.append("</table>")
     for s in svcs:
         imgs = [_embed_image(os.path.join(doc_dir, d)) for d in s.documents
