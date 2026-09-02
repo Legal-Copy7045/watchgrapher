@@ -615,6 +615,14 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
 <p id="desk">connecting...</p>
 
 <div class="row"><select id="watch"><option value="">(no watch)</option></select></div>
+<div class="row"><select id="dur">
+  <option value="0">Open-ended</option>
+  <option value="20">Timed 20 s</option>
+  <option value="30" selected>Timed 30 s</option>
+  <option value="60">Timed 60 s</option>
+  <option value="120">Timed 2 min</option>
+  <option value="300">Timed 5 min</option>
+</select></div>
 
 <div class="grid">
   <div class="tile"><div class="k">RATE s/d</div><div class="v" id="t_rate">--</div></div>
@@ -623,9 +631,13 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
   <div class="tile"><div class="k">BEAT RATE</div><div class="v" id="t_bph">--</div></div>
 </div>
 
+<div id="prog" style="max-width:340px;margin:6px auto;color:#8a94a4;font-size:13px;
+     min-height:16px"></div>
 <div id="meter"><div id="bar"></div></div>
 <div id="clip"></div>
 <p id="status">idle</p>
+<video id="nosleep" playsinline muted loop style="position:fixed;width:1px;height:1px;
+  opacity:0;pointer-events:none"></video>
 
 <button id="go">Start test</button>
 <button id="stop" class="stop" disabled>Stop</button>
@@ -656,12 +668,32 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
 
 <script>
 const TOKEN="__TOKEN__";
-let ac,node,src,gainNode,dest,stream,ws,pc,wake,running=false,clips=0,retry=0,poll=null;
+let ac,node,src,gainNode,dest,stream,ws,pc,wake,running=false,clips=0,retry=0,poll=null,
+    runSeen=false;
 const $=id=>document.getElementById(id);
-const status=$("status"),desk=$("desk"),bar=$("bar"),clip=$("clip"),
+const status=$("status"),desk=$("desk"),bar=$("bar"),clip=$("clip"),prog=$("prog"),
       gainEl=$("gain"),gval=$("gval"),goBtn=$("go"),stopBtn=$("stop"),
-      saveBtn=$("save"),watchEl=$("watch"),
+      saveBtn=$("save"),watchEl=$("watch"),durEl=$("dur"),nosleep=$("nosleep"),
       finished=$("finished"),fsum=$("fsum"),fsave=$("fsave"),fdiscard=$("fdiscard");
+
+// keep the screen awake: Wake Lock where supported, plus a playing muted video
+// fed from a canvas stream (which holds the screen on iOS Safari too).
+async function keepAwake(){
+  try{ if('wakeLock' in navigator){ wake=await navigator.wakeLock.request('screen'); } }catch(e){}
+  try{
+    if(!nosleep.srcObject){
+      const c=document.createElement('canvas'); c.width=c.height=2;
+      nosleep.srcObject=c.captureStream(1);
+    }
+    await nosleep.play();
+  }catch(e){}
+}
+function releaseAwake(){
+  try{ wake&&wake.release(); }catch(e){} wake=null;
+  try{ nosleep.pause();
+    if(nosleep.srcObject){ nosleep.srcObject.getTracks().forEach(t=>t.stop());
+      nosleep.srcObject=null; } }catch(e){}
+}
 fetch('/rtc-available').then(r=>r.json()).then(j=>{
   if(!j.aiortc){const o=$("rtcopt");o.disabled=true;o.parentNode.style.opacity=.4;
     o.parentNode.title='Start the app with aiortc installed for WebRTC';}
@@ -678,9 +710,6 @@ function meter(pk){
   bar.style.width=Math.min(100,pk*120)+'%';
   if(pk>=0.99){ clips++; clip.textContent='CLIP -- turn Boost down'; }
   else if(clips>0 && pk<0.6){ clips=Math.max(0,clips-1); if(clips===0) clip.textContent=''; }
-}
-async function keepAwake(){
-  try{ if('wakeLock' in navigator) wake=await navigator.wakeLock.request('screen'); }catch(e){}
 }
 document.addEventListener('visibilitychange',()=>{
   if(running && document.visibilityState==='visible') keepAwake();
@@ -704,8 +733,7 @@ async function refresh(){
   if(!s.device_is_net)
     desk.textContent='Desktop input is not set to the phone pickup -- choose it there.';
   else if(s.listening)
-    desk.textContent='desktop listening'+(s.watch?' -- '+s.watch:'')+
-      (s.elapsed?' -- '+Math.round(s.elapsed)+'s':'');
+    desk.textContent='desktop listening'+(s.watch?' -- '+s.watch:'');
   else
     desk.textContent='desktop idle'+(s.watch?' -- watch: '+s.watch:'');
   $("t_rate").textContent=(s.rate>0?'+':'')+fmt(s.rate,1);
@@ -714,6 +742,25 @@ async function refresh(){
   $("t_bph").textContent=s.bph||'--';
   saveBtn.disabled=!(running && s.have_reading && watchEl.value);
   if(s.last_save) status.textContent=s.last_save;
+
+  // progress / finished handling for the phone side
+  function mmss(x){ x=Math.max(0,Math.round(x)); return Math.floor(x/60)+':'+('0'+(x%60)).slice(-2); }
+  if(running && s.listening){
+    runSeen=true;
+    if(s.settling) prog.textContent='settling before the timed run...';
+    else if(s.run_len>0){
+      const e=s.run_elapsed||0;
+      prog.textContent='timed run  '+mmss(e)+' / '+mmss(s.run_len);
+      bar.style.width='';   // meter still shows audio level; progress is text
+    } else prog.textContent='open-ended -- tap Stop when steady  ('+mmss(s.elapsed||0)+')';
+  } else if(running && runSeen && !s.pending){
+    prog.textContent='';    // run ended on the desktop; wait for the summary
+  }
+  if(running && runSeen && !s.listening){
+    // the desktop run has ended (timed out or was stopped) -- tidy up locally
+    finishLocally();
+  }
+
   if(s.pending){
     finished.style.display='block';
     fsum.textContent=s.pending.summary||'';
@@ -740,8 +787,9 @@ async function start(){
     stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,
       noiseSuppression:false,autoGainControl:agc}});
   }catch(e){status.textContent='mic denied: '+e;return;}
-  running=true; clips=0; retry=0;
+  running=true; clips=0; retry=0; runSeen=false;
   goBtn.disabled=true; stopBtn.disabled=false;
+  finished.style.display='none'; status.textContent='starting...';
   keepAwake();
   ac=new (window.AudioContext||window.webkitAudioContext)();
   try{ await ac.resume(); }catch(e){}
@@ -750,9 +798,21 @@ async function start(){
   src.connect(gainNode);
   if(mode()==='rtc'){ await startRtc(); } else { startPcm(); }
   await cmd('select',{id:watchEl.value});
-  await cmd('start');
-  if(!poll) poll=setInterval(refresh,1000);
+  await cmd('start',{duration:parseInt(durEl.value,10)||0});
+  if(!poll) poll=setInterval(refresh,700);
   refresh();
+}
+
+// the desktop run has ended; stop the local mic but keep polling for the summary
+function finishLocally(){
+  if(!running) return;
+  running=false;
+  goBtn.disabled=false; stopBtn.disabled=true;
+  bar.style.width=0; clip.textContent=''; prog.textContent='';
+  status.textContent='run finished';
+  releaseAwake();
+  stopStreams();
+  if(poll){ clearInterval(poll); poll=null; }
 }
 
 function startPcm(){
@@ -822,10 +882,10 @@ function stopStreams(){
 async function stop(){
   running=false;
   goBtn.disabled=false; stopBtn.disabled=true; saveBtn.disabled=true;
-  bar.style.width=0; clip.textContent='';
+  bar.style.width=0; clip.textContent=''; prog.textContent='';
   if(status.textContent.indexOf('lost')<0 && status.textContent.indexOf('failed')<0)
     status.textContent='stopped';
-  try{ wake&&wake.release(); wake=null; }catch(e){}
+  releaseAwake();
   stopStreams();
   await cmd('stop');
   if(poll){ clearInterval(poll); poll=null; }
