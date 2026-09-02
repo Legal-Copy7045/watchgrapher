@@ -66,6 +66,9 @@ class TestRecord:
 SERVICE_KINDS = ["Full service", "Partial service", "Regulation only", "Repair",
                  "Warranty service", "Water resistance test", "Other"]
 
+DOCUMENT_KINDS = ["Warranty card", "Receipt / invoice", "Box & papers", "Manual",
+                  "Valuation", "Provenance", "Insurance", "Other"]
+
 
 @dataclass
 class ReserveRecord:
@@ -173,6 +176,9 @@ class Watch:
     # off_seconds is how far ahead (+) the watch read at `when`, having been set
     # to true time at `set_when`.
     wear_checks: List[dict] = field(default_factory=list)
+    # Document vault: [{file, kind, name, added, note}] -- warranty cards,
+    # receipts, box-and-papers photos, manuals, valuations, provenance.
+    documents: List[dict] = field(default_factory=list)
 
     @property
     def label(self) -> str:
@@ -311,12 +317,15 @@ class Collection:
             except OSError:
                 pass
         if w:
-            for s in w.services:
-                for doc in s.documents:
-                    try:
-                        os.remove(os.path.join(self.docs, doc))
-                    except OSError:
-                        pass
+            docs = [d for s in w.services for d in s.documents] + \
+                   [d.get("file", "") for d in w.documents]
+            for doc in docs:
+                if not doc:
+                    continue
+                try:
+                    os.remove(os.path.join(self.docs, doc))
+                except OSError:
+                    pass
         self.save()
 
     def sorted_watches(self) -> List[Watch]:

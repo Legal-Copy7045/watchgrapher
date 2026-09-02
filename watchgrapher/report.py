@@ -505,6 +505,15 @@ def build_watch_report(path, watch, caliber=None, trends=None, notes=None,
     p.append(_reserve_section(watch))
     p.append(_service_section(watch, doc_dir))
 
+    vault = getattr(watch, "documents", [])
+    if vault:
+        p.append("<h2>Documents on file</h2><table><tr><th>Kind</th><th>Name</th>"
+                 "<th>Added</th><th>Note</th></tr>")
+        for d in sorted(vault, key=lambda x: x.get("added", ""), reverse=True):
+            p.append(f"<tr><td>{e(d.get('kind',''))}</td><td>{e(d.get('name',''))}</td>"
+                     f"<td>{e(d.get('added','')[:10])}</td><td>{e(d.get('note',''))}</td></tr>")
+        p.append("</table>")
+
     if notes:
         p.append("<h2>Observations</h2>")
         for n in notes:

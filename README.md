@@ -537,6 +537,11 @@ systematic: the final digit is the case metal and the letter suffix is the
 bezel colour abbreviated in French. So 126619LB resolves to white gold with a
 blue bezel even though nobody wrote that row down.
 
+**Documents.** A per-watch vault in My Watches for warranty cards, receipts,
+box-and-papers photos, manuals, valuations and provenance -- tagged by kind
+with a note and date. Files are copied into the collection's `docs/` folder so
+the originals can move or be deleted, and they appear in the watch report.
+
 **Wrist rate.** A watch's bench rate and how it actually keeps time on the
 wrist are different numbers -- position mix, temperature and how much you wear
 it all move the real figure. The Sync tab's watch-drift tool (mark when you set
