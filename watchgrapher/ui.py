@@ -2816,6 +2816,29 @@ alongside the application.</p>
         wrl.addLayout(wearb)
         wtabs.addTab(wr, "Wrist rate")
 
+        # -- documents vault tab --
+        dv = QtWidgets.QWidget()
+        dvl = QtWidgets.QVBoxLayout(dv)
+        dvl.addWidget(QtWidgets.QLabel(
+            "Warranty cards, receipts, box-and-papers photos, manuals, valuations, "
+            "provenance. Files are copied into the collection so the original can move."))
+        self.tbl_docs = QtWidgets.QTableWidget(0, 4)
+        self.tbl_docs.setHorizontalHeaderLabels(["Kind", "Name", "Added", "Note"])
+        self.tbl_docs.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        self.tbl_docs.verticalHeader().setVisible(False)
+        self.tbl_docs.itemDoubleClicked.connect(lambda _=None: self._doc_open())
+        dvl.addWidget(self.tbl_docs, 1)
+        dvb = QtWidgets.QHBoxLayout()
+        for label, slot in (("Add document...", self._doc_add),
+                            ("Open", self._doc_open),
+                            ("Delete", self._doc_delete)):
+            b = QtWidgets.QPushButton(label)
+            b.clicked.connect(slot)
+            dvb.addWidget(b)
+        dvb.addStretch(1)
+        dvl.addLayout(dvb)
+        wtabs.addTab(dv, "Documents")
+
         right.addWidget(wtabs, 5)
 
         hb2 = QtWidgets.QHBoxLayout()
@@ -5676,6 +5699,74 @@ alongside the application.</p>
         self._fill_service_table(w)
         self._fill_reserve_table(w)
         self._fill_wear_table(w)
+        self._fill_docs_table(w)
+
+    def _fill_docs_table(self, w):
+        self._docs_watch_id = w.id
+        self.tbl_docs.setRowCount(0)
+        for d in sorted(w.documents, key=lambda x: x.get("added", ""), reverse=True):
+            r = self.tbl_docs.rowCount()
+            self.tbl_docs.insertRow(r)
+            for cix, v in enumerate([d.get("kind", ""), d.get("name", d.get("file", "")),
+                                     d.get("added", "")[:10], d.get("note", "")]):
+                self.tbl_docs.setItem(r, cix, QtWidgets.QTableWidgetItem(str(v)))
+
+    def _doc_add(self):
+        w = self._current_watch()
+        if not w:
+            return
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Add document", "",
+            "Documents & images (*.pdf *.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff "
+            "*.txt *.md *.doc *.docx)")
+        if not path:
+            return
+        kind, ok = QtWidgets.QInputDialog.getItem(
+            self, "Document kind", "What is this?", coll.DOCUMENT_KINDS, 0, False)
+        if not ok:
+            return
+        note, _ = QtWidgets.QInputDialog.getText(self, "Note", "Optional note:")
+        try:
+            stored = self.collection.store_document(w.id, path)
+        except OSError as e:
+            QtWidgets.QMessageBox.warning(self, "Documents", f"Could not copy: {e}")
+            return
+        w.documents.append({
+            "file": stored, "kind": kind, "name": os.path.basename(path),
+            "added": datetime.now().isoformat(timespec="seconds"), "note": note.strip()})
+        self.collection.save()
+        self._fill_docs_table(w)
+
+    def _doc_selected(self):
+        wid = getattr(self, "_docs_watch_id", None)
+        w = self.collection.watches.get(wid) if wid else None
+        r = self.tbl_docs.currentRow()
+        if not w or r < 0:
+            return None, None
+        docs = sorted(w.documents, key=lambda x: x.get("added", ""), reverse=True)
+        return (w, docs[r]) if r < len(docs) else (w, None)
+
+    def _doc_open(self):
+        _w, d = self._doc_selected()
+        if not d:
+            return
+        p = self.collection.document_path(d.get("file", ""))
+        if p:
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(p))
+
+    def _doc_delete(self):
+        w, d = self._doc_selected()
+        if not w or not d:
+            return
+        try:
+            p = self.collection.document_path(d.get("file", ""))
+            if p:
+                os.remove(p)
+        except OSError:
+            pass
+        w.documents = [x for x in w.documents if x is not d]
+        self.collection.save()
+        self._fill_docs_table(w)
 
     def _fill_wear_table(self, w):
         self.tbl_wear.setRowCount(0)
