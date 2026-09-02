@@ -631,6 +631,15 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
 <button id="stop" class="stop" disabled>Stop</button>
 <div class="row"><button id="save" class="sec" disabled>Save run to watch</button></div>
 
+<div id="finished" style="display:none;max-width:360px;margin:12px auto;padding:14px;
+     background:#1a1f27;border:1px solid #2a323e;border-radius:12px">
+  <div style="font-weight:700;margin-bottom:6px">Run finished</div>
+  <pre id="fsum" style="white-space:pre-wrap;text-align:left;color:#c8d0dc;
+       font-family:inherit;font-size:14px;margin:0 0 10px"></pre>
+  <button id="fsave" class="sec">Save to watch</button>
+  <button id="fdiscard" class="sec">Discard</button>
+</div>
+
 <details>
   <summary>Audio settings</summary>
   <div class="row">
@@ -651,7 +660,8 @@ let ac,node,src,gainNode,dest,stream,ws,pc,wake,running=false,clips=0,retry=0,po
 const $=id=>document.getElementById(id);
 const status=$("status"),desk=$("desk"),bar=$("bar"),clip=$("clip"),
       gainEl=$("gain"),gval=$("gval"),goBtn=$("go"),stopBtn=$("stop"),
-      saveBtn=$("save"),watchEl=$("watch");
+      saveBtn=$("save"),watchEl=$("watch"),
+      finished=$("finished"),fsum=$("fsum"),fsave=$("fsave"),fdiscard=$("fdiscard");
 fetch('/rtc-available').then(r=>r.json()).then(j=>{
   if(!j.aiortc){const o=$("rtcopt");o.disabled=true;o.parentNode.style.opacity=.4;
     o.parentNode.title='Start the app with aiortc installed for WebRTC';}
@@ -704,7 +714,18 @@ async function refresh(){
   $("t_bph").textContent=s.bph||'--';
   saveBtn.disabled=!(running && s.have_reading && watchEl.value);
   if(s.last_save) status.textContent=s.last_save;
+  if(s.pending){
+    finished.style.display='block';
+    fsum.textContent=s.pending.summary||'';
+    fsave.disabled=!(s.pending.have && watchEl.value);
+    fsave.style.opacity=fsave.disabled?.4:1;
+  } else {
+    finished.style.display='none';
+  }
 }
+fsave.onclick=async()=>{ fsave.disabled=true; await cmd('save_pending'); setTimeout(refresh,400); };
+fdiscard.onclick=async()=>{ await cmd('discard'); finished.style.display='none';
+  setTimeout(refresh,400); };
 
 async function start(){
   stopStreams();

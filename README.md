@@ -117,15 +117,20 @@ only moves to the next free port if something else is already using that one.
    The desktop applies its own auto-gain on top (subject to *View ->
    Auto-gain*). Leave **"Let the phone auto-level"** off unless the signal is
    hopeless -- it pumps and distorts amplitude.
-9. When the numbers are steady, tap **Save run to watch** -- it files the
-   reading into that watch's history on the desktop.
-10. Tap **Stop**. The server and the phone's connection stay up between runs,
-    so the next test is just Start test again. Everything shuts down when you
-    change the input device or close WatchGrapher.
+9. Tap **Stop** when the numbers are steady. Because the run was started from
+   the phone, the "what now" choice appears **on the phone**, not the desktop:
+   a *Run finished* panel with the summary and **Save to watch** / **Discard**.
+   Save files the reading into the chosen watch's history; Discard keeps
+   nothing. (Mid-run, the **Save run to watch** button files a reading without
+   stopping.)
+10. The server and the phone's connection stay up between runs, so the next
+    test is just Start test again. Everything shuts down when you change the
+    input device or close WatchGrapher.
 
 You can also drive it the other way: press Start on the desktop and the phone
-page just shows the live numbers and lets you save. The page reconnects on its
-own if the Wi-Fi blips or WatchGrapher restarts.
+page just shows the live numbers and lets you save. A desktop-started run
+prompts on the desktop as usual. The page reconnects on its own if the Wi-Fi
+blips or WatchGrapher restarts.
 
 **Security.** The remote commands (start, stop, select watch, save) carry a
 token that is baked into the page the server hands out, so a random device that
