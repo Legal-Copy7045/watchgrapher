@@ -853,8 +853,11 @@ class CrossCheckDialog(QtWidgets.QDialog):
     def _log(self, dr, da, db):
         import json
         path = os.path.join(APP_DIR, "crosschecks.json")
+        data = []
         try:
-            data = json.load(open(path)) if os.path.exists(path) else []
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as fh:
+                    data = json.load(fh)
         except Exception:
             data = []
         data.append({
@@ -864,9 +867,10 @@ class CrossCheckDialog(QtWidgets.QDialog):
             "app": [self.e_app_rate.value(), self.e_app_amp.value(), self.e_app_be.value()],
             "hw": [self.e_hw_rate.value(), self.e_hw_amp.value(), self.e_hw_be.value()],
             "delta": [round(dr, 2), round(da, 1), round(db, 3)]})
+        data = data[-200:]
         try:
-            with open(path, "w") as fh:
-                json.dump(data[-200:], fh, indent=2)
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
             if self.parent() and hasattr(self.parent(), "status"):
                 self.parent().status.showMessage(
                     f"Cross-check logged ({len(data)} on file)", 5000)
@@ -1791,6 +1795,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last = None
         self.readings = []
         self._rate_hist = []       # (elapsed_s, rate_spd) for the rate-history plot
+        self._allan_hist = []      # raw (undecimated) rate points for the Allan curve
         self._amp_hist = []        # (elapsed_s, amplitude_deg) -- right axis of the same plot
         self._be_hist = []         # (elapsed_s, beat_error_ms) for the diagnostics strip
         self._listen_t0 = None     # wall-clock start of the current listen session
@@ -2554,10 +2559,12 @@ class MainWindow(QtWidgets.QMainWindow):
             "\"connection is not private\" warning for the local self-signed certificate "
             "-- tap through it.</p>"
             f"<p>{crypto}<br>{rtc}</p>"
-            "<p>The server only ever <i>receives</i> audio and runs nothing from the "
-            "page. Remote commands carry a token baked into the page, so a device that "
-            "merely finds the URL cannot drive your session -- anyone who can load the "
-            "page on your LAN can. It holds the phone screen awake while a test runs.</p>"
+            "<p>The server binds only to this computer's LAN address, never all "
+            "interfaces. Your watch list, the live readings and every remote command "
+            "require a random token that is embedded in the page, so a scanner that "
+            "just hits the port gets nothing. The server only ever <i>receives</i> "
+            "audio and runs nothing from the page. It holds the phone screen awake "
+            "while a test runs.</p>"
             "</div>")
         info.setMaximumHeight(200)
         outer.addWidget(info)
@@ -5107,6 +5114,11 @@ alongside the application.</p>
         if on:
             self._phone_run = self._phone_starting
             self._phone_starting = False
+            if self._phone_run:
+                # A phone-started run must not inherit positions captured in an
+                # earlier desktop session -- that is how one run's data ends up
+                # filed against several watches.
+                self._end_session()
             dev = self.cmb_dev.currentData()
             try:
                 buf = max(60.0, self.spn_win.value() * 2,
@@ -5124,11 +5136,20 @@ alongside the application.</p>
                         snr_db=self.sim_snr.value())
                 elif dev == "NET":
                     nr = getattr(self, "_net_recorder", None)
-                    if nr is not None and nr.running and nr.samplerate != sr:
+                    pinned = self._net_server_pinned
+                    # Only rebuild a sample-rate-mismatched server if it is NOT
+                    # the pinned Phone Portal server -- tearing that down drifts
+                    # the port and breaks the phone's URL mid-session.
+                    if (nr is not None and nr.running
+                            and nr.samplerate != sr and not pinned):
                         nr.stop()
                         self._net_recorder = nr = None
                     self._net_fresh = nr is None or not nr.running
-                    nr = self._ensure_net_server(pinned=self._net_server_pinned)
+                    nr = self._ensure_net_server(pinned=pinned)
+                    if nr.samplerate != sr:
+                        self.status.showMessage(
+                            f"Phone pickup is running at {nr.samplerate} Hz -- "
+                            f"it keeps that rate while it is the input.", 8000)
                     if not self._net_fresh:
                         nr.clear()
                         nr.peak = 0.0
@@ -5151,10 +5172,14 @@ alongside the application.</p>
                 if got_port and got_port != self._settings_get("phone_port", 8477):
                     self._settings_set("phone_port", got_port)
                 self._refresh_phone_page()
-                if self._net_fresh and self.stack.currentIndex() != 4:
+                if (self._net_fresh and not self._phone_run
+                        and self.stack.currentIndex() != 4):
                     self._goto_page(4)          # show the QR / URL
                     self.status.showMessage(
                         "Phone pickup server started -- scan the QR on your phone.", 9000)
+                elif self._net_fresh and self._phone_run:
+                    self.status.showMessage(
+                        "Phone pickup server started for a remote run.", 9000)
                 elif not self._net_fresh:
                     self.status.showMessage(
                         f"Phone pickup running at {getattr(self.recorder, 'url', '')}", 9000)
@@ -5166,6 +5191,7 @@ alongside the application.</p>
             self._pending_buffer = 0
             self.worker.recorder = self.recorder
             self._rate_hist = []
+            self._allan_hist = []
             self._amp_hist = []
             self._be_hist = []
             self._listen_t0 = time.time()
@@ -5672,7 +5698,7 @@ alongside the application.</p>
 
     def _update_allan(self):
         """Rate stability curve from whatever rate history is on hand."""
-        src = self._rate_hist if len(self._rate_hist) >= 32 else []
+        src = self._allan_hist if len(self._allan_hist) >= 32 else []
         if not src:
             self.c_allan.setData([], [])
             self.c_allan_ref.setData([], [])
@@ -5797,6 +5823,12 @@ alongside the application.</p>
             if m.rate == m.rate and self._listen_t0 is not None:
                 el = time.time() - self._listen_t0
                 self._rate_hist.append((el, float(m.rate)))
+                # Allan deviation needs an evenly-sampled series -- feed it the
+                # raw (undecimated) rate points, not the age-thinned plot data,
+                # or its long-tau end is computed over interpolated gaps.
+                self._allan_hist.append((el, float(m.rate)))
+                if len(self._allan_hist) > 4000:
+                    self._allan_hist = self._allan_hist[-4000:]
                 self._rate_hist = self._decimate_rate_hist(self._rate_hist)
                 a = np.asarray(self._rate_hist, dtype=float)
                 self.c_hist.setData(a[:, 0] / 60.0, a[:, 1])
@@ -6770,13 +6802,31 @@ alongside the application.</p>
         docs = sorted(w.documents, key=lambda x: x.get("added", ""), reverse=True)
         return (w, docs[r]) if r < len(docs) else (w, None)
 
+    # Types we are happy to hand straight to the OS viewer. Anything else
+    # (.doc/.docx/.md/...) opens in an app that can run macros or scripts, so
+    # confirm first -- the file may have come from a repair shop by email.
+    _SAFE_DOC_EXT = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp",
+                     ".tif", ".tiff", ".gif", ".txt"}
+
+    def _open_document(self, path):
+        if not path or not os.path.exists(path):
+            QtWidgets.QMessageBox.warning(self, "Documents", "That file is missing.")
+            return
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in self._SAFE_DOC_EXT:
+            if QtWidgets.QMessageBox.question(
+                    self, "Open document",
+                    f"Open {os.path.basename(path)} in its default application? "
+                    f"Only do this if you trust where the file came from."
+                    ) != QtWidgets.QMessageBox.Yes:
+                return
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path))
+
     def _doc_open(self):
         _w, d = self._doc_selected()
         if not d:
             return
-        p = self.collection.document_path(d.get("file", ""))
-        if p:
-            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(p))
+        self._open_document(self.collection.document_path(d.get("file", "")))
 
     def _doc_delete(self):
         w, d = self._doc_selected()
@@ -7092,11 +7142,7 @@ alongside the application.</p>
                 self, "Open document", "Attachment:", s.documents, 0, False)
             if not ok:
                 return
-        p = self.collection.document_path(name)
-        if p:
-            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(p))
-        else:
-            QtWidgets.QMessageBox.warning(self, "Documents", "That file is missing.")
+        self._open_document(self.collection.document_path(name))
 
     def _portfolio_report(self):
         if not self.collection.watches:
@@ -7616,6 +7662,18 @@ alongside the application.</p>
         self._on_result(m)
         self.status.showMessage(f"{os.path.basename(path)}: {m.message}", 8000)
 
+    def changeEvent(self, e):
+        # In "system" theme mode the palette is resolved at startup. If the OS
+        # flips light/dark while running, we can't recolour live, but we can say
+        # so rather than leaving a now-mismatched theme silently in place.
+        if (e.type() == QtCore.QEvent.ApplicationPaletteChange
+                and _T.MODE == "system" and not getattr(self, "_closing", False)
+                and hasattr(self, "status")):
+            if _T._system_is_light() != _T.IS_LIGHT:
+                self.status.showMessage(
+                    "System switched theme -- restart WatchGrapher to match.", 0)
+        super().changeEvent(e)
+
     def closeEvent(self, e):
         self._closing = True
         w = getattr(self, "_clock_cal_worker", None)
@@ -7646,14 +7704,21 @@ def _install_theme(app):
     """Re-colour every inline stylesheet by mapping the dark palette to the
     active one. Identity in dark mode, so it costs nothing there."""
     subs = {_T.DARK[k]: _T.P[k] for k in _T.DARK if _T.DARK[k] != _T.P[k]}
+    _orig = getattr(QtWidgets.QWidget.setStyleSheet, "_wg_orig",
+                    QtWidgets.QWidget.setStyleSheet)
     if subs:
-        _orig = QtWidgets.QWidget.setStyleSheet
+        # Match each dark hex only as a whole colour token -- not as a prefix of
+        # a longer hex -- so a gradient stop or an id selector can't be mangled.
+        import re as _re
+        rx = _re.compile("(" + "|".join(_re.escape(h) for h in subs) +
+                         r")(?![0-9a-fA-F])")
 
         def _themed(self, s):
-            for a, b in subs.items():
-                s = s.replace(a, b)
-            _orig(self, s)
+            _orig(self, rx.sub(lambda m: subs[m.group(1)], s) if s else s)
+        _themed._wg_orig = _orig
         QtWidgets.QWidget.setStyleSheet = _themed
+    else:
+        QtWidgets.QWidget.setStyleSheet = _orig      # light->dark: undo any patch
 
     try:
         pg.setConfigOption("background", _T.get("PLOT_BG"))
