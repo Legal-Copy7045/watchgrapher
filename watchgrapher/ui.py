@@ -1819,6 +1819,219 @@ def _qr_pixmap(text, box=6, dark="#0d1013", light="#ffffff"):
     return QtGui.QPixmap.fromImage(img)
 
 
+class EscapementView(QtWidgets.QWidget):
+    """
+    A schematic Swiss lever escapement, animated at the measured amplitude,
+    beat rate and beat error -- slowed down so 4 Hz is watchable. Balance and
+    hairspring on the left, pallet fork and escape wheel on the right.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(420, 320)
+        self.bph = 28800.0
+        self.amplitude = 270.0
+        self.beat_error_ms = 0.0
+        self.lift_angle = 52.0
+        self.escape_teeth = 15
+        self.slow = 10.0                     # times slower than real
+        self._t0 = time.monotonic()
+        self._timer = QtCore.QTimer(self)
+        self._timer.timeout.connect(self.update)
+        self._timer.start(33)
+
+    def set_reading(self, *, bph=None, amplitude=None, beat_error_ms=None,
+                    lift_angle=None, escape_teeth=None):
+        if bph:
+            self.bph = float(bph)
+        if amplitude and amplitude == amplitude:
+            self.amplitude = float(max(60.0, min(340.0, amplitude)))
+        if beat_error_ms is not None and beat_error_ms == beat_error_ms:
+            self.beat_error_ms = float(beat_error_ms)
+        if lift_angle:
+            self.lift_angle = float(lift_angle)
+        if escape_teeth:
+            self.escape_teeth = int(escape_teeth)
+
+    def paintEvent(self, _ev):
+        import math
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        p.fillRect(self.rect(), QtGui.QColor("#0f1216"))
+
+        beat = 3600.0 / self.bph                     # real seconds per beat
+        be = self.beat_error_ms / 1000.0
+        el = (time.monotonic() - self._t0) / max(1.0, self.slow)
+        # alternating half-periods so a beat-error skew is visible
+        cyc = 2 * beat
+        tc = el % cyc
+        n_beat = int(el / beat)
+        if tc < beat + be / 2:
+            ph = math.pi * (tc / (beat + be / 2))
+        else:
+            ph = math.pi + math.pi * ((tc - beat - be / 2) / (beat - be / 2))
+        theta = math.radians(self.amplitude) * math.cos(ph)     # balance angle
+        in_impulse = abs(theta) < math.radians(self.lift_angle) / 2.0
+        fork_side = 1 if math.sin(ph) >= 0 else -1
+
+        # ---- balance + hairspring (left) ----
+        bx, by, br = w * 0.32, h * 0.52, min(w, h) * 0.30
+        p.setPen(QtGui.QPen(QtGui.QColor("#3a424e"), 1))
+        spiral = QtGui.QPainterPath()
+        for i in range(240):
+            a = i / 240.0 * 7 * math.pi + theta * 0.15
+            r = br * 0.12 + i / 240.0 * br * 0.42
+            x, y = bx + r * math.cos(a), by + r * math.sin(a)
+            spiral.moveTo(x, y) if i == 0 else spiral.lineTo(x, y)
+        p.drawPath(spiral)
+        p.save()
+        p.translate(bx, by)
+        p.rotate(math.degrees(theta))
+        p.setPen(QtGui.QPen(QtGui.QColor("#c8d0dc"), 3))
+        p.drawEllipse(QtCore.QPointF(0, 0), br, br)
+        for k in range(3):
+            a = k * math.pi / 3
+            p.drawLine(QtCore.QPointF(-br * math.cos(a), -br * math.sin(a)),
+                       QtCore.QPointF(br * math.cos(a), br * math.sin(a)))
+        p.setPen(QtGui.QPen(QtGui.QColor("#ff5d5d"), 3))
+        p.drawLine(QtCore.QPointF(0, 0), QtCore.QPointF(0, -br))
+        # impulse jewel
+        p.setBrush(QtGui.QColor("#4da3ff"))
+        p.setPen(QtCore.Qt.NoPen)
+        p.drawEllipse(QtCore.QPointF(0, br * 0.82), 4, 4)
+        p.restore()
+
+        # ---- pallet fork ----
+        fx, fy = w * 0.60, h * 0.52
+        p.save()
+        p.translate(fx, fy)
+        p.rotate(fork_side * 9)
+        p.setPen(QtGui.QPen(QtGui.QColor("#8a94a4"), 6, QtCore.Qt.SolidLine,
+                            QtCore.Qt.RoundCap))
+        p.drawLine(QtCore.QPointF(-br * 0.30, 0), QtCore.QPointF(br * 0.55, 0))
+        p.drawLine(QtCore.QPointF(-br * 0.30, -8), QtCore.QPointF(-br * 0.30, 8))
+        p.restore()
+
+        # ---- escape wheel: steps one tooth per beat, eased ----
+        ex, ey, er = w * 0.78, h * 0.52, min(w, h) * 0.20
+        step = 360.0 / self.escape_teeth
+        frac = min(1.0, (tc % beat) / (beat * 0.35))
+        ease = frac * frac * (3 - 2 * frac)
+        wheel = -(n_beat + ease) * step * 0.5
+        p.save()
+        p.translate(ex, ey)
+        p.rotate(wheel)
+        p.setPen(QtGui.QPen(QtGui.QColor("#57d38c" if in_impulse else "#3a6b53"), 2))
+        for k in range(self.escape_teeth):
+            a = math.radians(k * step)
+            a2 = math.radians(k * step + step * 0.4)
+            p.drawLine(QtCore.QPointF(er * 0.55 * math.cos(a), er * 0.55 * math.sin(a)),
+                       QtCore.QPointF(er * math.cos(a), er * math.sin(a)))
+            p.drawLine(QtCore.QPointF(er * math.cos(a), er * math.sin(a)),
+                       QtCore.QPointF(er * 0.8 * math.cos(a2), er * 0.8 * math.sin(a2)))
+        p.drawEllipse(QtCore.QPointF(0, 0), er * 0.55, er * 0.55)
+        p.restore()
+
+        # ---- labels ----
+        p.setPen(QtGui.QColor("#c8d0dc"))
+        f = p.font()
+        f.setPointSize(9)
+        p.setFont(f)
+        p.drawText(10, 18, f"{self.bph:.0f} bph   amplitude {self.amplitude:.0f}deg   "
+                           f"beat error {self.beat_error_ms:.2f} ms")
+        p.setPen(QtGui.QColor("#5a6472"))
+        p.drawText(10, h - 10, f"shown ~{self.slow:.0f}x slower than real   |   "
+                               f"green = balance receiving impulse")
+        p.end()
+
+
+class SetupWizard(QtWidgets.QWizard):
+    """First-run setup -- pick an input, a sample rate and a theme. Re-runnable
+    any time from Help > Setup wizard."""
+
+    def __init__(self, main):
+        super().__init__(main)
+        self.main = main
+        self.setWindowTitle("WatchGrapher setup")
+        self.setWizardStyle(QtWidgets.QWizard.ModernStyle)
+        self.resize(560, 420)
+
+        p1 = QtWidgets.QWizardPage()
+        p1.setTitle("Welcome")
+        l1 = QtWidgets.QVBoxLayout(p1)
+        lbl = QtWidgets.QLabel(
+            "This takes a minute. It picks your microphone or pickup, a sample "
+            "rate, and a colour theme. Nothing here is permanent -- everything is "
+            "on the Measure page and in the menus afterwards, and you can run this "
+            "wizard again from the Help menu.")
+        lbl.setWordWrap(True)
+        l1.addWidget(lbl)
+        l1.addStretch(1)
+        self.addPage(p1)
+
+        p2 = QtWidgets.QWizardPage()
+        p2.setTitle("Audio input")
+        l2 = QtWidgets.QFormLayout(p2)
+        self.cmb_dev = QtWidgets.QComboBox()
+        try:
+            from . import audio
+            for i, name, ch, sr, api in audio.list_input_devices():
+                self.cmb_dev.addItem(f"{name}  [{api}]", i)
+        except Exception:
+            pass
+        self.cmb_dev.addItem("Simulated watch (no hardware)", "SIM")
+        self.cmb_sr = QtWidgets.QComboBox()
+        self.cmb_sr.addItems(["48000", "44100", "96000"])
+        l2.addRow("Input device", self.cmb_dev)
+        l2.addRow("Sample rate", self.cmb_sr)
+        l2.addRow(QtWidgets.QLabel(
+            "A piezo disc taped to the case back beats a microphone in open air. "
+            "48 kHz is the right default; only go higher if the interface offers it."))
+        self.addPage(p2)
+
+        p3 = QtWidgets.QWizardPage()
+        p3.setTitle("Theme")
+        l3 = QtWidgets.QVBoxLayout(p3)
+        self.cmb_theme = QtWidgets.QComboBox()
+        self.cmb_theme.addItems(["dark", "light", "system"])
+        self.cmb_theme.setCurrentText(_T.MODE)
+        l3.addWidget(QtWidgets.QLabel("Colour theme (applied on next start):"))
+        l3.addWidget(self.cmb_theme)
+        l3.addStretch(1)
+        self.addPage(p3)
+
+        p4 = QtWidgets.QWizardPage()
+        p4.setTitle("You're set")
+        l4 = QtWidgets.QVBoxLayout(p4)
+        done = QtWidgets.QLabel(
+            "Press Start on the Measure page for an open-ended run to check the "
+            "level meter moves, then dial in a duration and go. Order of work: "
+            "confirm beat rate and lift angle, then amplitude, then beat error, "
+            "then rate. The Help page has a glossary and the escapement animation.")
+        done.setWordWrap(True)
+        l4.addWidget(done)
+        l4.addStretch(1)
+        self.addPage(p4)
+
+        self.finished.connect(self._apply)
+
+    def _apply(self, result):
+        if result != QtWidgets.QDialog.Accepted:
+            return
+        m = self.main
+        data = self.cmb_dev.currentData()
+        j = m.cmb_dev.findData(data)
+        if j >= 0:
+            m.cmb_dev.setCurrentIndex(j)
+        k = m.cmb_sr.findText(self.cmb_sr.currentText())
+        if k >= 0:
+            m.cmb_sr.setCurrentIndex(k)
+        if self.cmb_theme.currentText() != _T.MODE:
+            _T.save_mode(self.cmb_theme.currentText())
+            m.status.showMessage("Theme will change on the next start.", 8000)
+
+
 def _schematic_pixmap(obj, px):
     """
     A square px-by-px schematic illustration of `obj` (a Watch or a catalogue
@@ -1927,6 +2140,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.status.showMessage(self._net_recorder.opened_note, 12000)
             except Exception:
                 pass
+        if not self._settings_get("setup_done", False):
+            QtCore.QTimer.singleShot(300, self._run_setup_wizard)
 
     # ---------------------------------------------------------------- build
     def _build(self):
@@ -2100,6 +2315,46 @@ class MainWindow(QtWidgets.QMainWindow):
         pp_act = QtGui.QAction("Phone Portal (server, QR code)...", self)
         pp_act.triggered.connect(lambda: self._goto_page(4))
         tm.addAction(pp_act)
+
+        hm = mb.addMenu("&Help")
+        for label, slot in (("Setup wizard...", self._run_setup_wizard),
+                            ("Escapement animation...", self._show_escapement),
+                            ("Glossary and guide", lambda: self._goto_page(5))):
+            act = QtGui.QAction(label, self)
+            act.triggered.connect(slot)
+            hm.addAction(act)
+
+    def _show_escapement(self):
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Escapement animation")
+        dlg.resize(560, 460)
+        v = QtWidgets.QVBoxLayout(dlg)
+        view = EscapementView(dlg)
+        m = self.last
+        c = self._current_caliber()
+        view.set_reading(
+            bph=(m.detected_bph if m and m.ok else (c.bph if c else 28800)),
+            amplitude=(m.amplitude if m and m.ok else 270.0),
+            beat_error_ms=(m.beat_error if m and m.ok else 0.0),
+            lift_angle=self.spn_lift.value() if hasattr(self, "spn_lift") else 52.0,
+            escape_teeth=(c.escape_teeth if c else 15))
+        v.addWidget(view, 1)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Slower"))
+        sl = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        sl.setRange(2, 40)
+        sl.setValue(int(view.slow))
+        sl.valueChanged.connect(lambda x: setattr(view, "slow", float(x)))
+        row.addWidget(sl, 1)
+        v.addLayout(row)
+        v.addWidget(QtWidgets.QLabel(
+            "Uses the latest reading if there is one, or a healthy default. "
+            "Watch how a large beat error offsets the tick and tock."))
+        dlg.exec()
+
+    def _run_setup_wizard(self):
+        SetupWizard(self).exec()
+        self._settings_set("setup_done", True)
 
     def _show_report(self, out):
         """Open a freshly built report. If the chosen name ends .pdf, convert
@@ -3561,6 +3816,14 @@ class MainWindow(QtWidgets.QMainWindow):
         page = QtWidgets.QWidget()
         v = QtWidgets.QVBoxLayout(page)
         v.setContentsMargins(24, 18, 24, 18)
+        brow = QtWidgets.QHBoxLayout()
+        for label, slot in (("Run setup wizard", self._run_setup_wizard),
+                            ("Escapement animation", self._show_escapement)):
+            b = QtWidgets.QPushButton(label)
+            b.clicked.connect(slot)
+            brow.addWidget(b)
+        brow.addStretch(1)
+        v.addLayout(brow)
         t = QtWidgets.QTextBrowser()
         t.setOpenExternalLinks(True)
         t.setStyleSheet(
@@ -3650,10 +3913,53 @@ is behaving today; repeated runs say whether it is drifting, which is the
 question that decides when a service is due. Three runs over months are the
 minimum before the trend figures mean anything.</p>
 
+<h2 style='color:#4da3ff'>Glossary</h2>
+<dl style='line-height:1.6'>
+<dt><b>Rate</b></dt><dd>Seconds gained (+) or lost (-) per day. The number you
+regulate.</dd>
+<dt><b>Beat rate / bph</b></dt><dd>Balance oscillations per hour. 28,800 bph is
+4&nbsp;Hz, the modern standard; older watches run 18,000-21,600.</dd>
+<dt><b>Amplitude</b></dt><dd>Peak swing of the balance from rest, in degrees.
+The movement's energy budget. Healthy is roughly 270-310&deg; dial up at full
+wind; under ~200&deg; the rate stops holding, over ~330&deg; the balance starts
+knocking.</dd>
+<dt><b>Beat error</b></dt><dd>The tick and the tock are not evenly spaced: half
+the milliseconds between the long gap and the short one. Under 0.3&nbsp;ms is a
+careful job; over ~1&nbsp;ms costs amplitude and can stop the watch
+self-starting.</dd>
+<dt><b>Lift angle</b></dt><dd>The angle over which the escapement pushes the
+balance each beat. A caliber constant, not something you set. It only scales
+amplitude -- 1&deg; wrong is about 5&deg; of amplitude error -- and does not
+touch rate or beat error.</dd>
+<dt><b>Positional delta</b></dt><dd>Spread between the fastest and slowest
+position in a six-position set. Large vertical-vs-horizontal splits point at
+the hairspring; large splits among the vertical positions point at poise.</dd>
+<dt><b>Isochronism</b></dt><dd>Whether the rate holds as the mainspring runs
+down. Measured by a power-reserve run: rate plotted against falling amplitude.</dd>
+<dt><b>Impulse fraction</b></dt><dd>lift&nbsp;/&nbsp;(2&nbsp;&times;&nbsp;amplitude)
+-- how much of each swing is under power rather than free. ~9-11% is healthy;
+higher means low amplitude and unstable rate.</dd>
+<dt><b>Rebanking / knocking</b></dt><dd>Amplitude so high the impulse pin hits
+the outside of the fork horns. The watch runs wildly fast and the escapement is
+damaged. Find the cause; do not regulate it.</dd>
+<dt><b>Allan deviation</b></dt><dd>How much the rate scatter improves as you
+average over longer windows (or more runs). A curve that keeps falling means
+noise; one that flattens means the rate itself is wandering.</dd>
+<dt><b>Poise</b></dt><dd>Whether the balance is evenly weighted around its rim.
+An out-of-poise balance runs at different rates in different vertical positions.</dd>
+<dt><b>Etachron / free-sprung / swan-neck</b></dt><dd>The regulating hardware.
+Etachron (ETA/Sellita) has a movable stud carrier for beat and an index for
+rate; free-sprung (Rolex, Omega, GS) has no index -- rate is set by weights on
+the balance rim.</dd>
+<dt><b>Sample-clock error</b></dt><dd>Your sound card's clock is not exactly at
+its nominal rate, which biases every rate reading by a fixed amount. The Sync
+tab measures it against NTP and corrects for it.</dd>
+</dl>
+
 <p style='color:#8a94a4;margin-top:20px'>Full documentation is in README.md
 alongside the application.</p>
-<p style='color:#5a6472'>Version %s</p>
-</div>""" % __version__)
+<p style='color:#5a6472'>Version __VER__</p>
+</div>""".replace("__VER__", __version__))
         v.addWidget(t)
         return page
 
