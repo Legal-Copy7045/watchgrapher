@@ -3395,6 +3395,23 @@ alongside the application.</p>
         self.lbl_allan.setWordWrap(True)
         self.lbl_allan.setStyleSheet("color:#8a94a4;")
         stab_l.addWidget(self.lbl_allan, 1)
+
+        self.p_inst = pg.PlotWidget(
+            title="Instantaneous rate -- beat-by-beat, ~1 s smoothed; faint traces are the "
+                  "last few windows")
+        self.p_inst.setLabel("bottom", "time within window", units="s")
+        self.p_inst.setLabel("left", "rate", units="s/d")
+        self.p_inst.showGrid(x=True, y=True, alpha=0.25)
+        self._inst_ghosts = []
+        for age in range(1, 7):                       # oldest first, faintest
+            alpha = int(28 + 12 * age)
+            c = self.p_inst.plot(pen=pg.mkPen((90, 163, 255, alpha), width=1))
+            self._inst_ghosts.append(c)
+        self.c_inst = self.p_inst.plot(pen=pg.mkPen("#4da3ff", width=2))
+        self.l_inst_mean = pg.InfiniteLine(
+            angle=0, pen=pg.mkPen("#e8eef7", width=1, style=QtCore.Qt.DashLine))
+        self.p_inst.addItem(self.l_inst_mean)
+        stab_l.addWidget(self.p_inst, 3)
         self.diag_tabs.addTab(stab_w, "Stability")
 
         # -- faults sub-tab --
@@ -3646,6 +3663,10 @@ alongside the application.</p>
             self.c_hist.setData([], [])
             self.c_amp_hist.setData([], [])
             self.c_be_hist.setData([], [])
+            self._inst_hist = []
+            self.c_inst.setData([], [])
+            for c in self._inst_ghosts:
+                c.setData([], [])
         else:
             if self._run_t0 is not None:
                 self._finish_run(stopped_early=True)
@@ -4047,6 +4068,21 @@ alongside the application.</p>
             lo = max(20.0, float(self.spn_lo.value()))
             hi = max(lo + 1.0, float(self.spn_hi.value()))
             self.reg_band.setRegion([np.log10(lo), np.log10(hi)])
+
+        if m.inst_rate.size >= 4:
+            t = np.asarray(m.inst_rate_t, dtype=float)
+            y = np.asarray(m.inst_rate, dtype=float)
+            ghosts = getattr(self, "_inst_hist", [])          # previous traces, old -> new
+            n = len(self._inst_ghosts)
+            for i, c in enumerate(self._inst_ghosts):
+                j = i - (n - len(ghosts))                     # right-align newest to last slot
+                if 0 <= j < len(ghosts):
+                    c.setData(ghosts[j][0], ghosts[j][1])
+                else:
+                    c.setData([], [])
+            self.c_inst.setData(t, y)
+            self.l_inst_mean.setPos(float(np.nanmean(y)))
+            self._inst_hist = (ghosts + [(t, y)])[-n:]
 
         if time.monotonic() - getattr(self, "_allan_last", 0.0) > 5.0:
             self._allan_last = time.monotonic()

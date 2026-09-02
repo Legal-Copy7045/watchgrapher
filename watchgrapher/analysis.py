@@ -179,6 +179,8 @@ class Measurement:
     beat_wave_fs: int = 0
     beat_wave_pre: int = 0                # samples before the beat anchor
     amp_samples: np.ndarray = field(default_factory=lambda: np.array([]))  # per-beat amplitude, deg
+    inst_rate_t: np.ndarray = field(default_factory=lambda: np.array([]))  # s, time within capture
+    inst_rate: np.ndarray = field(default_factory=lambda: np.array([]))    # s/day, ~1 s smoothed
     spectrum_f: np.ndarray = field(default_factory=lambda: np.array([]))   # Hz
     spectrum_db: np.ndarray = field(default_factory=lambda: np.array([]))  # dB, peak = 0
     dt_mean: float = float("nan")         # seconds, 1st-to-3rd noise
@@ -388,6 +390,24 @@ def analyze(samples: np.ndarray, fs: int, cfg: AnalyzerConfig) -> Measurement:
     m.times, m.index, m.resid = times, idx, resid
     m.rate = rate_spd(fitted_period, nominal)
     m.beat_error = beat_error_ms(idx, resid)
+
+    # Instantaneous rate: each beat's own period against nominal, so the fine
+    # structure the single averaged number hides is visible -- a slow wave at
+    # constant amplitude is poor isochronism or a train fault; a steady line
+    # is a healthy escapement. Differentiating is noisy, so smooth to ~1 s.
+    if times.size >= 12:
+        di = np.diff(idx).astype(float)
+        dt_beat = np.diff(times) / np.where(di == 0, np.nan, di)
+        nominal_period = 3600.0 / nominal
+        inst = (nominal_period / dt_beat - 1.0) * 86400.0
+        t_mid = (times[1:] + times[:-1]) / 2.0 - times[0]
+        good = np.isfinite(inst)
+        inst, t_mid = inst[good], t_mid[good]
+        if inst.size >= 8:
+            k = max(3, (int(round(1.0 / nominal_period)) | 1))
+            if inst.size > k:
+                inst = np.convolve(inst, np.ones(k) / k, mode="same")
+            m.inst_rate_t, m.inst_rate = t_mid, inst
 
     # 95% confidence half-width on the rate, from the scatter of the beat
     # times about the fitted line. This is what tells you a 20 s window is
