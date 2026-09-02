@@ -1237,6 +1237,36 @@ class _NtpProbe(QtCore.QObject):
             self.done.emit(self.label, 0.0, 0.0, f"{type(e).__name__}: {e}")
 
 
+class _ClockCalWorker(QtCore.QObject):
+    """Poll an NTP server on an interval; each tick reports a true-time fix."""
+    point = QtCore.Signal(float, float, str)        # true_epoch, roundtrip_s, error
+    finished = QtCore.Signal()
+
+    def __init__(self, host, interval_s):
+        super().__init__()
+        self.host = host
+        self.interval_s = float(interval_s)
+        self._stop = threading.Event()
+
+    def stop(self):
+        self._stop.set()
+
+    @QtCore.Slot()
+    def run(self):
+        from . import timesync
+        # First fix immediately, then on the interval.
+        while not self._stop.is_set():
+            try:
+                t0 = time.time()
+                off, rt = timesync.query_ntp(self.host)
+                t1 = time.time()
+                self.point.emit((t0 + t1) / 2.0 + off, float(rt), "")
+            except Exception as e:                   # noqa: BLE001
+                self.point.emit(0.0, 0.0, f"{type(e).__name__}: {e}")
+            self._stop.wait(self.interval_s)
+        self.finished.emit()
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1272,6 +1302,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_last_sec = 0
         self._sync_thread = None
         self._watch_set_ref = None  # (true_epoch, watch_epoch) when the watch was set
+        self._clock_cal_thread = None
+        self._clock_cal_worker = None
+        self._clock_cal_pts = []
         self._settle_pending = False
         self._settle_buf = []
         self._settle_secs = 0
@@ -1519,6 +1552,66 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_watch_drift.setStyleSheet("color:#c8d0dc;font-size:12px;")
         side.addWidget(self.lbl_watch_drift)
 
+        line2 = QtWidgets.QFrame()
+        line2.setFrameShape(QtWidgets.QFrame.HLine)
+        line2.setStyleSheet("color:#2a323e;")
+        side.addWidget(line2)
+
+        _sc = QtWidgets.QLabel("Sample-clock calibration")
+        _sc.setStyleSheet("color:#4da3ff;font-weight:bold;")
+        side.addWidget(_sc)
+        self.lbl_clock = QtWidgets.QLabel("")
+        self.lbl_clock.setWordWrap(True)
+        self.lbl_clock.setStyleSheet("color:#c8d0dc;font-size:12px;")
+        side.addWidget(self.lbl_clock)
+
+        crow = QtWidgets.QHBoxLayout()
+        self.spn_cal_min = QtWidgets.QSpinBox()
+        self.spn_cal_min.setRange(3, 180)
+        self.spn_cal_min.setValue(20)
+        self.spn_cal_min.setSuffix(" min")
+        self.btn_clock_cal = QtWidgets.QPushButton("Calibrate")
+        self.btn_clock_cal.clicked.connect(self._clock_cal_toggle)
+        crow.addWidget(self.spn_cal_min, 1)
+        crow.addWidget(self.btn_clock_cal, 0)
+        side.addLayout(crow)
+
+        mrow = QtWidgets.QHBoxLayout()
+        self.spn_clock_ppm = QtWidgets.QDoubleSpinBox()
+        self.spn_clock_ppm.setRange(-2000.0, 2000.0)
+        self.spn_clock_ppm.setDecimals(1)
+        self.spn_clock_ppm.setSuffix(" ppm (manual)")
+        b_ppm = QtWidgets.QPushButton("Set")
+        b_ppm.clicked.connect(lambda: self._store_clock_ppm(self.spn_clock_ppm.value(), "manual"))
+        b_ppm_clr = QtWidgets.QPushButton("Clear")
+        b_ppm_clr.clicked.connect(lambda: self._store_clock_ppm(None, ""))
+        mrow.addWidget(self.spn_clock_ppm, 1)
+        mrow.addWidget(b_ppm, 0)
+        mrow.addWidget(b_ppm_clr, 0)
+        side.addLayout(mrow)
+
+        rrow = QtWidgets.QHBoxLayout()
+        self.spn_ref_app = QtWidgets.QDoubleSpinBox()
+        self.spn_ref_app.setRange(-99.0, 99.0)
+        self.spn_ref_app.setDecimals(1)
+        self.spn_ref_app.setPrefix("app ")
+        self.spn_ref_app.setSuffix(" s/d")
+        self.spn_ref_true = QtWidgets.QDoubleSpinBox()
+        self.spn_ref_true.setRange(-99.0, 99.0)
+        self.spn_ref_true.setDecimals(1)
+        self.spn_ref_true.setPrefix("true ")
+        self.spn_ref_true.setSuffix(" s/d")
+        b_ref = QtWidgets.QPushButton("From reference")
+        b_ref.setToolTip(
+            "Measure a watch whose real rate you know (from a hardware timegrapher).\n"
+            "Enter what this app reads and what it should read; the difference is\n"
+            "the sound card's clock error.")
+        b_ref.clicked.connect(self._clock_from_reference)
+        rrow.addWidget(self.spn_ref_app, 1)
+        rrow.addWidget(self.spn_ref_true, 1)
+        rrow.addWidget(b_ref, 0)
+        side.addLayout(rrow)
+
         side.addStretch(1)
         sw = QtWidgets.QWidget()
         sw.setLayout(side)
@@ -1537,6 +1630,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if idx == 2:
             self._sync_tick()
             self._sync_tmr.start()
+            self._refresh_clock_label()
         else:
             self._sync_tmr.stop()
 
@@ -1639,6 +1733,190 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_watch_drift.setText(
             f"Set {ref0:%H:%M:%S}, {elapsed / 3600:.1f} h ago. Watch is {drift:+.0f} s "
             f"versus true time now -> {rate:+.1f} s/day.")
+
+    # ---------------------------------------------------- sample-clock calibration
+    # A cheap USB sound card's sample clock is typically 20-100 ppm off nominal.
+    # 50 ppm is 4.3 s/day of systematic error on every rate reading. This measures
+    # the true rate against NTP and stores a per-device correction; only the rate
+    # output is affected (amplitude and beat error are ratios within one capture).
+    PPM_TO_SPD = 86400.0 / 1e6         # additive s/day per +1 ppm of clock error
+
+    def _clock_key(self):
+        if self.cmb_dev.currentData() == "SIM":
+            return None
+        return (self.cmb_dev.currentText() or "").strip() or None
+
+    def _device_clock_ppm(self, key=None):
+        key = key or self._clock_key()
+        if not key:
+            return None
+        prof = self._load_profiles().get(key) or {}
+        v = prof.get("clock_ppm")
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _store_clock_ppm(self, ppm, source):
+        key = self._clock_key()
+        if not key:
+            QtWidgets.QMessageBox.information(
+                self, "Sample clock", "Select a real input device first.")
+            return
+        import json
+        self._pickup_profiles = self._load_profiles()
+        entry = self._pickup_profiles.setdefault(key, {})
+        if ppm is None:
+            entry.pop("clock_ppm", None)
+            entry.pop("clock_ppm_source", None)
+        else:
+            entry["clock_ppm"] = round(float(ppm), 2)
+            entry["clock_ppm_source"] = source
+        try:
+            with open(self._profiles_path(), "w", encoding="utf-8") as fh:
+                json.dump(self._pickup_profiles, fh, indent=2)
+        except OSError as e:
+            QtWidgets.QMessageBox.warning(self, "Sample clock", str(e))
+            return
+        self._refresh_clock_label()
+        self.status.showMessage(
+            f"Clock correction {'cleared' if ppm is None else f'{ppm:+.1f} ppm'} for '{key}'.",
+            6000)
+
+    def _refresh_clock_label(self):
+        if not hasattr(self, "lbl_clock"):
+            return
+        key = self._clock_key()
+        if not key:
+            self.lbl_clock.setText("Simulated device -- no clock to calibrate.")
+            return
+        prof = self._load_profiles().get(key) or {}
+        ppm = prof.get("clock_ppm")
+        if ppm is None:
+            self.lbl_clock.setText(
+                f"{key}: not calibrated. Rate readings carry the sound card's own "
+                f"clock error (often 2-4 s/day, worse on cheap interfaces). Start "
+                f"listening on this device, then Calibrate.")
+        else:
+            src = prof.get("clock_ppm_source", "")
+            self.lbl_clock.setText(
+                f"{key}: {float(ppm):+.1f} ppm ({src or 'saved'}). Rate readings are "
+                f"corrected by {float(ppm) * self.PPM_TO_SPD:+.2f} s/day.")
+
+    def _rate_correction(self):
+        """Additive s/day applied to a live rate reading for the current device."""
+        rec = getattr(self, "recorder", None)
+        if rec is None or isinstance(rec, audio.SimulatedRecorder):
+            return 0.0
+        ppm = self._device_clock_ppm()
+        return (ppm * self.PPM_TO_SPD) if ppm is not None else 0.0
+
+    def _clock_from_reference(self):
+        # app reads A on a watch whose true rate is T -> the app is fast by (A - T),
+        # which is the clock error expressed in s/day.
+        err_spd = self.spn_ref_app.value() - self.spn_ref_true.value()
+        ppm = err_spd / self.PPM_TO_SPD
+        self._store_clock_ppm(ppm, "reference watch")
+
+    def _clock_cal_toggle(self):
+        if getattr(self, "_clock_cal_thread", None) is not None:
+            self._clock_cal_stop("cancelled")
+            return
+        if self.recorder is None or isinstance(self.recorder, audio.SimulatedRecorder) \
+                or not hasattr(self.recorder, "frames"):
+            QtWidgets.QMessageBox.information(
+                self, "Sample clock",
+                "Start listening on the real input device first (Measure tab -> Start, "
+                "open-ended is fine -- a watch does not need to be on the pickup).")
+            return
+        key = self._clock_key()
+        if not key:
+            return
+        self._clock_cal_key = key
+        self._clock_cal_pts = []
+        self._clock_cal_ovf0 = getattr(self.recorder, "overflows", 0)
+        self._clock_cal_end = time.monotonic() + self.spn_cal_min.value() * 60.0
+        self.btn_clock_cal.setText("Stop")
+        self.lbl_clock.setText("Calibrating... contacting NTP.")
+
+        host = "pool.ntp.org"
+        self._clock_cal_thread = QtCore.QThread(self)
+        self._clock_cal_worker = _ClockCalWorker(host, interval_s=25.0)
+        self._clock_cal_worker.moveToThread(self._clock_cal_thread)
+        self._clock_cal_thread.started.connect(self._clock_cal_worker.run)
+        self._clock_cal_worker.point.connect(self._on_clock_point)
+        self._clock_cal_worker.finished.connect(self._clock_cal_thread.quit)
+        self._clock_cal_thread.start()
+
+    def _on_clock_point(self, true_epoch, roundtrip, err):
+        if getattr(self, "_clock_cal_thread", None) is None:
+            return
+        if err:
+            self.lbl_clock.setText(f"Calibrating... NTP error: {err}")
+        elif self.recorder is not None and hasattr(self.recorder, "frames"):
+            # Pull frames back to the instant the NTP fix refers to.
+            now = time.time()
+            frames = self.recorder.frames - (now - true_epoch) * self.recorder.samplerate
+            self._clock_cal_pts.append((true_epoch, float(frames)))
+            span = (self._clock_cal_pts[-1][0] - self._clock_cal_pts[0][0]) / 60.0
+            left = max(0.0, (self._clock_cal_end - time.monotonic()) / 60.0)
+            self.lbl_clock.setText(
+                f"Calibrating '{self._clock_cal_key}': {len(self._clock_cal_pts)} fixes "
+                f"over {span:.1f} min, ~{left:.0f} min left.")
+        if time.monotonic() >= self._clock_cal_end:
+            self._clock_cal_stop("done")
+
+    def _clock_cal_stop(self, reason):
+        w = getattr(self, "_clock_cal_worker", None)
+        if w is not None:
+            w.stop()
+        th = getattr(self, "_clock_cal_thread", None)
+        if th is not None:
+            th.quit()
+            th.wait(3000)
+        self._clock_cal_worker = None
+        self._clock_cal_thread = None
+        self.btn_clock_cal.setText("Calibrate")
+
+        pts = getattr(self, "_clock_cal_pts", [])
+        if reason == "cancelled" or len(pts) < 4:
+            self._refresh_clock_label()
+            if reason != "cancelled":
+                QtWidgets.QMessageBox.information(
+                    self, "Sample clock",
+                    "Not enough NTP fixes to calibrate -- check the connection and try a "
+                    "longer window.")
+            return
+        if self.recorder is not None and \
+                getattr(self.recorder, "overflows", 0) != getattr(self, "_clock_cal_ovf0", 0):
+            QtWidgets.QMessageBox.warning(
+                self, "Sample clock",
+                "Audio overflowed during the calibration -- samples were dropped, so the "
+                "result would be wrong. Fix the dropouts and calibrate again.")
+            self._refresh_clock_label()
+            return
+
+        a = np.array(pts, dtype=float)
+        t = a[:, 0] - a[0, 0]
+        fr = a[:, 1] - a[0, 1]
+        (slope, _c), cov = np.polyfit(t, fr, 1, cov=True)
+        nominal = float(self.recorder.samplerate)
+        ppm = (slope / nominal - 1.0) * 1e6
+        ppm_sd = float(np.sqrt(cov[0, 0]) / nominal * 1e6)
+        span_min = t[-1] / 60.0
+
+        ans = QtWidgets.QMessageBox.question(
+            self, "Sample clock calibrated",
+            f"Over {span_min:.0f} minutes and {len(pts)} NTP fixes, this device's sample "
+            f"clock measures {ppm:+.1f} ppm ({ppm * self.PPM_TO_SPD:+.2f} s/day), "
+            f"+/-{ppm_sd:.1f} ppm.\n\n"
+            f"Save it as the rate correction for '{self._clock_cal_key}'?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.Yes)
+        if ans == QtWidgets.QMessageBox.Yes:
+            self._store_clock_ppm(ppm, f"NTP, {span_min:.0f} min")
+        else:
+            self._refresh_clock_label()
 
     def _build_help_page(self):
         page = QtWidgets.QWidget()
@@ -2269,6 +2547,7 @@ alongside the application.</p>
             "sub-noise threshold for the cleanest reading, applies the result and stops.\n"
             "About 10 seconds; gives up after 15.")
         self._apply_pickup_profile()
+        self._refresh_clock_label()
 
     # ------------------------------------------------------------ pickup profiles
     def _pickup_key(self):
@@ -2293,7 +2572,7 @@ alongside the application.</p>
         if prof is None:
             self._pickup_profiles = prof = self._load_profiles()
         p = prof.get(key) if key else None
-        if not p:
+        if not p or "band_lo" not in p:
             return
         for spn, k in ((self.spn_lo, "band_lo"), (self.spn_hi, "band_hi"),
                        (self.spn_env, "env_win_ms"), (self.spn_thr, "sub_threshold")):
@@ -2312,10 +2591,10 @@ alongside the application.</p>
                 self, "Pickup profile", "Select a real input device first.")
             return
         self._pickup_profiles = self._load_profiles()
-        self._pickup_profiles[key] = {
+        self._pickup_profiles.setdefault(key, {}).update({
             "band_lo": int(self.spn_lo.value()), "band_hi": int(self.spn_hi.value()),
             "env_win_ms": float(self.spn_env.value()),
-            "sub_threshold": float(self.spn_thr.value())}
+            "sub_threshold": float(self.spn_thr.value())})
         try:
             with open(self._profiles_path(), "w", encoding="utf-8") as fh:
                 json.dump(self._pickup_profiles, fh, indent=2)
@@ -3282,6 +3561,10 @@ alongside the application.</p>
         elif m.extra_peaks > 1.0:
             lines.append("\nMore noises per beat than an escapement makes. Amplitude is "
                          "the figure at risk -- try Self-tune pickup.")
+        elif m.quality < 0.6:
+            lines.append(f"\nLow template match ({m.quality:.2f}) -- the beats are not "
+                         f"repeating cleanly. Treat these numbers with caution before "
+                         f"filing them.")
 
         self._offer_outcome("\n".join(lines), "Test finished")
 
@@ -3572,53 +3855,83 @@ alongside the application.</p>
             self.status.showMessage(m.message, 4000)
             return
 
-        good = m.quality > 0.8
-        self.r_rate.set(f"{m.rate:+.1f}", "#e8eef7" if abs(m.rate) < 15 else "#ffb648")
-        if m.rate_ci == m.rate_ci:
-            self.r_rate.u.setText(f"seconds / day   ±{m.rate_ci:.1f} (95%)")
-        else:
-            self.r_rate.u.setText("seconds / day")
-        self.r_amp.set("--" if m.amplitude != m.amplitude else f"{m.amplitude:.0f}",
-                       "#ff5d5d" if m.amplitude > 330 else
-                       ("#ffb648" if m.amplitude < 220 else "#e8eef7"))
-        self.r_be.set("--" if m.beat_error != m.beat_error else f"{m.beat_error:.2f}",
-                      "#ff5d5d" if m.beat_error > 1.2 else
-                      ("#ffb648" if m.beat_error > 0.6 else "#57d38c"))
-        mismatch = m.nominal_bph is not None and m.detected_bph != m.nominal_bph
-        self.r_bph.set(str(m.detected_bph),
-                       "#ff5d5d" if mismatch else ("#e8eef7" if good else "#ffb648"))
+        corr = self._rate_correction()
+        if corr and m.rate == m.rate:
+            m.rate += corr        # propagates to the readout, history, reserve, reports
 
+        mismatch = m.nominal_bph is not None and m.detected_bph != m.nominal_bph
+        # A reading is only worth showing as a number if the beats matched their
+        # own template, the beat rate agrees with the caliber, and we are not
+        # resolving the room. Otherwise hold the last good numbers, greyed --
+        # a stale-but-real figure beats a fresh garbage one.
+        trustworthy = (m.quality >= 0.6 and not mismatch and m.rate == m.rate
+                       and m.extra_peaks <= 1.5)
+
+        # The trace, waveform and diagnostics always update -- you want to see
+        # the mess to understand why the numbers are being withheld.
         xt, yt, xk, yk = trace_points(m, m.nominal_bph or m.detected_bph,
                                       float(self.spn_trace.value()))
         self.s_tick.setData(xt, yt)
         self.s_tock.setData(xk, yk)
         half = self.spn_trace.value() / 2
         self.p_trace.setXRange(-half, half, padding=0.02)
-
         if self._wave_mode != "Mic":
             self._render_wave(m)
-
-        if m.rate == m.rate and self._listen_t0 is not None:
-            el = time.time() - self._listen_t0
-            self._rate_hist.append((el, float(m.rate)))
-            self._rate_hist = self._decimate_rate_hist(self._rate_hist)
-            a = np.asarray(self._rate_hist, dtype=float)
-            self.c_hist.setData(a[:, 0] / 60.0, a[:, 1])
-            self._rate_last_update = time.monotonic()
-
         self._update_diag(m)
+
+        if trustworthy:
+            self._last_good = m
+            good = m.quality > 0.8
+            self.r_rate.set(f"{m.rate:+.1f}", "#e8eef7" if abs(m.rate) < 15 else "#ffb648")
+            unit = "seconds / day"
+            if m.rate_ci == m.rate_ci:
+                unit += f"   ±{m.rate_ci:.1f} (95%)"
+            if corr:
+                unit += f"   [clock {corr:+.1f}]"
+            self.r_rate.u.setText(unit)
+            self.r_amp.set("--" if m.amplitude != m.amplitude else f"{m.amplitude:.0f}",
+                           "#ff5d5d" if m.amplitude > 330 else
+                           ("#ffb648" if m.amplitude < 220 else "#e8eef7"))
+            self.r_be.set("--" if m.beat_error != m.beat_error else f"{m.beat_error:.2f}",
+                          "#ff5d5d" if m.beat_error > 1.2 else
+                          ("#ffb648" if m.beat_error > 0.6 else "#57d38c"))
+            self.r_bph.set(str(m.detected_bph),
+                           "#ff5d5d" if mismatch else ("#e8eef7" if good else "#ffb648"))
+
+            if m.rate == m.rate and self._listen_t0 is not None:
+                el = time.time() - self._listen_t0
+                self._rate_hist.append((el, float(m.rate)))
+                self._rate_hist = self._decimate_rate_hist(self._rate_hist)
+                a = np.asarray(self._rate_hist, dtype=float)
+                self.c_hist.setData(a[:, 0] / 60.0, a[:, 1])
+                self._rate_last_update = time.monotonic()
+        else:
+            why = ("beat rate does not match the caliber" if mismatch else
+                   f"template match only {m.quality:.2f}" if m.quality < 0.6 else
+                   f"{3 + m.extra_peaks:.1f} noises per beat -- hearing the room"
+                   if m.extra_peaks > 1.5 else "no stable rate")
+            for rw in (self.r_rate, self.r_amp, self.r_be, self.r_bph):
+                rw.v.setStyleSheet("color:#5a6472;border:none;")
+            self.r_rate.u.setText(f"held -- {why}")
+
         self._update_regulation(m)
         self._check_stable(m)
-        self._log_reserve(m)
+        self._log_reserve(m if trustworthy else None)
 
         if hasattr(self, "lbl_live"):
-            warn = (m.nominal_bph and m.detected_bph != m.nominal_bph) or m.extra_peaks > 1.0
-            self.lbl_live.setText(
-                f"{3 + m.extra_peaks:.1f} noises/beat  |  match {m.quality:.2f}")
-            self.lbl_live.setStyleSheet(
-                f"color:{'#ffb648' if warn else '#5a6472'};font-size:12px;")
+            if not trustworthy:
+                self.lbl_live.setText(f"reading held: {why}")
+                self.lbl_live.setStyleSheet("color:#ffb648;font-size:12px;")
+            else:
+                warn = mismatch or m.extra_peaks > 1.0
+                self.lbl_live.setText(
+                    f"{3 + m.extra_peaks:.1f} noises/beat  |  match {m.quality:.2f}")
+                self.lbl_live.setStyleSheet(
+                    f"color:{'#ffb648' if warn else '#5a6472'};font-size:12px;")
 
         bits = [f"{m.beats} beats", f"SNR {m.snr_db:.0f} dB", f"match {m.quality:.2f}"]
+        if not trustworthy:
+            bits.insert(0, f"HELD ({why})")
         if m.rate_ci == m.rate_ci:
             bits.append(f"rate +/-{m.rate_ci:.1f} s/d (95%)"
                         + (" -- run longer for a firm figure" if m.rate_ci > 3.0 else ""))
@@ -3753,23 +4066,26 @@ alongside the application.</p>
             return
         el = time.time() - self._res_t0
         target_h = float(self.spn_res_hours.value())
-        # Check the target here as well as at sample time, or a 48 hour run
-        # with a 5 minute interval could overshoot by five minutes before it
-        # notices it is done.
-        if target_h and el >= target_h * 3600.0:
+        held = " (waiting for a trustworthy reading)" if m is None else ""
+        # End on the target even between scheduled samples, so a 48 h run does
+        # not overshoot by one interval; but only on a trustworthy final point.
+        if target_h and el >= target_h * 3600.0 and m is not None:
             self._reserve.append((el, m.rate, m.amplitude, m.beat_error))
             self._redraw_reserve()
             self.btn_res.setChecked(False)
             self._reserve_finished(stopped_early=False)
             return
-        if el < self._res_next:
-            # Keep the label moving between samples. With a 5 minute interval
-            # the plot is otherwise motionless for long enough to look crashed.
+        if el < self._res_next or m is None:
+            # Keep the label moving between samples -- and while a bad signal is
+            # holding the reading, so a working run does not look crashed.
             self.lbl_res.setText(
                 f"{len(self._reserve)} samples | {el/3600:.2f} h elapsed | "
                 f"next in {max(0, self._res_next - el):.0f} s"
-                + (f" | {max(0.0, target_h - el/3600):.2f} h remaining" if target_h else ""))
+                + (f" | {max(0.0, target_h - el/3600):.2f} h remaining" if target_h else "")
+                + held)
             return
+        # Check the target here as well as at sample time, or a 48 hour run
+        # with a 5 minute interval could overshoot by five minutes.
         self._res_next = el + float(self.spn_res_int.value())
         self._reserve.append((el, m.rate, m.amplitude, m.beat_error))
         self._redraw_reserve()
