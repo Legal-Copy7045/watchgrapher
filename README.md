@@ -690,11 +690,12 @@ the one to believe.
 - Rate accuracy is capped by the sound card's sample clock -- typically a few
   s/day of systematic error until you calibrate it against NTP on the Sync
   tab.
-- When the beats stop matching their own template, the beat rate disagrees
-  with the caliber, or more than ~4.5 noises per beat are being resolved, the
-  readouts are held at the last trustworthy value and greyed, rather than
-  showing a fresh but meaningless number. The trace, waveform and diagnostics
-  keep updating so you can see why.
+- **View -> Hold readouts on a weak signal** (off by default). When on, the
+  rate/amplitude/beat-error readouts freeze at the last trustworthy value and
+  grey out whenever the beats stop matching their template, the beat rate
+  disagrees with the caliber, or more than ~4.5 noises per beat are resolved --
+  rather than showing a fresh but meaningless number. The trace, waveform and
+  diagnostics keep updating so you can see why.
 - Chronographs read lower with the chrono running -- that's real, not an error.
 - Co-axial and other non-lever escapements have a different noise signature.
   The 38° lift angle is handled, but expect to tune the sub-noise threshold.
