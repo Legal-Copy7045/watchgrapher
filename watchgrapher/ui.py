@@ -3675,8 +3675,11 @@ alongside the application.</p>
         b_imp.clicked.connect(self._import_watches_csv)
         b_tpl = QtWidgets.QPushButton("Save CSV template...")
         b_tpl.clicked.connect(self._save_csv_template)
+        b_cmp = QtWidgets.QPushButton("Compare...")
+        b_cmp.clicked.connect(self._compare_watches)
         row2.addWidget(b_imp)
         row2.addWidget(b_tpl)
+        row2.addWidget(b_cmp)
         left.addLayout(row2)
 
         self.btn_save_test = QtWidgets.QPushButton("Save current run to this watch")
@@ -6972,6 +6975,44 @@ alongside the application.</p>
         self.status.showMessage(
             "Template saved. Fill in a row per watch; caliber_key is optional -- "
             "the catalogue resolves it from the reference.", 9000)
+
+    def _compare_watches(self):
+        ws = self.collection.sorted_watches()
+        if len(ws) < 2:
+            QtWidgets.QMessageBox.information(self, "Compare", "Add two or more watches first.")
+            return
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Compare watches")
+        v = QtWidgets.QVBoxLayout(dlg)
+        v.addWidget(QtWidgets.QLabel("Pick two to four watches:"))
+        checks = []
+        for w in ws:
+            cb = QtWidgets.QCheckBox(w.label)
+            cb.setProperty("wid", w.id)
+            v.addWidget(cb)
+            checks.append(cb)
+        bb = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok |
+                                        QtWidgets.QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject)
+        v.addWidget(bb)
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
+            return
+        picked = [self.collection.watches[c.property("wid")]
+                  for c in checks if c.isChecked()]
+        if not 2 <= len(picked) <= 4:
+            QtWidgets.QMessageBox.information(self, "Compare", "Choose between two and four.")
+            return
+        stem = "_vs_".join("".join(ch for ch in w.model if ch.isalnum())[:12]
+                           for w in picked)[:60]
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save comparison",
+            os.path.join(REPORT_DIR, f"compare_{stem}.html"),
+            "HTML (*.html);;PDF (*.pdf)")
+        if not path:
+            return
+        out = reportmod.build_comparison(path, picked, self.collection,
+                                         owner=getattr(self.collection, "owner", ""))
+        self._show_report(out)
 
     def _import_watches_csv(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
