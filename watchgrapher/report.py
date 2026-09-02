@@ -391,6 +391,21 @@ def _embed_image(path):
     return f"data:{mime};base64,{data}"
 
 
+def _schematic_uri(obj):
+    """A generated schematic illustration of a watch as an SVG data URI."""
+    try:
+        from .watchart import watch_svg_for
+        svg = watch_svg_for(obj, size=520).encode("utf-8")
+        return "data:image/svg+xml;base64," + base64.b64encode(svg).decode("ascii")
+    except Exception:
+        return None
+
+
+def _watch_image(obj, photo_path):
+    """The watch's own photo if there is one, else a generated schematic."""
+    return _embed_image(photo_path) or _schematic_uri(obj)
+
+
 def trend_svg(history, w=820, h=280):
     """
     Amplitude, mean rate and positional delta against date.
@@ -553,7 +568,7 @@ def build_watch_report(path, watch, caliber=None, trends=None, notes=None,
                           owner) if x]
     p.append(f"<p class='sub'>{' &middot; '.join(sub)}</p>")
 
-    img = _embed_image(photo_path)
+    img = _watch_image(watch, photo_path)
     if img:
         p.append(f"<img class='photo' src='{img}' alt='watch'>")
 
@@ -753,7 +768,8 @@ def build_portfolio(path, collection, owner=""):
     for w in watches:
         c = CALIBERS.get(w.caliber_key)
         p.append("<div class='wcard'>")
-        img = _embed_image(collection.photo_path(w) if hasattr(collection, "photo_path") else None)
+        img = _watch_image(
+            w, collection.photo_path(w) if hasattr(collection, "photo_path") else None)
         if img:
             p.append(f"<img class='thumb' src='{img}'>")
         p.append(f"<h3>{e(w.label)}</h3>")

@@ -679,6 +679,15 @@ systematic: the final digit is the case metal and the letter suffix is the
 bezel colour abbreviated in French. So 126619LB resolves to white gold with a
 blue bezel even though nobody wrote that row down.
 
+**Illustrations.** A watch with no photo shows a generated schematic instead of
+a blank box -- a clean front-facing line drawing built from the case metal,
+bezel style, dial colour and movement, so a fluted-bezel Datejust reads
+differently from a dive Submariner from a Royal Oak. These are diagrams, not
+photographs (manufacturer press images are copyrighted and cannot ship with the
+app); add your own photo any time to replace one. `python -m tools.render_catalogue`
+dumps an SVG for every catalogued reference to `images/catalogue/` if you want
+the files on disk.
+
 **Caliber cross-reference.** Pick a caliber and the info line names its
 equivalents -- ETA 2824-2 lists the Sellita SW200-1, Sea-Gull ST2130, STP1-11
 and Hangzhou 6300, with a note on what is actually shared (escapement geometry,
