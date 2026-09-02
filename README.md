@@ -79,23 +79,33 @@ There is no app to install on the phone. WatchGrapher runs a small web server
 on your local network and the phone's browser opens it and streams its
 microphone back.
 
+Phone browsers only allow microphone access on a **secure** page (HTTPS), so
+the app serves HTTPS using a throwaway self-signed certificate. That means the
+phone shows a one-time "connection is not private" warning that you tap
+through. This needs the **`cryptography`** package, which is in
+`requirements.txt` -- if it is missing the app falls back to plain HTTP and the
+phone will refuse the mic.
+
 1. On the computer running WatchGrapher, open the **audio input** dropdown and
    choose **"Phone / browser pickup (over Wi-Fi)"**.
-2. Press **Start**. A dialog shows a URL like `http://192.168.1.42:8347`. The
-   computer and the phone must be on the **same Wi-Fi network** (a guest
+2. Press **Start**. A dialog shows a URL like `https://192.168.1.42:56411`.
+   The computer and the phone must be on the **same Wi-Fi network** (a guest
    network that isolates clients will not work).
 3. On the phone, open that URL in any browser (Safari, Chrome, whatever).
-   Typing it in is quickest; there is no QR code.
-4. On the page, leave the transport on **PCM** (works on any phone) or switch
+   Typing it in is quickest; there is no QR code. Mind the `https`.
+4. The phone warns the certificate is not trusted. This is expected for a
+   local self-signed cert -- tap **Advanced** / **Show details** and
+   **proceed** / **visit this website**.
+5. On the page, leave the transport on **PCM** (works on any phone) or switch
    to **WebRTC** if PCM keeps dropping out -- WebRTC only appears if `aiortc`
    is installed on the computer (`pip install aiortc`).
-5. Tap **Start** on the page and allow microphone access when the browser
+6. Tap **Start** on the page and allow microphone access when the browser
    asks. The level bar on the page should move; the app's own level meter and
    trace come alive within a second or two.
-6. Hold the phone with its **microphone port pressed against the watch case**
+7. Hold the phone with its **microphone port pressed against the watch case**
    -- the bottom edge on most phones. Contact matters as much as it does for a
-   piezo. Keep the screen awake (the page tries, but set a long auto-lock).
-7. Press **Stop** in the app when done. Closing the page or locking the phone
+   piezo. Keep the screen awake (set a long auto-lock).
+8. Press **Stop** in the app when done. Closing the page or locking the phone
    also ends the stream.
 
 **What to expect.** A phone mic through this path is roughly as good as a decent
@@ -118,6 +128,13 @@ switch input devices.
 - **Windows Firewall prompt on first Start.** Allow WatchGrapher on private
   networks. If you dismissed it, the phone will not reach the page until you
   allow it in Windows Defender Firewall settings.
+- **"mic denied" or "getUserMedia is undefined" on the phone.** The page was
+  loaded over `http`, not `https` -- reload it with `https://`. If the app only
+  offered an `http` URL, `cryptography` is not installed: `pip install
+  cryptography` (or re-run `run.bat`) and restart.
+- **Certificate warning has no "proceed" option.** Some corporate-managed
+  phones block self-signed certs entirely. Use a personal device, or a wired
+  pickup.
 - **PCM keeps stalling.** Switch the page to WebRTC (needs `aiortc` on the
   computer), move closer to the router, or fall back to a wired pickup.
 - **Level bar moves on the phone but the app shows nothing.** The app was not
