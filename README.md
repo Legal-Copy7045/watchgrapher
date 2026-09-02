@@ -551,7 +551,10 @@ of systematic error on every rate reading, and cheap interfaces are worse.
 Start listening on the real device (a watch does not need to be on the
 pickup), then press **Calibrate**: for the window you set, it fixes the true
 time against NTP every 25 s and least-squares-fits the sample count against
-it. Twenty minutes gets it to a few ppm. The result is stored per device, dated,
+it. Twenty minutes gets it to a few ppm. Leave the audio running untouched while
+it works -- stopping or restarting Start resets the sample count, so the run
+aborts itself rather than save a bad figure; switching tabs is fine. The result
+is stored per device, dated,
 and applied to the rate output only (amplitude and beat error are ratios
 within one capture and do not care). One good calibration lasts a year unless
 you move the setup or the room temperature swings with the season -- the Sync
