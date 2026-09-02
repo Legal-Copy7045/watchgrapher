@@ -10,3 +10,6 @@ pyqtgraph>=0.13
 # The rest of the app works without both.
 cryptography>=42
 aiortc>=1.6
+
+# QR code for the Phone Portal URL. Pure Python -- no image library needed.
+qrcode>=7.4

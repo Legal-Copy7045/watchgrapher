@@ -548,7 +548,7 @@ def equivalents(key: str):
 def whats_normal(cal) -> str:
     """A plain-language 'what to expect from a healthy one' summary."""
     lo, hi = cal.amp_full_wind if cal.amp_full_wind else (250.0, 315.0)
-    lines = [f"# What's normal -- {cal.label}", ""]
+    lines = [f"# {cal.label}", ""]
     freq = f"{cal.bph:,} bph ({cal.bph / 7200:.1f} Hz)" if cal.bph else "auto-detected"
     lines.append(f"- **Beat rate**: {freq}")
     _srcmap = {"documented": "from documentation", "measured": "bench-measured",

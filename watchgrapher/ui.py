@@ -1744,6 +1744,32 @@ class _ClockCalWorker(QtCore.QObject):
         self.finished.emit()
 
 
+def _qr_pixmap(text, box=6, dark="#0d1013", light="#ffffff"):
+    """A QR code for `text` as a QPixmap, painted from the module matrix so no
+    image library is needed. Returns None if the qrcode package is missing."""
+    try:
+        import qrcode
+    except Exception:
+        return None
+    q = qrcode.QRCode(border=3, box_size=1,
+                      error_correction=qrcode.constants.ERROR_CORRECT_M)
+    q.add_data(text)
+    q.make(fit=True)
+    m = q.get_matrix()
+    size = len(m) * box
+    img = QtGui.QImage(size, size, QtGui.QImage.Format_RGB32)
+    img.fill(QtGui.QColor(light))
+    p = QtGui.QPainter(img)
+    p.setPen(QtCore.Qt.NoPen)
+    p.setBrush(QtGui.QColor(dark))
+    for r, row in enumerate(m):
+        for c, on in enumerate(row):
+            if on:
+                p.drawRect(c * box, r * box, box, box)
+    p.end()
+    return QtGui.QPixmap.fromImage(img)
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1854,6 +1880,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stack.addWidget(self._build_watches_page())
         self.stack.addWidget(self._build_sync_page())
         self.stack.addWidget(self._build_chrono_page())
+        self.stack.addWidget(self._build_phone_page())
         self.stack.addWidget(self._build_help_page())
         self.stack.currentChanged.connect(self._on_page_changed)
 
@@ -1914,7 +1941,8 @@ class MainWindow(QtWidgets.QMainWindow):
                                 ("My Watches", 1, "Ctrl+2"),
                                 ("Sync", 2, "Ctrl+3"),
                                 ("Chrono", 3, "Ctrl+4"),
-                                ("Help", 4, "Ctrl+5")):
+                                ("Phone Portal", 4, "Ctrl+5"),
+                                ("Help", 5, "Ctrl+6")):
             act = QtGui.QAction(label, self)
             act.setShortcut(key)
             act.triggered.connect(lambda _=False, i=idx: self._goto_page(i))
@@ -1984,20 +2012,9 @@ class MainWindow(QtWidgets.QMainWindow):
         xchk_act.triggered.connect(self._cross_check)
         tm.addAction(xchk_act)
         tm.addSeparator()
-        self.act_phone_server = QtGui.QAction("Phone pickup server", self)
-        self.act_phone_server.setCheckable(True)
-        self.act_phone_server.setToolTip(
-            "Run the little web server the phone connects to. Once it is up, open "
-            "its URL on a phone to stream audio or drive a run remotely -- you do "
-            "not have to select the phone input first.")
-        self.act_phone_server.toggled.connect(self._toggle_phone_server)
-        tm.addAction(self.act_phone_server)
-        self.act_phone_autostart = QtGui.QAction("Start phone pickup server at launch", self)
-        self.act_phone_autostart.setCheckable(True)
-        self.act_phone_autostart.setChecked(bool(self._settings_get("phone_autostart", False)))
-        self.act_phone_autostart.toggled.connect(
-            lambda on: self._settings_set("phone_autostart", bool(on)))
-        tm.addAction(self.act_phone_autostart)
+        pp_act = QtGui.QAction("Phone Portal (server, QR code)...", self)
+        pp_act.triggered.connect(lambda: self._goto_page(4))
+        tm.addAction(pp_act)
 
     def _ensure_net_server(self, pinned=True):
         """Bring the phone pickup server up if it is not already. Returns it."""
@@ -2016,21 +2033,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self._publish_phone_watches()
         if pinned:
             self._net_server_pinned = True
-        if hasattr(self, "act_phone_server"):
-            self.act_phone_server.blockSignals(True)
-            self.act_phone_server.setChecked(True)
-            self.act_phone_server.blockSignals(False)
+        self._refresh_phone_page()
         return nr
 
     def _toggle_phone_server(self, on):
         if on:
-            nr = self._ensure_net_server(pinned=True)
-            body = getattr(nr, "opened_note", "") or f"Phone pickup server at {nr.url}"
-            QtWidgets.QMessageBox.information(
-                self, "Phone pickup server",
-                body + "\n\nOpen that URL on a phone on the same Wi-Fi. To use the "
-                "phone as the pickup, tap Start test on the page -- it switches the "
-                "desktop input for you.")
+            self._ensure_net_server(pinned=True)
         else:
             self._net_server_pinned = False
             nr = getattr(self, "_net_recorder", None)
@@ -2040,6 +2048,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     "Phone pickup server will stop when the current run ends.", 6000)
             elif nr is not None:
                 self._stop_net_server()
+        self._refresh_phone_page()
 
     def _stop_net_server(self):
         nr = getattr(self, "_net_recorder", None)
@@ -2053,10 +2062,36 @@ class MainWindow(QtWidgets.QMainWindow):
         self._net_kill_pending = False
         self._phone_run = False
         self._phone_pending = None
-        if hasattr(self, "act_phone_server"):
-            self.act_phone_server.blockSignals(True)
-            self.act_phone_server.setChecked(False)
-            self.act_phone_server.blockSignals(False)
+        self._refresh_phone_page()
+
+    def _refresh_phone_page(self):
+        if not hasattr(self, "btn_phone_server"):
+            return
+        nr = getattr(self, "_net_recorder", None)
+        up = nr is not None and nr.running
+        self.btn_phone_server.blockSignals(True)
+        self.btn_phone_server.setChecked(up)
+        self.btn_phone_server.setText("Stop phone server" if up else "Start phone server")
+        self.btn_phone_server.blockSignals(False)
+        url = nr.url if up else ""
+        self.lbl_phone_url.setText(url or "server not running")
+        if up and url != getattr(self, "_phone_qr_url", None):
+            self._phone_qr_url = url
+            pm = _qr_pixmap(url)
+            if pm is not None:
+                self.lbl_phone_qr.setPixmap(pm)
+        if not up:
+            self.lbl_phone_qr.clear()
+            self._phone_qr_url = None
+        if up:
+            phone = nr.connected
+            self.lbl_phone_conn.setText(
+                "a phone is connected and streaming" if phone
+                else "waiting for a phone to open the URL")
+            self.lbl_phone_conn.setStyleSheet(
+                f"color:{'#57d38c' if phone else '#8a94a4'};")
+        else:
+            self.lbl_phone_conn.setText("")
 
     def _maybe_stop_net_server(self):
         """Stop the phone server unless it is still wanted -- pinned, the NET
@@ -2406,6 +2441,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 ("MY WATCHES", "Your collection: profiles, timing history and trends."),
                 ("SYNC", "Reference clock for hand-setting a watch to true time."),
                 ("CHRONO", "Chronograph accuracy: stopwatch comparison and the chrono load test."),
+                ("PHONE PORTAL", "Run and connect the phone pickup / remote: QR code, URL, "
+                 "server controls."),
                 ("HELP", "How to use the tool, and how to read what it tells you.")]):
             b = QtWidgets.QPushButton(text)
             b.setCheckable(True)
@@ -2427,6 +2464,107 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_live.setStyleSheet("color:#5a6472;font-size:12px;")
         h.addWidget(self.lbl_live)
         return bar
+
+    # ============================================================ phone portal
+    def _build_phone_page(self):
+        page = QtWidgets.QWidget()
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+        outer = QtWidgets.QVBoxLayout(page)
+        outer.setContentsMargins(30, 24, 30, 24)
+        outer.setSpacing(14)
+
+        outer.addWidget(QtWidgets.QLabel(
+            "<b>Phone Portal.</b> Run the little web server a phone connects to. "
+            "Open the URL below on a phone on the same Wi-Fi to use its microphone "
+            "as the pickup and drive a test remotely -- pick a watch, choose a "
+            "duration, start, save."))
+
+        srv = QtWidgets.QHBoxLayout()
+        self.btn_phone_server = QtWidgets.QPushButton("Start phone server")
+        self.btn_phone_server.setCheckable(True)
+        self.btn_phone_server.setMinimumHeight(38)
+        self.btn_phone_server.setStyleSheet(
+            f"QPushButton{{background:{ACCENT};color:#08101c;font-weight:bold;"
+            "padding:8px 22px;border-radius:6px;}"
+            "QPushButton:checked{background:#ff5d5d;color:#fff;}")
+        self.btn_phone_server.toggled.connect(self._toggle_phone_server)
+        srv.addWidget(self.btn_phone_server, 0)
+        self.chk_phone_autostart = QtWidgets.QCheckBox("Start automatically when WatchGrapher opens")
+        self.chk_phone_autostart.setChecked(bool(self._settings_get("phone_autostart", False)))
+        self.chk_phone_autostart.toggled.connect(
+            lambda on: self._settings_set("phone_autostart", bool(on)))
+        srv.addWidget(self.chk_phone_autostart, 1)
+        outer.addLayout(srv)
+
+        mid = QtWidgets.QHBoxLayout()
+        self.lbl_phone_qr = QtWidgets.QLabel()
+        self.lbl_phone_qr.setFixedSize(230, 230)
+        self.lbl_phone_qr.setAlignment(QtCore.Qt.AlignCenter)
+        self.lbl_phone_qr.setStyleSheet(
+            "background:#ffffff;border:1px solid #2a323e;border-radius:8px;color:#5a6472;")
+        self.lbl_phone_qr.setText("QR code appears\nwhen the server runs")
+        mid.addWidget(self.lbl_phone_qr, 0)
+
+        urlbox = QtWidgets.QVBoxLayout()
+        urlbox.addStretch(1)
+        urlbox.addWidget(QtWidgets.QLabel("Scan the code, or type this on the phone:"))
+        self.lbl_phone_url = QtWidgets.QLineEdit("server not running")
+        self.lbl_phone_url.setReadOnly(True)
+        f = self.lbl_phone_url.font()
+        f.setPointSize(14)
+        f.setBold(True)
+        self.lbl_phone_url.setFont(f)
+        urlbox.addWidget(self.lbl_phone_url)
+        cprow = QtWidgets.QHBoxLayout()
+        b_copy = QtWidgets.QPushButton("Copy URL")
+        b_copy.clicked.connect(lambda: QtWidgets.QApplication.clipboard().setText(
+            self.lbl_phone_url.text()))
+        b_open = QtWidgets.QPushButton("Open here")
+        b_open.setToolTip("Open the portal in this computer's browser to check it works.")
+        b_open.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(
+            QtCore.QUrl(self.lbl_phone_url.text())) if self.lbl_phone_url.text().startswith("http")
+            else None)
+        cprow.addWidget(b_copy)
+        cprow.addWidget(b_open)
+        cprow.addStretch(1)
+        urlbox.addLayout(cprow)
+        self.lbl_phone_conn = QtWidgets.QLabel("")
+        self.lbl_phone_conn.setStyleSheet("color:#8a94a4;")
+        urlbox.addWidget(self.lbl_phone_conn)
+        urlbox.addStretch(1)
+        mid.addLayout(urlbox, 1)
+        outer.addLayout(mid)
+
+        from . import netmic
+        info = QtWidgets.QTextBrowser()
+        info.setOpenExternalLinks(True)
+        crypto = ("HTTPS is available." if netmic.HAVE_CRYPTO else
+                  "<span style='color:#ff5d5d'>The 'cryptography' package is not "
+                  "installed, so the server can only use plain HTTP -- phone browsers "
+                  "block the microphone on HTTP. Run <code>pip install cryptography</code> "
+                  "(or re-run run.bat) and restart.</span>")
+        rtc = ("WebRTC transport available." if netmic.HAVE_AIORTC else
+               "WebRTC is unavailable ('aiortc' not installed); PCM still works.")
+        info.setHtml(
+            "<div style='font-family:Segoe UI;font-size:12px;color:#c8d0dc'>"
+            "<p>The phone and this computer must be on the <b>same Wi-Fi</b>; a guest "
+            "network that isolates clients will not work. The phone shows a one-time "
+            "\"connection is not private\" warning for the local self-signed certificate "
+            "-- tap through it.</p>"
+            f"<p>{crypto}<br>{rtc}</p>"
+            "<p>The server only ever <i>receives</i> audio and runs nothing from the "
+            "page. Remote commands carry a token baked into the page, so a device that "
+            "merely finds the URL cannot drive your session -- anyone who can load the "
+            "page on your LAN can. It holds the phone screen awake while a test runs.</p>"
+            "</div>")
+        info.setMaximumHeight(200)
+        outer.addWidget(info)
+        outer.addStretch(1)
+
+        self._phone_qr_url = None
+        return scroll
 
     # ============================================================== sync page
     def _build_chrono_page(self):
@@ -2785,6 +2923,8 @@ class MainWindow(QtWidgets.QMainWindow):
         return page
 
     def _on_page_changed(self, idx):
+        if idx == 4 and hasattr(self, "_refresh_phone_page"):
+            self._refresh_phone_page()
         # The Sync clock only needs its 30 fps repaint while it is on screen.
         if not hasattr(self, "_sync_tmr"):
             return
@@ -3569,9 +3709,7 @@ alongside the application.</p>
         lay.setSpacing(6)
         lay.setContentsMargins(8, 8, 8, 8)
 
-        # ---------- session preset ----------
-        pr = QtWidgets.QHBoxLayout()
-        pr.addWidget(QtWidgets.QLabel("Preset"))
+        # The session-preset selector lives in section 3 (Test conditions).
         self.cmb_preset = QtWidgets.QComboBox()
         self.cmb_preset.addItems(["Custom", "Quick check", "Timed 30 s", "Full 6-position",
                                   "Power reserve", "Vintage / low beat"])
@@ -3579,8 +3717,6 @@ alongside the application.</p>
             "One-click setups: analysis window, timed-run length, settle, position and "
             "which tab to work in. Pick Custom to leave your own settings alone.")
         self.cmb_preset.currentTextChanged.connect(self._apply_preset)
-        pr.addWidget(self.cmb_preset, 1)
-        lay.addLayout(pr)
 
         # ---------- 1. audio input ----------
         g = Collapsible("1.  AUDIO INPUT", True)
@@ -3645,9 +3781,6 @@ alongside the application.</p>
         for b in STANDARD_BPH:
             self.cmb_bph.addItem(str(b), b)
         self.cmb_bph.currentIndexChanged.connect(self._push_cfg)
-        self.lbl_calinfo = QtWidgets.QLabel("--")
-        self.lbl_calinfo.setWordWrap(True)
-        self.lbl_calinfo.setStyleSheet("color:#8a94a4;font-size:11px;")
 
         lb_row = QtWidgets.QWidget()
         lb_lay = QtWidgets.QHBoxLayout(lb_row)
@@ -3675,15 +3808,15 @@ alongside the application.</p>
         cal_lay.setContentsMargins(0, 0, 0, 0)
         cal_lay.setSpacing(6)
         cal_lay.addWidget(self.cmb_cal, 1)
-        self.btn_whatsnormal = QtWidgets.QPushButton("What's normal?")
+        self.btn_whatsnormal = QtWidgets.QPushButton("Movement info")
         self.btn_whatsnormal.setToolTip(
-            "Expected beat rate, amplitude, positional delta, service interval and "
-            "known weak points for the selected caliber.")
+            "Everything about the selected caliber: regulating hardware, lift-angle "
+            "source, expected beat rate, amplitude and positional delta, service "
+            "interval, known weak points and equivalent movements.")
         self.btn_whatsnormal.clicked.connect(self._whats_normal)
         cal_lay.addWidget(self.btn_whatsnormal, 0)
         g2.addRow("Caliber", cal_row)
         g2.addRow("Lift / bph", lb_row)
-        g2.addRow(self.lbl_calinfo)
         lay.addWidget(g2)
 
         # ---------- 3. test conditions ----------
@@ -3709,6 +3842,7 @@ alongside the application.</p>
         pr_lay.addWidget(self.cmb_pos, 3)
         pr_lay.addWidget(self.cmb_wind, 2)
 
+        g3.addRow("Preset", self.cmb_preset)
         g3.addRow("Pos / wind", pos_row)
         g3.addRow(self.btn_capture)
         g3.addRow(self.chk_auto)
@@ -5013,38 +5147,17 @@ alongside the application.</p>
             self.recorder.agc_enabled = self.act_agc.isChecked()
             self._clip_count0 = 0
             if dev == "NET":
-                url = getattr(self.recorder, "url", "")
                 got_port = getattr(self.recorder, "port", 0)
                 if got_port and got_port != self._settings_get("phone_port", 8477):
                     self._settings_set("phone_port", got_port)
-                secure = getattr(self.recorder, "secure", False)
-                connected = getattr(self.recorder, "connected", False)
-                if not self._net_fresh:
-                    # Server already up from an earlier run -- do not nag with the
-                    # full dialog, just say the URL is unchanged.
+                self._refresh_phone_page()
+                if self._net_fresh and self.stack.currentIndex() != 4:
+                    self._goto_page(4)          # show the QR / URL
                     self.status.showMessage(
-                        f"Phone pickup still running at {url}"
-                        + (" -- phone connected." if connected
-                           else " -- open it on the phone and tap Start."), 12000)
-                elif secure:
-                    QtWidgets.QMessageBox.information(
-                        self, "Phone pickup",
-                        f"On a phone or laptop on the same Wi-Fi, open:\n\n    {url}\n\n"
-                        f"The phone will warn that the connection is not private -- that "
-                        f"is expected for a local self-signed certificate. Tap Advanced / "
-                        f"Show details and proceed, then tap Start on the page, set the "
-                        f"Boost slider and hold the phone's microphone against the case.\n\n"
-                        f"The URL stays the same for every run, so bookmark it. This "
-                        f"window listens until you press Stop; the phone stays connected "
-                        f"between runs.")
-                else:
-                    QtWidgets.QMessageBox.information(
-                        self, "Phone pickup",
-                        f"Server running at:\n\n    {url}\n\n"
-                        f"WARNING: it could only start plain HTTP, and phone browsers "
-                        f"block microphone access over HTTP. Install the 'cryptography' "
-                        f"package (pip install cryptography) and restart so it can "
-                        f"serve HTTPS.")
+                        "Phone pickup server started -- scan the QR on your phone.", 9000)
+                elif not self._net_fresh:
+                    self.status.showMessage(
+                        f"Phone pickup running at {getattr(self.recorder, 'url', '')}", 9000)
             note = getattr(self.recorder, "opened_note", "")
             if note:
                 self.status.showMessage(note, 12000)
@@ -5346,6 +5459,10 @@ alongside the application.</p>
                 nr.state_json = json.dumps(self._phone_state())
             except Exception:
                 pass
+        if self.stack.currentIndex() == 4 and \
+                time.monotonic() - getattr(self, "_phone_page_t", 0) > 1.0:
+            self._phone_page_t = time.monotonic()
+            self._refresh_phone_page()
 
         if self._selftune_session:
             if not self._tuning:
@@ -6300,11 +6417,11 @@ alongside the application.</p>
         c = self._current_caliber()
         if not c:
             QtWidgets.QMessageBox.information(
-                self, "What's normal", "Pick a specific caliber first.")
+                self, "Movement info", "Pick a specific caliber first.")
             return
         from .calibers import whats_normal
         dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle(f"What's normal -- {c.label}")
+        dlg.setWindowTitle(f"Movement info -- {c.label}")
         dlg.setMinimumSize(480, 460)
         lay = QtWidgets.QVBoxLayout(dlg)
         tb = QtWidgets.QTextBrowser()
@@ -6323,26 +6440,10 @@ alongside the application.</p>
         self.spn_lift.setValue(c.lift_angle)
         i = self.cmb_bph.findData(c.bph) if c.bph else 0
         self.cmb_bph.setCurrentIndex(i if i >= 0 else 0)
-        txt = advisor.REGULATOR_LABELS.get(c.regulator, c.regulator)
-        src = getattr(c, "lift_source", "community")
-        txt += {
-            "documented": "\nLift angle: from manufacturer documentation.",
-            "measured": "\nLift angle: from published bench measurements.",
-            "community": "\nLift angle: community consensus -- unconfirmed.",
-            "inherited": "\nLift angle: inherited from the caliber this clones -- "
-                         "never actually measured on this movement.",
-            "watchguy": "\nLift angle: WatchGuy reference list. No beat rate published, "
-                        "so beat rate is auto-detected.",
-        }.get(src, "")
-        if c.notes:
-            txt += f"\n{c.notes}"
-        from .calibers import equivalents
-        fam = equivalents(c.key)
-        if fam:
-            others = [lbl for k, lbl in fam["members"] if k != c.key]
-            txt += (f"\nEquivalents ({fam['family']} family): "
-                    + "; ".join(others[:6]) + f".\n{fam['note']}")
-        self.lbl_calinfo.setText(txt)
+        reg = advisor.REGULATOR_LABELS.get(c.regulator, c.regulator).split(".")[0]
+        self.btn_whatsnormal.setToolTip(
+            f"{c.label}: {reg}. Press for the full caliber reference -- lift-angle "
+            f"source, expected figures, service interval, weak points, equivalents.")
         self._push_cfg()
 
     # ------------------------------------------------------------ collection
