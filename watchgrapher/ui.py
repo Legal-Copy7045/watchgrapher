@@ -5420,6 +5420,12 @@ alongside the application.</p>
         }.get(src, "")
         if c.notes:
             txt += f"\n{c.notes}"
+        from .calibers import equivalents
+        fam = equivalents(c.key)
+        if fam:
+            others = [lbl for k, lbl in fam["members"] if k != c.key]
+            txt += (f"\nEquivalents ({fam['family']} family): "
+                    + "; ".join(others[:6]) + f".\n{fam['note']}")
         self.lbl_calinfo.setText(txt)
         self._push_cfg()
 
