@@ -3055,6 +3055,15 @@ class MainWindow(QtWidgets.QMainWindow):
         crow.addWidget(self.btn_clock_cal, 0)
         side.addLayout(crow)
 
+        self.chk_auto_clock_cal = QtWidgets.QCheckBox(
+            "Auto-calibrate in the background when I start a run on an "
+            "un-calibrated or stale (>120 day) device")
+        self.chk_auto_clock_cal.setStyleSheet("color:#8a94a4;font-size:11px;")
+        self.chk_auto_clock_cal.setChecked(self._settings_get("auto_clock_cal", False))
+        self.chk_auto_clock_cal.toggled.connect(
+            lambda v: self._settings_set("auto_clock_cal", bool(v)))
+        side.addWidget(self.chk_auto_clock_cal)
+
         mrow = QtWidgets.QHBoxLayout()
         self.spn_clock_ppm = QtWidgets.QDoubleSpinBox()
         self.spn_clock_ppm.setRange(-2000.0, 2000.0)
@@ -3338,6 +3347,30 @@ class MainWindow(QtWidgets.QMainWindow):
         if d < 730:
             return f"{max(1, d // 30)} months ago"
         return f"{d // 365} years ago"
+
+    def _maybe_auto_clock_cal(self):
+        """If the user opted in, quietly kick off a sample-clock calibration
+        when a run starts on a device that has none or a stale one."""
+        if not getattr(self, "chk_auto_clock_cal", None) or not self.chk_auto_clock_cal.isChecked():
+            return
+        if getattr(self, "_clock_cal_thread", None) is not None:
+            return
+        key = self._clock_key()
+        if not key:
+            return
+        rec = getattr(self, "recorder", None)
+        if rec is None or isinstance(rec, audio.SimulatedRecorder) or not hasattr(rec, "frames"):
+            return
+        prof = self._load_profiles().get(key) or {}
+        days = self._cal_days_old(prof.get("clock_ppm_date"))
+        if prof.get("clock_ppm") is not None and (days is None or days <= 120):
+            return
+        self._clock_cal_toggle()
+        if getattr(self, "_clock_cal_thread", None) is not None:
+            self.status.showMessage(
+                f"Calibrating the sample clock for '{key}' in the background "
+                f"(~{self.spn_cal_min.value()} min, or until you stop). "
+                f"It needs an internet connection; the watch does not matter.", 12000)
 
     def _nudge_stale_calibration(self):
         """One status-bar line when a listen starts on a stale/uncalibrated device."""
@@ -5431,6 +5464,7 @@ alongside the application.</p>
                 self.status.showMessage(note, 12000)
             else:
                 self._nudge_stale_calibration()
+            self._maybe_auto_clock_cal()
             self._pending_buffer = 0
             self.worker.recorder = self.recorder
             self._rate_hist = []
