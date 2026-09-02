@@ -449,9 +449,10 @@ reference clock, **HELP** is the quick reference. Ctrl+1/2/3/4 switch between
 them. They are different activities with different rhythms, and the collection
 gets a full page rather than a strip below the trace.
 
-My Watches keeps a profile, a timing history and a service log for each watch
-you own. The right pane is tabbed: **Timing history** (the trend chart and the
-run table) and **Service log**.
+My Watches keeps a profile, a timing history, a service log and a
+power-reserve history for each watch you own. The right pane is tabbed:
+**Timing history** (the trend chart and the run table), **Service log**, and
+**Power reserve**.
 
 **Printable report.** *Print / save watch report* produces one self-contained
 HTML page: the photo, the full profile, the movement and its regulating
@@ -601,6 +602,13 @@ hole in it.
 At the end it reports the amplitude and rate change across the run, and flags
 the point amplitude crossed 200 degrees. That crossing, not the moment the
 watch stops, is the practical end of the useful reserve.
+
+If a watch is selected in the Measure tab, the finished run is filed to its
+history by default (*Save to the selected watch*, on unless you turn it off).
+It then shows up under **My Watches -> Power reserve** -- date, hours,
+amplitude start to end, projected runway to 220 degrees and the isochronism
+grade -- and double-clicking a row reloads it on the Power reserve tab. It is
+also included in the watch report and the portfolio report.
 
 Below the plot, the **Isochronism** panel turns that same data into the tests
 a hobby timegrapher usually cannot do: a scatter of rate against amplitude

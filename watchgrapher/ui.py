@@ -1281,6 +1281,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stable = []          # recent readings, for auto-capture
         self._reserve = []         # (elapsed_s, rate, amplitude, beat_error)
         self._res_t0 = None
+        self._res_watch_id = None
         self._res_next = 0.0
 
         self.collection = coll.Collection(COLLECTION_DIR)
@@ -1860,6 +1861,30 @@ alongside the application.</p>
         sb.addStretch(1)
         svl.addLayout(sb)
         wtabs.addTab(svc, "Service log")
+
+        # -- power reserve tab --
+        pr = QtWidgets.QWidget()
+        prl = QtWidgets.QVBoxLayout(pr)
+        prl.addWidget(QtWidgets.QLabel(
+            "Power-reserve runs filed from the Measure tab. Double-click a row to "
+            "reopen it on the Power reserve tab."))
+        self.tbl_res_hist = QtWidgets.QTableWidget(0, 6)
+        self.tbl_res_hist.setHorizontalHeaderLabels(
+            ["Date", "Hours", "Amp start -> end", "To 220 deg", "Isochronism", "Notes"])
+        self.tbl_res_hist.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        self.tbl_res_hist.verticalHeader().setVisible(False)
+        self.tbl_res_hist.itemDoubleClicked.connect(lambda _=None: self._reserve_reopen())
+        prl.addWidget(self.tbl_res_hist, 1)
+        rrb = QtWidgets.QHBoxLayout()
+        for label, slot in (("Reopen on Power reserve tab", self._reserve_reopen),
+                            ("Delete", self._reserve_hist_delete),
+                            ("Export CSV", self._reserve_hist_export)):
+            b = QtWidgets.QPushButton(label)
+            b.clicked.connect(slot)
+            rrb.addWidget(b)
+        rrb.addStretch(1)
+        prl.addLayout(rrb)
+        wtabs.addTab(pr, "Power reserve")
 
         right.addWidget(wtabs, 5)
 
@@ -2821,8 +2846,13 @@ alongside the application.</p>
         b_res_exp.clicked.connect(self._export_reserve)
         b_res_clr = QtWidgets.QPushButton("Clear")
         b_res_clr.clicked.connect(self._clear_reserve)
+        self.chk_res_save = QtWidgets.QCheckBox("Save to the selected watch")
+        self.chk_res_save.setChecked(True)
+        self.chk_res_save.setToolTip(
+            "When the run ends, file it in the history of the watch chosen in the\n"
+            "Measure tab's Watch dropdown. Uncheck for a one-off run.")
         for wdg in (self.btn_res, self.spn_res_int, self.spn_res_hours,
-                    b_res_exp, b_res_clr):
+                    b_res_exp, b_res_clr, self.chk_res_save):
             rb.addWidget(wdg)
         rb.addStretch(1)
         self.lbl_res = QtWidgets.QLabel("Not logging.")
@@ -3692,13 +3722,22 @@ alongside the application.</p>
             self._res_t0 = time.time()
             self._res_next = 0.0
             self._res_done = False
+            self._reserve = []
+            w = self._current_watch()
+            self._res_watch_id = (w.id if (w and self.chk_res_save.isChecked()) else None)
             self.btn_res.setText("Stop power reserve log")
             hrs = self.spn_res_hours.value()
+            dest = (f"When it ends it will be filed to {w.label}'s history.\n\n"
+                    if self._res_watch_id else
+                    ("No watch is selected in the Measure tab, so this run will not be "
+                     "saved to a watch -- pick one there first if you want that.\n\n"
+                     if self.chk_res_save.isChecked() else ""))
             QtWidgets.QMessageBox.information(
                 self, "Power reserve started",
                 (f"Sampling every {self.spn_res_int.value()} s"
                  + (f" until {hrs:g} hours have elapsed.\n\n" if hrs else
                     ", until you press stop.\n\n")
+                 + dest
                  + "This is a long run, not a 20 second test. Leave the watch on the "
                    "pickup and the app listening the whole time -- if either stops, "
                    "the curve has a hole in it.\n\n"
@@ -3764,6 +3803,10 @@ alongside the application.</p>
                          f"the mainspring torque falls.")
         st = reserve_analytics(self._reserve)
         lines.extend(st.verdict)
+
+        saved_to = self._save_reserve_to_watch(st, stopped_early)
+        if saved_to:
+            lines.append(f"Filed to {saved_to}'s history.")
         lines.append("\nExport CSV keeps the raw samples; the Isochronism panel below "
                      "keeps the rate-vs-amplitude plot.")
         self.lbl_res.setText(lines[0])
@@ -3771,6 +3814,32 @@ alongside the application.</p>
         QtWidgets.QApplication.beep()
         QtWidgets.QMessageBox.information(self, "Power reserve run finished",
                                           "\n\n".join(lines))
+
+    def _save_reserve_to_watch(self, st, stopped_early):
+        wid = getattr(self, "_res_watch_id", None)
+        self._res_watch_id = None
+        if not wid or len(self._reserve) < 3:
+            return None
+        w = self.collection.watches.get(wid)
+        if not w:
+            return None
+        c = self._current_caliber()
+        rec = coll.ReserveRecord(
+            when=datetime.now().isoformat(timespec="seconds"),
+            caliber_key=(c.key if c else w.caliber_key),
+            lift_angle=float(self.spn_lift.value()),
+            interval_s=int(self.spn_res_int.value()),
+            stopped_early=bool(stopped_early),
+            hours=float(st.hours),
+            samples=[[round(el, 1), r, a, b] for el, r, a, b in self._reserve],
+            amp_first=float(st.amp_first), amp_last=float(st.amp_last),
+            hours_to_220=float(st.hours_to_220), hours_to_200=float(st.hours_to_200),
+            iso_slope=float(st.iso_slope), iso_span=float(st.iso_span),
+            be_slope=float(st.be_slope))
+        w.reserves.append(rec)
+        self.collection.save()
+        self._refresh_watches(w.id)
+        return w.label
 
     def _redraw_reserve(self):
         if not self._reserve:
@@ -4336,6 +4405,80 @@ alongside the application.</p>
             curve.setData(xs, ys)
 
         self._fill_service_table(w)
+        self._fill_reserve_table(w)
+
+    def _fill_reserve_table(self, w):
+        self.tbl_res_hist.setRowCount(0)
+        for rec in sorted(w.reserves, key=lambda x: x.when, reverse=True):
+            r = self.tbl_res_hist.rowCount()
+            self.tbl_res_hist.insertRow(r)
+            amp = (f"{rec.amp_first:.0f} -> {rec.amp_last:.0f}"
+                   if rec.amp_first == rec.amp_first else "--")
+            to220 = f"{rec.hours_to_220:.0f} h" if rec.hours_to_220 == rec.hours_to_220 else "--"
+            if rec.iso_span == rec.iso_span:
+                mag = abs(rec.iso_span)
+                iso = (f"{'good' if mag < 4 else 'fair' if mag < 12 else 'poor'} "
+                       f"({rec.iso_span:+.1f} s/d)")
+            else:
+                iso = "--"
+            note = rec.notes or ("stopped early" if rec.stopped_early else "")
+            for cix, v in enumerate([rec.when[:16].replace("T", " "),
+                                     f"{rec.hours:.1f}" if rec.hours == rec.hours else "--",
+                                     amp, to220, iso, note]):
+                self.tbl_res_hist.setItem(r, cix, QtWidgets.QTableWidgetItem(str(v)))
+
+    def _current_reserve(self):
+        w = self._current_watch()
+        if not w or not w.reserves:
+            return None, None
+        ordered = sorted(w.reserves, key=lambda x: x.when, reverse=True)
+        r = self.tbl_res_hist.currentRow()
+        return w, (ordered[r] if 0 <= r < len(ordered) else None)
+
+    def _reserve_reopen(self):
+        w, rec = self._current_reserve()
+        if not rec:
+            return
+        self._reserve = [tuple(row) for row in rec.samples]
+        self._res_t0 = None
+        self._res_done = True
+        self._redraw_reserve()
+        self._update_iso()
+        self.lbl_res.setText(f"{w.label}: reserve run of {rec.when[:10]} "
+                             f"({len(rec.samples)} samples over {rec.hours:.1f} h)")
+        self._goto_page(0)
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i) == "Power reserve":
+                self.tabs.setCurrentIndex(i)
+
+    def _reserve_hist_delete(self):
+        w, rec = self._current_reserve()
+        if not rec:
+            return
+        if QtWidgets.QMessageBox.question(
+                self, "Delete reserve run",
+                f"Delete the power-reserve run from {rec.when[:10]}?"
+                ) != QtWidgets.QMessageBox.Yes:
+            return
+        w.reserves.remove(rec)
+        self.collection.save()
+        self._refresh_watches(w.id)
+
+    def _reserve_hist_export(self):
+        w, rec = self._current_reserve()
+        if not rec:
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export reserve run",
+            os.path.join(REPORT_DIR, f"reserve_{w.id}_{rec.when[:10]}.csv"), "CSV (*.csv)")
+        if not path:
+            return
+        with open(path, "w", newline="", encoding="utf-8") as fh:
+            cw = csv.writer(fh)
+            cw.writerow(["elapsed_s", "elapsed_h", "rate_spd", "amplitude_deg", "beat_error_ms"])
+            for el, rt, am, be in rec.samples:
+                cw.writerow([f"{el:.1f}", f"{el/3600:.4f}", f"{rt:.2f}", f"{am:.1f}", f"{be:.3f}"])
+        self.status.showMessage(f"Wrote {path}", 5000)
 
     def _fill_service_table(self, w):
         self.tbl_svc.setRowCount(0)
