@@ -106,6 +106,22 @@ class ServiceRecord:
     warranty_months: str = ""
     notes: str = ""
     documents: List[str] = field(default_factory=list)   # filenames inside <root>/docs/
+    # Water-resistance test, part of most services.
+    wr_result: str = ""               # "", "Pass", "Fail"
+    wr_rating: str = ""               # e.g. "100 m / 10 ATM"
+    wr_method: str = ""               # "Dry (air pressure)", "Wet", "Condensation", "Vacuum"
+    wr_pressure: str = ""             # e.g. "6 bar"
+
+    @property
+    def wr_summary(self) -> str:
+        if not (self.wr_result or self.wr_rating):
+            return ""
+        bits = [self.wr_result or "tested"]
+        if self.wr_rating:
+            bits.append(f"to {self.wr_rating}")
+        if self.wr_method:
+            bits.append(f"({self.wr_method})")
+        return " ".join(bits)
 
     @property
     def date(self) -> Optional[datetime]:

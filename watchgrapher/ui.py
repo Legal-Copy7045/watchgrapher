@@ -588,12 +588,31 @@ class ServiceEditor(QtWidgets.QDialog):
         self.e_notes = QtWidgets.QPlainTextEdit(rec.notes)
         self.e_notes.setMaximumHeight(80)
 
+        self.cmb_wr = QtWidgets.QComboBox()
+        self.cmb_wr.addItems(["", "Pass", "Fail"])
+        self.cmb_wr.setCurrentText(rec.wr_result)
+        self.e_wr_rating = QtWidgets.QLineEdit(rec.wr_rating)
+        self.e_wr_rating.setPlaceholderText("e.g. 100 m / 10 ATM")
+        self.cmb_wr_method = QtWidgets.QComboBox()
+        self.cmb_wr_method.addItems(
+            ["", "Dry (air pressure)", "Wet", "Condensation", "Vacuum"])
+        self.cmb_wr_method.setCurrentText(rec.wr_method)
+        self.e_wr_pressure = QtWidgets.QLineEdit(rec.wr_pressure)
+        self.e_wr_pressure.setPlaceholderText("e.g. 6 bar")
+        wr_box = QtWidgets.QGroupBox("Water resistance test")
+        wf = QtWidgets.QFormLayout(wr_box)
+        wf.addRow("Result", self.cmb_wr)
+        wf.addRow("Rating held", self.e_wr_rating)
+        wf.addRow("Method", self.cmb_wr_method)
+        wf.addRow("Test pressure", self.e_wr_pressure)
+
         form.addRow("Date", self.e_when)
         form.addRow("Type", self.cmb_kind)
         form.addRow("Performed by", self.e_by)
         form.addRow("Location", self.e_loc)
         form.addRow("Cost", cost_row)
         form.addRow("Warranty", self.e_warr)
+        form.addRow(wr_box)
         form.addRow("Notes", self.e_notes)
 
         self.lst_docs = QtWidgets.QListWidget()
@@ -653,7 +672,11 @@ class ServiceEditor(QtWidgets.QDialog):
             currency=self.cmb_cur.currentText(),
             warranty_months=self.e_warr.text().strip(),
             notes=self.e_notes.toPlainText().strip(),
-            documents=list(self._existing_docs))
+            documents=list(self._existing_docs),
+            wr_result=self.cmb_wr.currentText(),
+            wr_rating=self.e_wr_rating.text().strip(),
+            wr_method=self.cmb_wr_method.currentText(),
+            wr_pressure=self.e_wr_pressure.text().strip())
         return rec, list(self._new_docs), list(self._removed)
 
 
@@ -5662,9 +5685,12 @@ alongside the application.</p>
             r = self.tbl_svc.rowCount()
             self.tbl_svc.insertRow(r)
             cost = f"{s.cost} {s.currency}" if s.cost else ""
+            note = s.notes.replace("\n", " ")
+            wr = s.wr_summary
+            if wr:
+                note = f"[WR: {wr}] {note}".strip()
             cells = [s.when, s.kind, s.performed_by, cost,
-                     str(len(s.documents)) if s.documents else "",
-                     s.notes.replace("\n", " ")]
+                     str(len(s.documents)) if s.documents else "", note]
             for cix, v in enumerate(cells):
                 self.tbl_svc.setItem(r, cix, QtWidgets.QTableWidgetItem(v))
         totals = w.total_service_cost()
