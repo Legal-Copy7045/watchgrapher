@@ -3576,6 +3576,28 @@ alongside the application.</p>
         self.r_amp = Readout("AMPLITUDE", "degrees")
         self.r_be = Readout("BEAT ERROR", "milliseconds")
         self.r_bph = Readout("BEAT RATE", "bph detected")
+        self.r_rate.setToolTip(
+            "<b>Rate</b> -- seconds the watch gains (+) or loses (-) per day, from the "
+            "slope of the beat times against a least-squares line. Target 0 to +-5 s/d, "
+            "+-10 acceptable, chase it beyond +-20. A 20 s window gives roughly +-0.2 s/d "
+            "of confidence; a 60 s timed run about +-0.02. The clock correction from the "
+            "Sync tab, if set, is already folded in.")
+        self.r_amp.setToolTip(
+            "<b>Amplitude</b> -- peak swing of the balance from rest, in degrees, from "
+            "the interval between the unlock and drop noises and the caliber's lift "
+            "angle. 270-310 is healthy at full wind for a modern caliber; under 220 "
+            "points at power delivery or the escapement; over 330 is approaching "
+            "rebanking. A wrong lift angle shifts this about 5 deg per degree of error.")
+        self.r_be.setToolTip(
+            "<b>Beat error</b> -- how unevenly the tick and the tock are spaced, in "
+            "milliseconds. Under 0.3 is the target, under 0.5 fine. A large beat error "
+            "costs amplitude and makes the watch hard to regulate. Fixed at the stud "
+            "carrier or the hairspring collet depending on the caliber's hardware.")
+        self.r_bph.setToolTip(
+            "<b>Beat rate</b> -- beats per hour the audio actually measured, snapped to "
+            "the nearest standard frequency. If this disagrees with the selected "
+            "caliber the rate figure is meaningless -- either the caliber is wrong or "
+            "the pickup is mistracking on noise.")
         for r in (self.r_rate, self.r_amp, self.r_be, self.r_bph):
             row.addWidget(r)
         lay.addLayout(row)
@@ -3587,6 +3609,13 @@ alongside the application.</p>
         self.p_trace.setLabel("left", "elapsed", units="s")
         self.p_trace.showGrid(x=True, y=True, alpha=0.25)
         self.p_trace.invertY(True)
+        self.p_trace.setToolTip(
+            "Two dot lines, tick and tock. A straight line sloping down-right means "
+            "gaining; the vertical gap between the lines is the beat error. Thick or "
+            "fuzzy lines mean the escapement is not repeating cleanly or the pickup is "
+            "noisy; wandering, non-straight lines point at a real fault -- a bent pivot, "
+            "a hairspring catching, dirt in the train. A faint second pair is a pinned "
+            "reference (Ctrl+P).")
         self.s_tick_ref = pg.ScatterPlotItem(size=4, brush=pg.mkBrush((90, 163, 255, 70)), pen=None)
         self.s_tock_ref = pg.ScatterPlotItem(size=4, brush=pg.mkBrush((255, 157, 77, 70)), pen=None)
         self.s_tick = pg.ScatterPlotItem(size=4, brush=pg.mkBrush(TICK_C), pen=None)
@@ -3618,6 +3647,12 @@ alongside the application.</p>
 
         self.p_wave = pg.PlotWidget()
         self.p_wave.setLabel("bottom", "time within beat", units="ms")
+        self.p_wave.setToolTip(
+            "The beat waveform. In Average view the two dashed markers are the unlock "
+            "and drop noises the amplitude calculation uses -- if they are not sitting "
+            "on obvious peaks, the amplitude number is wrong and the sub-noise "
+            "threshold needs adjusting. Live beat shows one raw beat; Mic shows the "
+            "unprocessed pickup signal for judging coupling.")
         self.p_wave.showGrid(x=True, y=True, alpha=0.2)
         self.p_wave.setDownsampling(auto=True, mode="peak")
         self.p_wave.setClipToView(True)
