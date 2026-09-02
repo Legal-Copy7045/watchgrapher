@@ -2159,20 +2159,45 @@ alongside the application.</p>
         # -- timing tab --
         timing = QtWidgets.QWidget()
         tl = QtWidgets.QVBoxLayout(timing)
+        TR_RATE_C, TR_DELTA_C, TR_AMP_C = "#4da3ff", "#ff9d4d", "#57d38c"
         self.p_trend = pg.PlotWidget(title="Performance over time")
-        self.p_trend.setLabel("bottom", "date")
-        self.p_trend.showGrid(x=True, y=True, alpha=0.25)
-        self.p_trend.addLegend(offset=(-10, 10))
-        self.p_trend.setAxisItems({"bottom": pg.DateAxisItem(orientation="bottom")})
-        self.c_tr_amp = self.p_trend.plot(pen=pg.mkPen("#57d38c", width=2), symbol="o",
-                                          symbolSize=7, symbolBrush="#57d38c",
-                                          name="peak amplitude (deg)")
-        self.c_tr_rate = self.p_trend.plot(pen=pg.mkPen("#4da3ff", width=2), symbol="o",
-                                           symbolSize=7, symbolBrush="#4da3ff",
-                                           name="mean rate (s/d)")
-        self.c_tr_delta = self.p_trend.plot(pen=pg.mkPen("#ff9d4d", width=2), symbol="o",
-                                            symbolSize=7, symbolBrush="#ff9d4d",
-                                            name="positional delta (s/d)")
+        tpi = self.p_trend.getPlotItem()
+        tpi.showGrid(x=True, y=True, alpha=0.25)
+        tpi.addLegend(offset=(-10, 10))
+        tpi.setAxisItems({"bottom": pg.DateAxisItem(orientation="bottom")})
+        # Left axis carries the two s/day series (rate + positional delta);
+        # coloured to the mean-rate line, which is the one people read.
+        tla = tpi.getAxis("left")
+        tla.setLabel("rate / delta", units="s/d", color=TR_RATE_C)
+        tla.setPen(TR_RATE_C)
+        tla.setTextPen(TR_RATE_C)
+        self.c_tr_rate = tpi.plot(pen=pg.mkPen(TR_RATE_C, width=2), symbol="o",
+                                  symbolSize=7, symbolBrush=TR_RATE_C,
+                                  name="mean rate (s/d)")
+        self.c_tr_delta = tpi.plot(pen=pg.mkPen(TR_DELTA_C, width=2), symbol="o",
+                                   symbolSize=7, symbolBrush=TR_DELTA_C,
+                                   name="positional delta (s/d)")
+
+        # Amplitude on a linked right-hand scale, coloured to its own line.
+        self._tr_amp_vb = pg.ViewBox()
+        tpi.showAxis("right")
+        tpi.scene().addItem(self._tr_amp_vb)
+        tra = tpi.getAxis("right")
+        tra.linkToView(self._tr_amp_vb)
+        tra.setLabel("peak amplitude", units="deg", color=TR_AMP_C)
+        tra.setPen(TR_AMP_C)
+        tra.setTextPen(TR_AMP_C)
+        self._tr_amp_vb.setXLink(tpi)
+        self.c_tr_amp = pg.PlotDataItem(pen=pg.mkPen(TR_AMP_C, width=2), symbol="o",
+                                        symbolSize=7, symbolBrush=TR_AMP_C)
+        self._tr_amp_vb.addItem(self.c_tr_amp)
+        tpi.legend.addItem(self.c_tr_amp, "peak amplitude (deg)")
+
+        def _sync_tr_amp_vb():
+            self._tr_amp_vb.setGeometry(tpi.getViewBox().sceneBoundingRect())
+            self._tr_amp_vb.linkedViewChanged(tpi.getViewBox(), self._tr_amp_vb.XAxis)
+        tpi.getViewBox().sigResized.connect(_sync_tr_amp_vb)
+        _sync_tr_amp_vb()
         tl.addWidget(self.p_trend, 3)
 
         self.tbl_hist = QtWidgets.QTableWidget(0, 7)
