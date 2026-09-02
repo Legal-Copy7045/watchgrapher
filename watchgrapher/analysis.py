@@ -200,6 +200,53 @@ class AnalyzerConfig:
     no_parity_fix: bool = False       # disable the tick/tock anchor correction
 
 
+def allan_deviation(t_s, y_spd, min_points: int = 32):
+    """
+    Overlapping Allan deviation of a rate series.
+
+    `t_s` are sample times in seconds (irregular spacing is fine) and `y_spd`
+    the rate in s/day at each. The series is resampled onto a uniform grid at
+    its median spacing, then ADEV is computed at octave-spaced averaging
+    times tau.
+
+    Returns (tau_s, adev_spd), both in the input's units.
+
+    ADEV(tau) is the rate scatter left after averaging for tau seconds.
+    A curve that keeps falling roughly as tau**-0.5 means the reading is
+    white-noise limited and a longer capture tightens it; a curve that
+    flattens or turns back up means the rate itself is wandering and no
+    capture length pins it down past that floor.
+    """
+    t = np.asarray(t_s, dtype=float)
+    y = np.asarray(y_spd, dtype=float)
+    good = np.isfinite(t) & np.isfinite(y)
+    t, y = t[good], y[good]
+    if t.size < min_points:
+        return np.array([]), np.array([])
+    order = np.argsort(t)
+    t, y = t[order], y[order]
+    dt = float(np.median(np.diff(t)))
+    if not np.isfinite(dt) or dt <= 0:
+        return np.array([]), np.array([])
+    grid = np.arange(t[0], t[-1] + dt * 0.5, dt)
+    yu = np.interp(grid, t, y)
+    n = yu.size
+    if n < min_points:
+        return np.array([]), np.array([])
+    csum = np.concatenate([[0.0], np.cumsum(yu)])
+    taus, adev = [], []
+    m = 1
+    while m <= (n - 1) // 3:
+        block = (csum[m:] - csum[:-m]) / m          # running mean, window m
+        d = block[m:] - block[:-m]                  # successive tau-averages
+        if d.size < 2:
+            break
+        taus.append(m * dt)
+        adev.append(float(np.sqrt(np.mean(d ** 2) / 2.0)))
+        m *= 2
+    return np.asarray(taus), np.asarray(adev)
+
+
 def _coarse_spectrum(x: np.ndarray, fs: int, bins: int = 360):
     """
     A log-binned magnitude spectrum of the raw signal, for the diagnostics
