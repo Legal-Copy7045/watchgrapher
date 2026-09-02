@@ -665,10 +665,16 @@ Below the plot, the **Isochronism** panel turns that same data into the tests
 a hobby timegrapher usually cannot do: a scatter of rate against amplitude
 with a fitted line (graded good / fair / poor by how much the rate swings as
 amplitude falls), the beat-error-versus-amplitude slope, and a projected
-runway to 220 and 200 degrees from the end-of-run decay. The line fits reject
-gross outliers -- a sample where the pickup caught a knock or a truncated
-capture -- rather than let one bad point tilt the slope; discarded points are
-drawn dimmed with an x and the panel says how many were set aside.
+runway to 220 and 200 degrees from the end-of-run decay. The fits reject gross
+outliers -- a sample where the pickup caught a knock or a truncated capture --
+rather than let one bad point tilt the result; discarded points are drawn
+dimmed with an x and the panel says how many were set aside.
+
+**Non-linear (quadratic) isochronism fit** is a checkbox under the plot. Real
+isochronism error is rarely a straight line -- it curves, often with a
+shallow minimum. The quadratic fit reports the amplitude of least rate
+sensitivity, which is the best place to sit the balance when you regulate so
+the rate drifts least as the mainspring runs down.
 
 **Per-pickup profiles.** *Save profile* stores the filter band, envelope
 window and sub-noise threshold against the selected input device; picking that

@@ -3329,7 +3329,21 @@ alongside the application.</p>
                              "amplitude link and the projected runway to 220 deg appear here.</p>")
         iso.addWidget(self.txt_iso)
         iso.setSizes([620, 360])
-        rl.addWidget(iso, 3)
+        isobar = QtWidgets.QHBoxLayout()
+        self.chk_iso_nl = QtWidgets.QCheckBox("Non-linear (quadratic) isochronism fit")
+        self.chk_iso_nl.setToolTip(
+            "Fit rate-vs-amplitude with a curve instead of a straight line. Real\n"
+            "isochronism error is rarely linear -- the curve shows the amplitude of\n"
+            "least rate sensitivity, the best place to sit the balance when regulating.")
+        self.chk_iso_nl.toggled.connect(self._update_iso)
+        isobar.addWidget(self.chk_iso_nl)
+        isobar.addStretch(1)
+        isow = QtWidgets.QWidget()
+        isov = QtWidgets.QVBoxLayout(isow)
+        isov.setContentsMargins(0, 0, 0, 0)
+        isov.addWidget(iso, 1)
+        isov.addLayout(isobar)
+        rl.addWidget(isow, 3)
         tabs.addTab(rw, "Power reserve")
 
         # ---- diagnostics ----
@@ -4417,7 +4431,9 @@ alongside the application.</p>
                          f"({rates[-1]-rates[0]:+.1f}). A large swing here is poor "
                          f"isochronism: the hairspring is not developing evenly as "
                          f"the mainspring torque falls.")
-        st = reserve_analytics(self._reserve)
+        st = reserve_analytics(
+            self._reserve,
+            iso_model="quadratic" if self.chk_iso_nl.isChecked() else "linear")
         lines.extend(st.verdict)
 
         saved_to = self._save_reserve_to_watch(st, stopped_early)
@@ -4486,16 +4502,16 @@ alongside the application.</p>
                                  "Run a power-reserve log; the isochronism analysis appears "
                                  "here once amplitude has fallen far enough to see a spread.</p>")
             return
-        st = reserve_analytics(self._reserve)
+        model = "quadratic" if self.chk_iso_nl.isChecked() else "linear"
+        st = reserve_analytics(self._reserve, iso_model=model)
         a = np.array(self._reserve, dtype=float) if self._reserve else np.zeros((0, 4))
-        if st.iso_fit:
+        if st.iso_coef:
             # Once the fit exists, colour the points by whether it used them.
             self.s_iso.setData(list(st.iso_in[0]), list(st.iso_in[1]))
             self.s_iso_out.setData(list(st.iso_out[0]), list(st.iso_out[1]))
-            sl, ic = st.iso_fit
             xin = np.asarray(st.iso_in[0], dtype=float)
-            xs = np.array([xin.min(), xin.max()])
-            self.c_iso_fit.setData(xs, sl * xs + ic)
+            xs = np.linspace(xin.min(), xin.max(), 80 if len(st.iso_coef) > 2 else 2)
+            self.c_iso_fit.setData(xs, np.polyval(st.iso_coef, xs))
         else:
             if a.shape[0]:
                 m = np.isfinite(a[:, 2]) & np.isfinite(a[:, 1])

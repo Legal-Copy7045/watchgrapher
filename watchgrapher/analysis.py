@@ -507,6 +507,9 @@ class ReserveStats:
     iso_slope: float = float("nan")        # s/day of rate per +1 deg amplitude
     iso_span: float = float("nan")         # rate change across the amplitude range seen
     iso_fit: tuple = ()                    # (slope, intercept) for a rate-vs-amplitude line
+    iso_model: str = "linear"             # "linear" or "quadratic"
+    iso_coef: tuple = ()                  # full polynomial coefficients, high order first
+    iso_vertex: float = float("nan")      # amplitude of least rate sensitivity (quadratic)
     be_slope: float = float("nan")         # ms beat error per +1 deg amplitude
     iso_n_out: int = 0                     # rate-vs-amplitude points rejected as outliers
     iso_in: tuple = ()                     # (amp[], rate[]) points kept for the fit
@@ -552,9 +555,9 @@ def _robust_polyfit(x, y, deg=1, n_sigma=3.5, iters=3):
     return coef, keep
 
 
-def reserve_analytics(samples) -> ReserveStats:
+def reserve_analytics(samples, iso_model: str = "linear") -> ReserveStats:
     a = np.asarray(list(samples), dtype=float)
-    st = ReserveStats(n=int(a.shape[0]))
+    st = ReserveStats(n=int(a.shape[0]), iso_model=iso_model)
     if a.ndim != 2 or a.shape[0] < 4:
         return st
     t_h = a[:, 0] / 3600.0
@@ -579,17 +582,30 @@ def reserve_analytics(samples) -> ReserveStats:
                         setattr(st, name, float(th))
 
     mi = np.isfinite(amp) & np.isfinite(rate)
-    if mi.sum() >= 5 and float(amp[mi].max() - amp[mi].min()) > 15.0:
+    deg = 2 if iso_model == "quadratic" else 1
+    if mi.sum() >= max(6, deg + 4) and float(amp[mi].max() - amp[mi].min()) > 15.0:
         ai, ri = amp[mi], rate[mi]
-        (sl, ic), keep = _robust_polyfit(ai, ri, 1)
+        coef, keep = _robust_polyfit(ai, ri, deg)
         st.iso_n_out = int((~keep).sum())
         st.iso_in = (ai[keep].tolist(), ri[keep].tolist())
         st.iso_out = (ai[~keep].tolist(), ri[~keep].tolist())
-        st.iso_slope = float(sl)
-        st.iso_fit = (float(sl), float(ic))
-        # Span across the amplitude range that actually informed the fit.
+        st.iso_coef = tuple(float(c) for c in coef)
         span_lo, span_hi = float(ai[keep].min()), float(ai[keep].max())
-        st.iso_span = float(sl * (span_hi - span_lo))
+        mid = 0.5 * (span_lo + span_hi)
+        if deg == 2:
+            A, B, C = coef
+            st.iso_slope = float(2.0 * A * mid + B)        # local sensitivity at mid-range
+            st.iso_vertex = float(-B / (2.0 * A)) if abs(A) > 1e-12 else float("nan")
+            st.iso_fit = (float(2.0 * A * mid + B), float(np.polyval(coef, mid) -
+                                                          (2.0 * A * mid + B) * mid))
+            grid = np.linspace(span_lo, span_hi, 64)
+            fv = np.polyval(coef, grid)
+            st.iso_span = float(fv.max() - fv.min())
+        else:
+            sl, ic = coef
+            st.iso_slope = float(sl)
+            st.iso_fit = (float(sl), float(ic))
+            st.iso_span = float(sl * (span_hi - span_lo))
 
     mb = np.isfinite(amp) & np.isfinite(be)
     if mb.sum() >= 5 and float(amp[mb].max() - amp[mb].min()) > 15.0:
@@ -599,17 +615,20 @@ def reserve_analytics(samples) -> ReserveStats:
     v = st.verdict
     if st.iso_span == st.iso_span:
         mag = abs(st.iso_span)
-        if mag < 4.0:
-            v.append(f"Isochronism good: rate moves only {st.iso_span:+.1f} s/day across "
-                     f"the amplitude range covered.")
-        elif mag < 12.0:
-            v.append(f"Isochronism fair: {st.iso_span:+.1f} s/day of rate change with "
-                     f"amplitude ({st.iso_slope:+.2f} per degree).")
-        else:
-            v.append(f"Isochronism poor: {st.iso_span:+.1f} s/day of rate change as "
-                     f"amplitude falls ({st.iso_slope:+.2f} s/day per degree). The "
-                     f"hairspring is not developing evenly -- suspect pinning, a "
-                     f"sticky terminal curve, or the regulator pins.")
+        curved = st.iso_model == "quadratic"
+        how = ("across the amplitude range covered" if curved
+               else f"({st.iso_slope:+.2f} s/day per degree)")
+        grade = "good" if mag < 4.0 else "fair" if mag < 12.0 else "poor"
+        v.append(f"Isochronism {grade}: {mag:.1f} s/day of rate change {how}." +
+                 ("" if grade != "poor" else
+                  " The hairspring is not developing evenly -- suspect pinning, a "
+                  "sticky terminal curve, or the regulator pins."))
+        if curved and st.iso_vertex == st.iso_vertex:
+            A = st.iso_coef[0]
+            kind = ("flattest" if A > 0 else "steepest")
+            v.append(f"Quadratic fit: rate sensitivity is {kind} near {st.iso_vertex:.0f} "
+                     f"deg amplitude. Regulating with the balance sitting there gives the "
+                     f"least rate drift as the mainspring runs down.")
         if st.iso_n_out:
             v.append(f"{st.iso_n_out} outlier "
                      f"{'reading was' if st.iso_n_out == 1 else 'readings were'} "
