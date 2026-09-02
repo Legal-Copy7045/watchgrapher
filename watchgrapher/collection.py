@@ -19,7 +19,7 @@ import os
 import shutil
 import uuid
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -184,6 +184,8 @@ class Watch:
     # `amount` is signed: positive = toward faster (Avance / weights inward),
     # so (after - before) / amount is s/day gained per unit of that move.
     regulation_log: List[dict] = field(default_factory=list)
+    # Free-text tags for filtering ("daily", "safe queen", "for sale", ...).
+    tags: List[str] = field(default_factory=list)
 
     @property
     def label(self) -> str:
@@ -239,6 +241,77 @@ def _pick(d: dict, cls) -> dict:
     """Only the keys `cls` actually declares -- forward-compatible loading."""
     fields = set(cls.__dataclass_fields__)
     return {k: v for k, v in d.items() if k in fields}
+
+
+def _caliber_text(w) -> str:
+    try:
+        from .calibers import CALIBERS
+        c = CALIBERS.get(w.caliber_key)
+        return f"{w.model} {c.name if c else ''} {w.caliber_key}".lower()
+    except Exception:
+        return f"{w.model} {w.caliber_key}".lower()
+
+
+# Computed collections -- name -> predicate(watch) -> bool.
+SMART_COLLECTIONS = {
+    "Needs service": lambda w: bool(w.service_due() and "past the" in (w.service_due() or "")),
+    "Never measured": lambda w: not w.history,
+    "Not measured in 6 months": lambda w: bool(
+        w.history and (datetime.now() - max(
+            (h.date for h in w.history if h.date), default=datetime.now())).days > 182),
+    "Divers": lambda w: any(k in f"{w.model} {w.water_resistance}".lower() for k in (
+        "sub", "sea-dweller", "diver", "pelagos", "seamaster", "fifty fathoms",
+        "aquaracer", "turtle", "300m", "200m", "600m", "1000m")),
+    "Chronographs": lambda w: any(k in _caliber_text(w) for k in (
+        "chrono", "daytona", "speedmaster", "7750", "el primero", "b01", "valjoux")),
+    "Has open reminders": lambda w: False,   # filled in by reminders(), see below
+}
+
+
+def reminders(collection, now=None):
+    """
+    Actionable things across the collection: service overdue, warranty about to
+    lapse, watches gone quiet. Returns [{watch_id, kind, text, severity}].
+    severity is "warn" or "info".
+    """
+    now = now or datetime.now()
+    out = []
+    for w in collection.watches.values():
+        due = w.service_due()
+        if due and "past the" in due:
+            out.append({"watch_id": w.id, "kind": "service", "severity": "warn",
+                        "text": f"{w.label}: {due}"})
+        for s in w.services:
+            try:
+                months = int(float(s.warranty_months))
+                start = datetime.fromisoformat(s.when)
+            except (ValueError, TypeError):
+                continue
+            if months <= 0:
+                continue
+            expiry = start + timedelta(days=months * 30)
+            days = (expiry - now).days
+            if 0 <= days <= 60:
+                out.append({"watch_id": w.id, "kind": "warranty", "severity": "warn",
+                            "text": f"{w.label}: service warranty ends in {days} days "
+                                    f"({expiry:%d %b %Y})"})
+        if w.history:
+            last = max((h.date for h in w.history if h.date), default=None)
+            if last and (now - last).days > 182:
+                out.append({"watch_id": w.id, "kind": "quiet", "severity": "info",
+                            "text": f"{w.label}: not measured for "
+                                    f"{(now - last).days // 30} months"})
+    return out
+
+
+def smart_match(watch, key, open_ids=frozenset()):
+    if key == "Has open reminders":
+        return watch.id in open_ids
+    pred = SMART_COLLECTIONS.get(key)
+    try:
+        return bool(pred(watch)) if pred else True
+    except Exception:
+        return False
 
 
 def regulation_sensitivity(watch):
