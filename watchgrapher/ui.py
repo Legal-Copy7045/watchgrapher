@@ -254,6 +254,7 @@ class WatchEditor(QtWidgets.QDialog):
         self.resize(700, 720)
         self.watch = watch or coll.Watch()
         self._photo_src = None
+        self._loading = True        # suppresses the live schematic until built
 
         outer = QtWidgets.QVBoxLayout(self)
         scroll = QtWidgets.QScrollArea()
@@ -398,7 +399,13 @@ class WatchEditor(QtWidgets.QDialog):
         box.rejected.connect(self.reject)
         outer.addWidget(box)
 
-        self._loading = True
+        # Keep the schematic preview in step with the form as it is filled in.
+        for w in (self.cmb_mat, self.cmb_crystal):
+            w.currentTextChanged.connect(lambda *_: self._refresh_schematic())
+        for w in (self.e_bezel, self.e_nick):
+            w.textChanged.connect(lambda *_: self._refresh_schematic())
+        self.cmb_cal.currentIndexChanged.connect(lambda *_: self._refresh_schematic())
+
         if self.watch.brand:
             self._brand_changed(self.watch.brand)
             self.cmb_model.setCurrentText(self.watch.model)
@@ -407,6 +414,25 @@ class WatchEditor(QtWidgets.QDialog):
         self._loading = False
         self._show_photo(parent.collection.photo_path(self.watch)
                          if parent and self.watch.photo else None)
+
+    def _form_watch(self):
+        """A watch-shaped snapshot of the form as it stands, for the preview."""
+        import types
+        return types.SimpleNamespace(
+            brand=self.cmb_brand.currentText().strip(),
+            model=self.cmb_model.currentText().strip(),
+            reference=self.cmb_ref.currentText().strip(),
+            material=self.cmb_mat.currentText().strip(),
+            bezel=self.e_bezel.text().strip(),
+            crystal=self.cmb_crystal.currentText().strip(),
+            nickname=self.e_nick.text().strip(),
+            notes=self.e_notes.toPlainText().strip(),
+            caliber_key=self.cmb_cal.currentData() or "")
+
+    def _refresh_schematic(self):
+        if self._loading or self._photo_src or getattr(self.watch, "photo", ""):
+            return
+        self._show_photo(None, self._form_watch())
 
     @staticmethod
     def _hdr(text):
@@ -440,6 +466,7 @@ class WatchEditor(QtWidgets.QDialog):
         self.cmb_model.addItems([""] + catdb.models_for(brand))
         self.cmb_model.setCurrentText(cur)
         self.cmb_model.blockSignals(False)
+        self._refresh_schematic()
 
     def _model_changed(self, model):
         brand = self.cmb_brand.currentText()
@@ -454,6 +481,7 @@ class WatchEditor(QtWidgets.QDialog):
             self.lbl_ref.setText(
                 f"{len(refs)} known reference(s) for this model. Picking one fills in "
                 f"the movement, metal, bezel and nickname -- all still editable.")
+        self._refresh_schematic()
 
     def _ref_changed(self, text):
         if self._loading or not text.strip():
@@ -496,6 +524,7 @@ class WatchEditor(QtWidgets.QDialog):
         if r.notes:
             msg += r.notes
         self.lbl_ref.setText(msg)
+        self._refresh_schematic()
 
     def _pick_photo(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -509,14 +538,15 @@ class WatchEditor(QtWidgets.QDialog):
         self.watch.photo = ""
         self._show_photo(None)
 
-    def _show_photo(self, path):
+    def _show_photo(self, path, obj=None):
         if path and os.path.exists(path):
             pm = QtGui.QPixmap(path)
             if not pm.isNull():
                 self.lbl_photo.setPixmap(pm.scaledToHeight(
                     148, QtCore.Qt.SmoothTransformation))
                 return
-        pm = _schematic_pixmap(self.watch, 148) if getattr(self, "watch", None) else None
+        obj = obj or getattr(self, "watch", None)
+        pm = _schematic_pixmap(obj, 148) if obj else None
         if pm is not None and not pm.isNull():
             self.lbl_photo.setPixmap(pm)
             self.lbl_photo.setToolTip("Schematic from the reference details -- "
