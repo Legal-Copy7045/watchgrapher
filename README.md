@@ -601,6 +601,13 @@ test pressure), notes, and any number of attached documents -- a scanned
 invoice or service report, PDF or image. The water-resistance result shows in
 the log line and the watch report.
 
+**Before / after report.** *Before / after report...* on the Service log tab
+takes a service entry, finds the timing run saved just before it and the
+post-service run just after (mark that run post-service when you save it), and
+lays them side by side -- mean rate, positional delta, amplitude high and low,
+worst beat error, each with the change -- and calls out what the service
+actually did: amplitude recovered, delta tightened, beat error set.
+
 **Service checklist.** *Service checklist...* opens a working checklist for the
 watch's caliber -- phases in order (teardown, cleaning, inspection, lubrication
 and assembly, timing and closing), the lubrication map (which oil where), the
