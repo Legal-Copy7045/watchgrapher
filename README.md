@@ -617,6 +617,24 @@ exports and recordings default to the `reports/` folder.
 
 ---
 
+## Chrono
+
+Two chronograph checks a bench timegrapher cannot do on its own.
+
+**Stopwatch comparison.** Start the on-screen stopwatch and your watch's
+chronograph together, run for several minutes, stop both, and enter what the
+chrono reads. It works out the error as s/day and ppm. A chronograph running
+off the same balance can only be as accurate as the watch is regulated -- an
+error much over a few s/day means regulate the watch, not the chronograph.
+Your reaction time on the two stop presses is worth a few tenths, so a long run
+dilutes it; do not read a short one too closely.
+
+**Chronograph load test.** Capture a steady reading with the chronograph
+stopped, then running. A 20-40 degree amplitude drop is normal for a coupled
+chronograph; much more points at the oscillating pinion or vertical clutch
+dragging, and a large rate shift is a case for regulating with the chrono in
+its normal running state.
+
 ## Sync
 
 A reference clock for hand-setting a watch to true time. Pick a time source --

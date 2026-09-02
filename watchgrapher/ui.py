@@ -1832,6 +1832,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stack.addWidget(measure)
         self.stack.addWidget(self._build_watches_page())
         self.stack.addWidget(self._build_sync_page())
+        self.stack.addWidget(self._build_chrono_page())
         self.stack.addWidget(self._build_help_page())
         self.stack.currentChanged.connect(self._on_page_changed)
 
@@ -1880,7 +1881,8 @@ class MainWindow(QtWidgets.QMainWindow):
         for label, idx, key in (("Measure", 0, "Ctrl+1"),
                                 ("My Watches", 1, "Ctrl+2"),
                                 ("Sync", 2, "Ctrl+3"),
-                                ("Help", 3, "Ctrl+4")):
+                                ("Chrono", 3, "Ctrl+4"),
+                                ("Help", 4, "Ctrl+5")):
             act = QtGui.QAction(label, self)
             act.setShortcut(key)
             act.triggered.connect(lambda _=False, i=idx: self._goto_page(i))
@@ -2029,6 +2031,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 ("MEASURE", "Live timing: trace, readouts, positions and advice."),
                 ("MY WATCHES", "Your collection: profiles, timing history and trends."),
                 ("SYNC", "Reference clock for hand-setting a watch to true time."),
+                ("CHRONO", "Chronograph accuracy: stopwatch comparison and the chrono load test."),
                 ("HELP", "How to use the tool, and how to read what it tells you.")]):
             b = QtWidgets.QPushButton(text)
             b.setCheckable(True)
@@ -2052,6 +2055,187 @@ class MainWindow(QtWidgets.QMainWindow):
         return bar
 
     # ============================================================== sync page
+    def _build_chrono_page(self):
+        page = QtWidgets.QWidget()
+        outer = QtWidgets.QVBoxLayout(page)
+        outer.setContentsMargins(28, 22, 28, 22)
+        outer.setSpacing(16)
+
+        outer.addWidget(QtWidgets.QLabel(
+            "<b>Chronograph accuracy.</b> Two checks a bench timegrapher cannot do "
+            "on its own: how well the running chronograph keeps time against a "
+            "reference, and what running it costs in amplitude."))
+
+        # -- stopwatch comparison --
+        g1 = QtWidgets.QGroupBox("Stopwatch comparison")
+        v1 = QtWidgets.QVBoxLayout(g1)
+        self.lbl_chrono = QtWidgets.QLabel("0:00.00")
+        f = self.lbl_chrono.font()
+        f.setPointSize(48)
+        f.setFamily("Consolas")
+        f.setBold(True)
+        self.lbl_chrono.setFont(f)
+        self.lbl_chrono.setAlignment(QtCore.Qt.AlignCenter)
+        v1.addWidget(self.lbl_chrono)
+        v1.addWidget(QtWidgets.QLabel(
+            "Press Start here and start your watch's chronograph at the same instant. "
+            "Let it run at least a few minutes -- longer is better. Press Stop on both "
+            "together, read the watch, and enter it below."))
+        cb = QtWidgets.QHBoxLayout()
+        self.btn_chrono_go = QtWidgets.QPushButton("Start")
+        self.btn_chrono_go.setStyleSheet(
+            f"QPushButton{{background:{ACCENT};color:#08101c;font-weight:bold;"
+            "padding:8px 22px;border-radius:6px;}")
+        self.btn_chrono_go.clicked.connect(self._chrono_toggle)
+        self.btn_chrono_reset = QtWidgets.QPushButton("Reset")
+        self.btn_chrono_reset.clicked.connect(self._chrono_reset)
+        cb.addWidget(self.btn_chrono_go)
+        cb.addWidget(self.btn_chrono_reset)
+        cb.addStretch(1)
+        v1.addLayout(cb)
+
+        er = QtWidgets.QFormLayout()
+        self.e_chrono_read = QtWidgets.QLineEdit()
+        self.e_chrono_read.setPlaceholderText("mm:ss.ss  or  ss.ss  as the chrono reads")
+        b_chrono_cmp = QtWidgets.QPushButton("Compare")
+        b_chrono_cmp.clicked.connect(self._chrono_compare)
+        crow = QtWidgets.QHBoxLayout()
+        crow.addWidget(self.e_chrono_read, 1)
+        crow.addWidget(b_chrono_cmp, 0)
+        cw = QtWidgets.QWidget()
+        cw.setLayout(crow)
+        er.addRow("Chronograph reads", cw)
+        v1.addLayout(er)
+        self.lbl_chrono_result = QtWidgets.QLabel("")
+        self.lbl_chrono_result.setWordWrap(True)
+        self.lbl_chrono_result.setStyleSheet("color:#c8d0dc;font-size:13px;")
+        v1.addWidget(self.lbl_chrono_result)
+        outer.addWidget(g1)
+
+        # -- chrono load test --
+        g2 = QtWidgets.QGroupBox("Chronograph load test (A/B)")
+        v2 = QtWidgets.QVBoxLayout(g2)
+        v2.addWidget(QtWidgets.QLabel(
+            "On the Measure tab, get a steady reading with the chronograph STOPPED and "
+            "capture it here, then start the chronograph, let it settle, and capture "
+            "again. A 20-40 deg amplitude drop is normal on a 7750; much more than that, "
+            "or a big rate shift, points at the chronograph coupling (the oscillating "
+            "pinion or vertical clutch) dragging."))
+        lb = QtWidgets.QHBoxLayout()
+        b_a = QtWidgets.QPushButton("Capture: chrono stopped")
+        b_a.clicked.connect(lambda: self._chrono_ab("stopped"))
+        b_b = QtWidgets.QPushButton("Capture: chrono running")
+        b_b.clicked.connect(lambda: self._chrono_ab("running"))
+        lb.addWidget(b_a)
+        lb.addWidget(b_b)
+        lb.addStretch(1)
+        v2.addLayout(lb)
+        self.lbl_chrono_ab = QtWidgets.QLabel("No captures yet.")
+        self.lbl_chrono_ab.setWordWrap(True)
+        self.lbl_chrono_ab.setStyleSheet("color:#c8d0dc;font-size:13px;")
+        v2.addWidget(self.lbl_chrono_ab)
+        outer.addWidget(g2)
+        outer.addStretch(1)
+
+        self._chrono_t0 = None
+        self._chrono_elapsed = 0.0
+        self._chrono_ab_data = {}
+        self._chrono_timer = QtCore.QTimer(self)
+        self._chrono_timer.setInterval(50)
+        self._chrono_timer.timeout.connect(self._chrono_tick)
+        return page
+
+    def _chrono_fmt(self, s):
+        m, s = divmod(s, 60.0)
+        return f"{int(m)}:{s:05.2f}"
+
+    def _chrono_tick(self):
+        if self._chrono_t0 is not None:
+            self.lbl_chrono.setText(
+                self._chrono_fmt(self._chrono_elapsed + time.monotonic() - self._chrono_t0))
+
+    def _chrono_toggle(self):
+        if self._chrono_t0 is None:
+            self._chrono_t0 = time.monotonic()
+            self._chrono_timer.start()
+            self.btn_chrono_go.setText("Stop")
+        else:
+            self._chrono_elapsed += time.monotonic() - self._chrono_t0
+            self._chrono_t0 = None
+            self._chrono_timer.stop()
+            self.btn_chrono_go.setText("Start")
+            self.lbl_chrono.setText(self._chrono_fmt(self._chrono_elapsed))
+
+    def _chrono_reset(self):
+        self._chrono_t0 = None
+        self._chrono_elapsed = 0.0
+        self._chrono_timer.stop()
+        self.btn_chrono_go.setText("Start")
+        self.lbl_chrono.setText("0:00.00")
+        self.lbl_chrono_result.setText("")
+
+    def _chrono_compare(self):
+        ref = self._chrono_elapsed + (
+            time.monotonic() - self._chrono_t0 if self._chrono_t0 is not None else 0.0)
+        if ref < 5:
+            self.lbl_chrono_result.setText("Run the comparison for longer than a few seconds.")
+            return
+        txt = self.e_chrono_read.text().strip().replace(" ", "")
+        try:
+            if ":" in txt:
+                mm, ss = txt.split(":")
+                watch = float(mm) * 60 + float(ss)
+            else:
+                watch = float(txt)
+        except ValueError:
+            self.lbl_chrono_result.setText("Enter the chrono reading as mm:ss.ss or ss.ss.")
+            return
+        err = watch - ref
+        spd = err / ref * 86400.0
+        ppm = err / ref * 1e6
+        self.lbl_chrono_result.setText(
+            f"Over {self._chrono_fmt(ref)} the chronograph is {err:+.2f} s "
+            f"({spd:+.1f} s/day, {ppm:+.0f} ppm). "
+            + ("That is the movement's own rate -- regulate the watch, not the "
+               "chronograph." if abs(spd) > 3 else
+               "Within a few s/day, which is as good as the balance is regulated. "
+               "The chronograph mechanism itself adds no error.")
+            + " Your reaction time on the two stop presses is worth a few tenths of "
+              "a second, so a long run dilutes it -- do not read too much into a "
+              "short one.")
+
+    def _chrono_ab(self, which):
+        m = self._last_good if getattr(self, "_last_good", None) is not None else self.last
+        if m is None or not m.ok:
+            self.lbl_chrono_ab.setText("No steady reading on the Measure tab to capture.")
+            return
+        self._chrono_ab_data[which] = (m.rate, m.amplitude, m.beat_error)
+        a = self._chrono_ab_data.get("stopped")
+        b = self._chrono_ab_data.get("running")
+        lines = []
+        if a:
+            lines.append(f"Stopped: {a[0]:+.1f} s/d, {a[1]:.0f} deg, {a[2]:.2f} ms")
+        if b:
+            lines.append(f"Running: {b[0]:+.1f} s/d, {b[1]:.0f} deg, {b[2]:.2f} ms")
+        if a and b:
+            dr, da = b[0] - a[0], b[1] - a[1]
+            lines.append("")
+            lines.append(f"Chronograph load: {da:+.0f} deg amplitude, {dr:+.1f} s/d rate.")
+            if da < -55:
+                lines.append("That is a heavy drop -- check the oscillating pinion / "
+                             "vertical clutch engagement and lubrication, and the "
+                             "chronograph bridge screws.")
+            elif da < -15:
+                lines.append("Normal load for a coupled chronograph.")
+            else:
+                lines.append("Very light load -- either a well-set vertical clutch or "
+                             "the chronograph is not actually engaging.")
+            if abs(dr) > 8:
+                lines.append(f"The {dr:+.1f} s/d rate shift is larger than expected; "
+                             f"re-regulating with the chrono in its normal running "
+                             f"state may be the pragmatic call for a daily-wear piece.")
+        self.lbl_chrono_ab.setText("\n".join(lines))
+
     def _build_sync_page(self):
         page = QtWidgets.QWidget()
         outer = QtWidgets.QHBoxLayout(page)
