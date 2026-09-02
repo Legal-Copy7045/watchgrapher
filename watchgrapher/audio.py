@@ -67,6 +67,8 @@ class Recorder:
         self.samplerate = int(samplerate)
         self.channel = channel
         self.blocksize = blocksize
+        self.buffer_seconds = float(buffer_seconds)
+        self.opened_note = ""            # anything worth telling the user after start()
         self.n = int(buffer_seconds * self.samplerate)
         self._buf = np.zeros(self.n, dtype=np.float32)
         self._write = 0
@@ -112,14 +114,76 @@ class Recorder:
                 self._wav.writeframes(
                     np.clip(data * 32767.0, -32768, 32767).astype("<i2").tobytes())
 
+    def _device_info(self):
+        try:
+            info = sd.query_devices(self.device)
+            api = sd.query_hostapis(info["hostapi"])["name"]
+            return info, str(api)
+        except Exception:
+            return {}, ""
+
     def start(self):
         if self._stream is not None:
             return
-        self._stream = sd.InputStream(
-            device=self.device, channels=max(1, self.channel + 1),
-            samplerate=self.samplerate, blocksize=self.blocksize,
-            dtype="float32", callback=self._callback)
-        self._stream.start()
+        ch = max(1, self.channel + 1)
+        info, api = self._device_info()
+
+        # Many USB speakerphones (Jabra Speak, Poly, etc.) only expose their
+        # microphone at 16 kHz on the WASAPI endpoint, and WASAPI shared mode
+        # will not resample unless told to -- that is the -9996 / -9997 you get.
+        extra = None
+        if "wasapi" in api.lower():
+            try:
+                extra = sd.WasapiSettings(auto_convert=True)
+            except Exception:
+                extra = None
+
+        want = self.samplerate
+        tries = [want]
+        dsr = int(info.get("default_samplerate") or 0)
+        for r in (dsr, 48000, 44100, 32000, 16000):
+            if r and r not in tries:
+                tries.append(r)
+
+        last_err = None
+        for rate in tries:
+            for ex in ([extra, None] if extra is not None else [None]):
+                try:
+                    s = sd.InputStream(
+                        device=self.device, channels=ch, samplerate=rate,
+                        blocksize=self.blocksize, dtype="float32",
+                        callback=self._callback, extra_settings=ex)
+                    s.start()
+                except Exception as e:               # sd.PortAudioError et al.
+                    last_err = e
+                    continue
+                self._stream = s
+                if rate != want:
+                    self.samplerate = rate
+                    self.n = max(1, int(self.buffer_seconds * rate))
+                    self._buf = np.zeros(self.n, dtype=np.float32)
+                    self._write = self._filled = 0
+                    self.opened_note = (
+                        f"{(info.get('name') or 'device')} would not open at {want} Hz; "
+                        f"running at {rate} Hz. Amplitude resolution is coarser -- for "
+                        f"serious work use a dedicated pickup, or pick the MME / "
+                        f"DirectSound copy of this device.")
+                return
+
+        name = info.get("name") or f"device {self.device}"
+        supported = []
+        for r in (16000, 32000, 44100, 48000, 96000):
+            try:
+                sd.check_input_settings(device=self.device, samplerate=r, channels=ch)
+                supported.append(r)
+            except Exception:
+                pass
+        hint = (f" It reports support for {', '.join(f'{r} Hz' for r in supported)}."
+                if supported else
+                " It did not accept any common sample rate as an input -- it may be an "
+                "output-only endpoint, in use by another app, or need a different host "
+                "API (try the MME or DirectSound copy in the Device list).")
+        raise RuntimeError(f"Could not open '{name}' for recording.{hint}\n\n({last_err})")
 
     def stop(self):
         if self._stream is not None:
@@ -232,6 +296,8 @@ class SimulatedRecorder:
                  bph: int = 28800, amplitude: float = 275.0, lift_angle: float = 52.0,
                  rate_spd: float = 0.0, beat_error_ms: float = 0.0, snr_db: float = 18.0):
         self.samplerate = int(samplerate)
+        self.buffer_seconds = float(buffer_seconds)
+        self.opened_note = ""
         self.n = int(buffer_seconds * self.samplerate)
         self._buf = np.zeros(self.n, dtype=np.float32)
         self._write = 0

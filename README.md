@@ -670,5 +670,9 @@ the one to believe.
 - Chronographs read lower with the chrono running -- that's real, not an error.
 - Co-axial and other non-lever escapements have a different noise signature.
   The 38° lift angle is handled, but expect to tune the sub-noise threshold.
+- USB speakerphones (Jabra Speak, Poly, etc.) often only expose their mic at
+  16 kHz and run heavy noise-suppression DSP that mangles the escapement
+  click. The app will open them -- falling back to 16 kHz and telling you --
+  but a piezo disc on a plain interface is a different class of result.
 - Static bench readings aren't wrist performance. Use these numbers to set the
   watch up, then track it on the wrist for a few days.
