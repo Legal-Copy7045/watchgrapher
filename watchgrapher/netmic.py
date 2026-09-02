@@ -1,12 +1,18 @@
 """
 Phone (or any browser) as a remote pickup.
 
-Runs a small HTTP server on the LAN. Open the URL it prints on a phone, tap
+Runs a small web server on the LAN. Open the URL it prints on a phone, tap
 Start, and the browser streams microphone audio back -- either as raw Int16
 PCM over a hand-rolled WebSocket (no dependencies, the default) or over
 WebRTC (needs `aiortc`, better on a marginal Wi-Fi link). Either way the
 audio lands in a ring buffer that presents the same surface as
 audio.Recorder, so the rest of the app treats it as just another input.
+
+Browsers only expose `navigator.mediaDevices` in a "secure context" -- HTTPS
+or localhost -- so the server generates a throwaway self-signed certificate
+and serves HTTPS when `cryptography` is available. The phone shows a one-time
+"not private" warning that you tap through. Without `cryptography` it falls
+back to HTTP, where phone browsers will refuse microphone access.
 
 Nothing here is exposed beyond the local network, and the server only ever
 receives audio -- it never plays anything back or runs code from the page.
@@ -18,7 +24,9 @@ import base64
 import hashlib
 import json
 import socket
+import ssl
 import struct
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,7 +40,44 @@ try:
 except Exception:
     HAVE_AIORTC = False
 
+try:
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    HAVE_CRYPTO = True
+except Exception:
+    HAVE_CRYPTO = False
+
 _WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+def _self_signed(ip: str):
+    """Return (cert_pem_bytes, key_pem_bytes) for a throwaway HTTPS cert, or None."""
+    if not HAVE_CRYPTO:
+        return None
+    import datetime as _dt
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "WatchGrapher pickup")])
+    san = [x509.DNSName("localhost")]
+    try:
+        import ipaddress
+        san.append(x509.IPAddress(ipaddress.ip_address(ip)))
+    except Exception:
+        pass
+    now = _dt.datetime.utcnow()
+    cert = (x509.CertificateBuilder()
+            .subject_name(name).issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - _dt.timedelta(days=1))
+            .not_valid_after(now + _dt.timedelta(days=825))
+            .add_extension(x509.SubjectAlternativeName(san), critical=False)
+            .sign(key, hashes.SHA256()))
+    return (cert.public_bytes(serialization.Encoding.PEM),
+            key.private_bytes(serialization.Encoding.PEM,
+                              serialization.PrivateFormat.TraditionalOpenSSL,
+                              serialization.NoEncryption()))
 
 
 def lan_ip() -> str:
@@ -129,11 +174,39 @@ class NetworkRecorder:
                 else:
                     self._send(404)
 
+        ip = lan_ip()
         self._srv = ThreadingHTTPServer(("0.0.0.0", self._want_port), Handler)
         self.port = self._srv.server_address[1]
-        self.url = f"http://{lan_ip()}:{self.port}"
-        self.opened_note = (f"Phone pickup ready at {self.url} -- open it on a device on "
-                            f"the same network and tap Start.")
+
+        self.secure = False
+        pair = _self_signed(ip)
+        if pair is not None:
+            try:
+                cert_pem, key_pem = pair
+                cf = tempfile.NamedTemporaryFile(suffix=".pem", delete=False)
+                cf.write(cert_pem + key_pem)
+                cf.close()
+                self._certfile = cf.name
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                ctx.load_cert_chain(self._certfile)
+                self._srv.socket = ctx.wrap_socket(self._srv.socket, server_side=True)
+                self.secure = True
+            except Exception:
+                self.secure = False
+
+        scheme = "https" if self.secure else "http"
+        self.url = f"{scheme}://{ip}:{self.port}"
+        if self.secure:
+            self.opened_note = (
+                f"Phone pickup ready at {self.url} -- open it on a device on the same "
+                f"network. The phone will warn the certificate is not trusted: that is "
+                f"expected for a local self-signed cert, tap through it, then tap Start.")
+        else:
+            self.opened_note = (
+                f"Phone pickup at {self.url} -- WARNING: without the 'cryptography' "
+                f"package the server can only use plain HTTP, and phone browsers block "
+                f"microphone access on HTTP. Install it (pip install cryptography) and "
+                f"restart for this to work.")
         self._srv_thread = threading.Thread(target=self._srv.serve_forever, daemon=True)
         self._srv_thread.start()
 
@@ -145,6 +218,14 @@ class NetworkRecorder:
             except Exception:
                 pass
             self._srv = None
+        cf = getattr(self, "_certfile", None)
+        if cf:
+            try:
+                import os
+                os.remove(cf)
+            except OSError:
+                pass
+            self._certfile = None
         loop = self._rtc_loop
         if loop is not None:
             for pc in list(self._rtc_pcs):
@@ -416,10 +497,19 @@ fetch('/rtc-available').then(r=>r.json()).then(j=>{
 });
 function mode(){return document.querySelector('input[name=mode]:checked').value;}
 async function start(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    status.innerHTML='This browser will not give microphone access unless the '+
+      'page is loaded over <b>https</b> (or localhost). '+
+      (location.protocol==='https:'
+        ? 'It is https here, so this browser is just too old -- try Chrome or Safari.'
+        : 'Reload this page using <b>https://'+location.host+'</b>. If that will not '+
+          'connect, the app needs the "cryptography" package installed to serve https.');
+    return;
+  }
   try{
     stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,
       noiseSuppression:false,autoGainControl:false}});
-  }catch(e){status.textContent='mic denied: '+e; return;}
+  }catch(e){status.textContent='mic denied: '+e+' -- check the browser did not block it.'; return;}
   running=true;
   document.getElementById('go').disabled=true;
   document.getElementById('stop').disabled=false;

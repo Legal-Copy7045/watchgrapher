@@ -4737,12 +4737,22 @@ alongside the application.</p>
             self._clip_count0 = 0
             if dev == "NET":
                 url = getattr(self.recorder, "url", "")
-                QtWidgets.QMessageBox.information(
-                    self, "Phone pickup",
-                    f"On a phone or laptop on the same Wi-Fi, open:\n\n    {url}\n\n"
-                    f"Tap Start on that page and put its microphone against the movement. "
-                    f"Choose PCM (works anywhere) or WebRTC (steadier on a weak link) on "
-                    f"the page. This window keeps listening until you press Stop.")
+                secure = getattr(self.recorder, "secure", False)
+                if secure:
+                    body = (f"On a phone or laptop on the same Wi-Fi, open:\n\n    {url}\n\n"
+                            f"The phone will warn that the connection is not private -- "
+                            f"that is expected for a local self-signed certificate. Tap "
+                            f"Advanced / Show details and proceed, then tap Start on the "
+                            f"page and hold the phone's microphone against the case.\n\n"
+                            f"Pick PCM (works anywhere) or WebRTC (steadier on a weak "
+                            f"link) on the page. This window listens until you press Stop.")
+                else:
+                    body = (f"Server running at:\n\n    {url}\n\n"
+                            f"WARNING: it could only start plain HTTP, and phone browsers "
+                            f"block microphone access over HTTP. Install the 'cryptography' "
+                            f"package (pip install cryptography) and restart so it can "
+                            f"serve HTTPS.")
+                QtWidgets.QMessageBox.information(self, "Phone pickup", body)
             note = getattr(self.recorder, "opened_note", "")
             if note:
                 self.status.showMessage(note, 12000)
