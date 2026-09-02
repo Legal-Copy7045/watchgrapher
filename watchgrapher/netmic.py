@@ -26,6 +26,8 @@ import asyncio
 import base64
 import hashlib
 import json
+import queue
+import secrets
 import socket
 import ssl
 import struct
@@ -137,6 +139,21 @@ class NetworkRecorder:
         self._rtc_loop = None
         self._rtc_thread: Optional[threading.Thread] = None
         self._certfile = None
+        # Remote control: the app publishes JSON snapshots here and drains the
+        # command queue on its GUI thread.
+        self.token = secrets.token_hex(4)
+        self.state_json = "{}"
+        self.watches_json = "[]"
+        self.cmd_q: "queue.Queue" = queue.Queue(maxsize=64)
+
+    def drain_commands(self):
+        out = []
+        try:
+            while True:
+                out.append(self.cmd_q.get_nowait())
+        except queue.Empty:
+            pass
+        return out
 
     # -- lifecycle --------------------------------------------------------------
     def start(self):
@@ -168,12 +185,17 @@ class NetworkRecorder:
 
             def do_GET(self):
                 if self.path in ("/", "/index.html"):
-                    self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
+                    self._send(200, PAGE.replace("__TOKEN__", rec.token).encode("utf-8"),
+                               "text/html; charset=utf-8")
                 elif self.path == "/ws":
                     rec._serve_ws(self)
                 elif self.path == "/rtc-available":
                     self._send(200, json.dumps({"aiortc": HAVE_AIORTC}).encode(),
                                "application/json")
+                elif self.path == "/api/state":
+                    self._send(200, rec.state_json.encode(), "application/json")
+                elif self.path == "/api/watches":
+                    self._send(200, rec.watches_json.encode(), "application/json")
                 else:
                     self._send(404)
 
@@ -186,6 +208,17 @@ class NetworkRecorder:
                         self._send(200, json.dumps(answer).encode(), "application/json")
                     except Exception as e:
                         self._send(500, str(e).encode())
+                elif self.path == "/api/cmd":
+                    if self.headers.get("X-WG-Token", "") != rec.token:
+                        self._send(403, b'{"ok":false,"err":"bad token"}', "application/json")
+                        return
+                    n = min(int(self.headers.get("Content-Length", 0) or 0), 4096)
+                    try:
+                        obj = json.loads(self.rfile.read(n) or b"{}")
+                        rec.cmd_q.put_nowait(obj)
+                    except (ValueError, queue.Full):
+                        pass
+                    self._send(200, b'{"ok":true}', "application/json")
                 else:
                     self._send(404)
 
@@ -551,57 +584,86 @@ def _ws_frame(opcode, payload=b""):
 
 PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WatchGrapher pickup</title>
+<title>WatchGrapher remote</title>
 <style>
+  :root{color-scheme:dark}
   body{font-family:-apple-system,Segoe UI,sans-serif;background:#12161c;color:#e8eef7;
-       margin:0;padding:22px;text-align:center}
-  h1{font-size:18px;font-weight:600}
-  button{font-size:18px;padding:16px 28px;border-radius:10px;border:0;margin:8px;
+       margin:0;padding:20px;text-align:center}
+  h1{font-size:17px;font-weight:600;margin:0 0 4px}
+  button{font-size:18px;padding:15px 26px;border-radius:10px;border:0;margin:6px;
          background:#4da3ff;color:#08101c;font-weight:700}
-  button.stop{background:#ff5d5d}
-  #meter{height:16px;background:#1a1f27;border-radius:8px;margin:16px auto;max-width:340px}
-  #bar{height:100%;width:0;background:#57d38c;border-radius:8px}
+  button.stop{background:#ff5d5d;color:#fff}
+  button:disabled{opacity:.4}
+  button.sec{background:#2a323e;color:#e8eef7;font-size:15px;padding:11px 18px}
+  select{font-size:16px;padding:9px;border-radius:8px;background:#1a1f27;color:#e8eef7;
+         border:1px solid #2a323e;max-width:92%}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;max-width:360px;margin:14px auto}
+  .tile{background:#1a1f27;border:1px solid #2a323e;border-radius:10px;padding:10px 6px}
+  .tile .k{font-size:11px;color:#8a94a4;letter-spacing:.05em}
+  .tile .v{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+  #meter{height:14px;background:#1a1f27;border-radius:7px;margin:12px auto;max-width:340px}
+  #bar{height:100%;width:0;background:#57d38c;border-radius:7px}
   #clip{color:#ff5d5d;font-size:13px;min-height:16px}
-  .row{margin:12px 0}
-  label{font-size:15px}
-  #status{color:#8a94a4;font-size:14px;min-height:20px}
-  input[type=range]{width:280px}
+  #status{color:#8a94a4;font-size:13px;min-height:18px}
+  #desk{color:#7fb2ff;font-size:13px;min-height:18px}
+  .row{margin:10px 0}
+  details{max-width:360px;margin:10px auto;text-align:left;color:#b6bfcc;font-size:14px}
+  summary{cursor:pointer;color:#8a94a4}
+  input[type=range]{width:260px}
 </style></head><body>
-<h1>WatchGrapher pickup</h1>
-<p id="status">idle</p>
-<div class="row">
-  <label><input type="radio" name="mode" value="pcm" checked> PCM (WebSocket)</label>
-  &nbsp;&nbsp;
-  <label><input type="radio" name="mode" value="rtc" id="rtcopt"> WebRTC</label>
+<h1>WatchGrapher remote</h1>
+<p id="desk">connecting...</p>
+
+<div class="row"><select id="watch"><option value="">(no watch)</option></select></div>
+
+<div class="grid">
+  <div class="tile"><div class="k">RATE s/d</div><div class="v" id="t_rate">--</div></div>
+  <div class="tile"><div class="k">AMPLITUDE</div><div class="v" id="t_amp">--</div></div>
+  <div class="tile"><div class="k">BEAT ERROR ms</div><div class="v" id="t_be">--</div></div>
+  <div class="tile"><div class="k">BEAT RATE</div><div class="v" id="t_bph">--</div></div>
 </div>
+
 <div id="meter"><div id="bar"></div></div>
 <div id="clip"></div>
-<div class="row">
-  <label>Boost&nbsp; <span id="gval">6&times;</span><br>
-  <input type="range" id="gain" min="1" max="20" step="1" value="6"></label>
-</div>
-<div class="row">
-  <label><input type="checkbox" id="hwagc"> Let the phone auto-level (may pump)</label>
-</div>
-<button id="go">Start</button>
+<p id="status">idle</p>
+
+<button id="go">Start test</button>
 <button id="stop" class="stop" disabled>Stop</button>
-<p id="hint" style="color:#5a6472;font-size:13px">
-Keep this screen on. Press the phone's mic port against the case back.<br>
-Turn Boost up until the meter sits high but the red CLIP line stays quiet.</p>
+<div class="row"><button id="save" class="sec" disabled>Save run to watch</button></div>
+
+<details>
+  <summary>Audio settings</summary>
+  <div class="row">
+    <label><input type="radio" name="mode" value="pcm" checked> PCM (WebSocket)</label>
+    &nbsp; <label><input type="radio" name="mode" value="rtc" id="rtcopt"> WebRTC</label>
+  </div>
+  <div class="row">Boost <span id="gval">6&times;</span><br>
+    <input type="range" id="gain" min="1" max="20" step="1" value="6"></div>
+  <div class="row"><label><input type="checkbox" id="hwagc">
+    Let the phone auto-level (may pump)</label></div>
+  <p style="color:#5a6472;font-size:13px">Press the phone's mic port against the case
+  back. Turn Boost up until the meter sits high but CLIP stays quiet.</p>
+</details>
+
 <script>
-let ac, node, src, gainNode, dest, stream, ws, pc, wake, running=false, clips=0, retry=0;
-const status=document.getElementById('status'), bar=document.getElementById('bar'),
-      clip=document.getElementById('clip'), gainEl=document.getElementById('gain'),
-      gval=document.getElementById('gval'),
-      goBtn=document.getElementById('go'), stopBtn=document.getElementById('stop');
+const TOKEN="__TOKEN__";
+let ac,node,src,gainNode,dest,stream,ws,pc,wake,running=false,clips=0,retry=0,poll=null;
+const $=id=>document.getElementById(id);
+const status=$("status"),desk=$("desk"),bar=$("bar"),clip=$("clip"),
+      gainEl=$("gain"),gval=$("gval"),goBtn=$("go"),stopBtn=$("stop"),
+      saveBtn=$("save"),watchEl=$("watch");
 fetch('/rtc-available').then(r=>r.json()).then(j=>{
-  if(!j.aiortc){const o=document.getElementById('rtcopt');o.disabled=true;
-    o.parentNode.style.opacity=.4;
+  if(!j.aiortc){const o=$("rtcopt");o.disabled=true;o.parentNode.style.opacity=.4;
     o.parentNode.title='Start the app with aiortc installed for WebRTC';}
 });
 gainEl.oninput=()=>{ gval.innerHTML=gainEl.value+'&times;';
   if(gainNode) gainNode.gain.value=parseFloat(gainEl.value); };
 function mode(){return document.querySelector('input[name=mode]:checked').value;}
+function cmd(name,extra){
+  return fetch('/api/cmd',{method:'POST',
+    headers:{'Content-Type':'application/json','X-WG-Token':TOKEN},
+    body:JSON.stringify(Object.assign({cmd:name},extra||{}))}).catch(()=>{});
+}
 function meter(pk){
   bar.style.width=Math.min(100,pk*120)+'%';
   if(pk>=0.99){ clips++; clip.textContent='CLIP -- turn Boost down'; }
@@ -614,22 +676,49 @@ document.addEventListener('visibilitychange',()=>{
   if(running && document.visibilityState==='visible') keepAwake();
 });
 
+async function loadWatches(sel){
+  try{
+    const list=await (await fetch('/api/watches')).json();
+    const keep=sel||watchEl.value;
+    watchEl.innerHTML='<option value="">(no watch)</option>'+
+      list.map(w=>'<option value="'+w.id+'">'+w.label.replace(/</g,'&lt;')+'</option>').join('');
+    if(keep) watchEl.value=keep;
+  }catch(e){}
+}
+loadWatches();
+watchEl.onchange=()=>cmd('select',{id:watchEl.value});
+
+function fmt(v,d){ return (v===null||v===undefined)?'--':Number(v).toFixed(d); }
+async function refresh(){
+  let s; try{ s=await (await fetch('/api/state')).json(); }catch(e){ return; }
+  if(!s.device_is_net)
+    desk.textContent='Desktop input is not set to the phone pickup -- choose it there.';
+  else if(s.listening)
+    desk.textContent='desktop listening'+(s.watch?' -- '+s.watch:'')+
+      (s.elapsed?' -- '+Math.round(s.elapsed)+'s':'');
+  else
+    desk.textContent='desktop idle'+(s.watch?' -- watch: '+s.watch:'');
+  $("t_rate").textContent=(s.rate>0?'+':'')+fmt(s.rate,1);
+  $("t_amp").textContent=fmt(s.amplitude,0);
+  $("t_be").textContent=fmt(s.beat_error,2);
+  $("t_bph").textContent=s.bph||'--';
+  saveBtn.disabled=!(running && s.have_reading && watchEl.value);
+  if(s.last_save) status.textContent=s.last_save;
+}
+
 async function start(){
-  stopStreams();                 // clear any half-torn-down state first
+  stopStreams();
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
-    status.innerHTML='This browser will not give microphone access unless the '+
-      'page is loaded over <b>https</b> (or localhost). '+
-      (location.protocol==='https:'
-        ? 'It is https here, so the browser is just too old -- try Chrome or Safari.'
-        : 'Reload using <b>https://'+location.host+'</b>. If that will not connect, '+
-          'the app needs the "cryptography" package to serve https.');
+    status.innerHTML='This browser needs the page over <b>https</b> for mic access. '+
+      (location.protocol==='https:'?'Try Chrome or Safari.':
+       'Reload using <b>https://'+location.host+'</b>.');
     return;
   }
-  const agc=document.getElementById('hwagc').checked;
+  const agc=$("hwagc").checked;
   try{
     stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,
       noiseSuppression:false,autoGainControl:agc}});
-  }catch(e){status.textContent='mic denied: '+e+' -- check the browser did not block it.';return;}
+  }catch(e){status.textContent='mic denied: '+e;return;}
   running=true; clips=0; retry=0;
   goBtn.disabled=true; stopBtn.disabled=false;
   keepAwake();
@@ -639,6 +728,10 @@ async function start(){
   gainNode=ac.createGain(); gainNode.gain.value=parseFloat(gainEl.value);
   src.connect(gainNode);
   if(mode()==='rtc'){ await startRtc(); } else { startPcm(); }
+  await cmd('select',{id:watchEl.value});
+  await cmd('start');
+  if(!poll) poll=setInterval(refresh,1000);
+  refresh();
 }
 
 function startPcm(){
@@ -660,26 +753,23 @@ function connectWs(){
   ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
   ws.binaryType='arraybuffer';
   ws.onopen=()=>{ retry=0; ws.send(JSON.stringify({sr:ac.sampleRate}));
-    status.textContent='streaming (PCM) @ '+Math.round(ac.sampleRate)+' Hz'; };
+    status.textContent='streaming (PCM)'; };
   ws.onclose=ws.onerror=()=>{
     if(!running) return;
     retry++;
-    if(retry>20){ status.textContent='lost the connection to WatchGrapher -- tap Start again'; stop(); return; }
-    status.textContent='reconnecting to WatchGrapher... ('+retry+')';
-    setTimeout(connectWs, Math.min(1000*retry, 5000));
+    if(retry>20){ status.textContent='lost the connection -- tap Start again'; stop(); return; }
+    status.textContent='reconnecting... ('+retry+')';
+    setTimeout(connectWs, Math.min(1000*retry,5000));
   };
 }
-
 async function startRtc(){
   dest=ac.createMediaStreamDestination();
   gainNode.connect(dest);
   pc=new RTCPeerConnection();
   dest.stream.getAudioTracks().forEach(t=>pc.addTrack(t,dest.stream));
   pc.onconnectionstatechange=()=>{
-    if(!running) return;
-    if(pc.connectionState==='failed'||pc.connectionState==='disconnected'){
-      status.textContent='WebRTC connection lost -- tap Start again'; stop();
-    }
+    if(running && (pc.connectionState==='failed'||pc.connectionState==='disconnected')){
+      status.textContent='WebRTC connection lost -- tap Start again'; stop(); }
   };
   const offer=await pc.createOffer({offerToReceiveAudio:false});
   await pc.setLocalDescription(offer);
@@ -708,15 +798,21 @@ function stopStreams(){
   try{stream&&stream.getTracks().forEach(t=>t.stop());stream=null;}catch(e){}
   try{ac&&ac.close();ac=null;}catch(e){}
 }
-function stop(){
+async function stop(){
   running=false;
-  goBtn.disabled=false; stopBtn.disabled=true;
+  goBtn.disabled=false; stopBtn.disabled=true; saveBtn.disabled=true;
   bar.style.width=0; clip.textContent='';
   if(status.textContent.indexOf('lost')<0 && status.textContent.indexOf('failed')<0)
     status.textContent='stopped';
   try{ wake&&wake.release(); wake=null; }catch(e){}
   stopStreams();
+  await cmd('stop');
+  if(poll){ clearInterval(poll); poll=null; }
+  setTimeout(refresh,300);
 }
+saveBtn.onclick=async()=>{ saveBtn.disabled=true; await cmd('save'); setTimeout(refresh,400); };
 goBtn.onclick=start;
 stopBtn.onclick=stop;
+setInterval(()=>{ if(!poll) refresh(); }, 2000);
+refresh();
 </script></body></html>"""
