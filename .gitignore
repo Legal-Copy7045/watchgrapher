@@ -6,3 +6,4 @@ watches/
 *.wav
 pickup_profiles.json
 crosschecks.json
+settings.json
