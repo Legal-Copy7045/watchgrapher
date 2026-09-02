@@ -45,11 +45,11 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
 """
 
 
-def _fmt(v, dp=1, dash="--"):
+def _fmt(v, dp=1, dash="--", signed=False):
     try:
         if v != v:
             return dash
-        return f"{v:.{dp}f}"
+        return f"{v:+.{dp}f}" if signed else f"{v:.{dp}f}"
     except (TypeError, ValueError):
         return dash
 
@@ -157,7 +157,8 @@ def build_certificate(path, *, caliber, readings, grade, watch_label="",
         amps = [r.amplitude for r in readings if r.amplitude == r.amplitude]
         for r in readings:
             p.append(f"<tr><td>{e(r.position)}</td><td>{e(r.wind_state)}</td>"
-                     f"<td class='n'>{r.rate:+.1f}</td><td class='n'>{_fmt(r.amplitude, 0)}</td>"
+                     f"<td class='n'>{_fmt(r.rate, 1, signed=True)}</td>"
+                     f"<td class='n'>{_fmt(r.amplitude, 0)}</td>"
                      f"<td class='n'>{_fmt(r.beat_error, 2)}</td></tr>")
         if len(rates) >= 2:
             p.append(f"<tr><td colspan='2'><b>Mean rate / delta</b></td>"
@@ -290,7 +291,7 @@ def build(path, caliber, readings, measurement=None, findings=None,
                  "<th class='n'>Beat error ms</th></tr>")
         for r in readings:
             p.append(f"<tr><td>{e(r.position)}</td><td>{e(r.wind_state)}</td>"
-                     f"<td class='n'>{r.rate:+.1f}</td>"
+                     f"<td class='n'>{_fmt(r.rate, 1, signed=True)}</td>"
                      f"<td class='n'>{_fmt(r.amplitude, 0)}</td>"
                      f"<td class='n'>{_fmt(r.beat_error, 2)}</td></tr>")
         rates = [r.rate for r in readings if r.rate == r.rate]
@@ -548,9 +549,9 @@ def build_watch_report(path, watch, caliber=None, trends=None, notes=None,
          "</style></head><body>"]
 
     p.append(f"<h1>{e(watch.label)}</h1>")
-    sub = [x for x in (watch.brand, watch.model, watch.reference) if x]
-    p.append(f"<p class='sub'>{e(' &middot; '.join(sub))} &middot; {now}"
-             f"{' &middot; ' + e(owner) if owner else ''}</p>".replace("&amp;middot;", "&middot;"))
+    sub = [e(x) for x in (watch.brand, watch.model, watch.reference, now,
+                          owner) if x]
+    p.append(f"<p class='sub'>{' &middot; '.join(sub)}</p>")
 
     img = _embed_image(photo_path)
     if img:
@@ -709,13 +710,18 @@ def build_portfolio(path, collection, owner=""):
     p.append(f"<p class='sub'>{len(watches)} watch{'es' if len(watches) != 1 else ''} "
              f"&middot; {now}{' &middot; ' + e(owner) if owner else ''}</p>")
 
+    def _money(s):
+        try:
+            return float(str(s).replace(",", "").replace("£", "").replace("$", "")
+                         .replace("€", "").strip())
+        except (ValueError, TypeError):
+            return None
+
     buy, svc = {}, {}
     for w in watches:
-        try:
-            v = float(str(w.purchase_price).replace(",", "").strip())
+        v = _money(w.purchase_price)
+        if v is not None:
             buy[w.purchase_currency or "GBP"] = buy.get(w.purchase_currency or "GBP", 0.0) + v
-        except (ValueError, TypeError):
-            pass
         for cur, amt in (w.total_service_cost() if hasattr(w, "total_service_cost") else {}).items():
             svc[cur] = svc.get(cur, 0.0) + amt
     tot_bits = []
@@ -817,7 +823,7 @@ def build_portfolio(path, collection, owner=""):
 def build_year_review(path, collection, year: int, owner=""):
     """Everything that happened to the collection in one calendar year."""
     e = html.escape
-    y0, y1 = f"{year}-01-01", f"{year}-12-31T23:59"
+    y0, y1 = f"{year}-01-01", f"{year}-12-31T23:59:59"
     watches = collection.sorted_watches()
 
     def in_year(iso):

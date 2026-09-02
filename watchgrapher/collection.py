@@ -136,7 +136,8 @@ class ServiceRecord:
     @property
     def cost_value(self) -> Optional[float]:
         try:
-            return float(str(self.cost).replace(",", "").replace("£", "").replace("$", "").strip())
+            return float(str(self.cost).replace(",", "").replace("£", "")
+                         .replace("$", "").replace("€", "").strip())
         except (ValueError, TypeError):
             return None
 
@@ -477,7 +478,8 @@ def health_notes(w: Watch) -> List[str]:
     out = []
     if len(w.history) < 2:
         return out
-    amps = [h.max_amplitude for h in w.history if h.max_amplitude == h.max_amplitude]
+    hist = sorted(w.history, key=lambda h: h.when)
+    amps = [h.max_amplitude for h in hist if h.max_amplitude == h.max_amplitude]
     if len(amps) >= 3:
         drop = amps[0] - amps[-1]
         if drop > 30:

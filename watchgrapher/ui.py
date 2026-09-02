@@ -2179,6 +2179,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.collection.load()
         self._refresh_watches()
+        self._publish_phone_watches()
         self._refresh_undo_action()
         self.status.showMessage("Reverted the last collection change", 5000)
 
@@ -5223,6 +5224,10 @@ alongside the application.</p>
                 # filing whatever was captured, rather than leaving it frozen.
                 self.btn_res.setChecked(False)   # -> _toggle_reserve(False)
             self.worker.recorder = None
+            # A result may already be in flight from the worker thread. Clearing
+            # the session clock stops it appending a stale point to the history
+            # plots (all of which gate on _listen_t0).
+            self._listen_t0 = None
             if self.recorder:
                 if getattr(self.recorder, "is_recording", False):
                     p = self.recorder.stop_recording()

@@ -33,9 +33,11 @@ import secrets
 import socket
 import ssl
 import struct
+import sys
 import tempfile
 import threading
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
@@ -188,6 +190,19 @@ class NetworkRecorder:
             # hide a real conflict from the "try the next port" loop below.
             allow_reuse_address = False
             daemon_threads = True
+
+            def handle_error(self, request, client_address):
+                # Home-network gear (Fire TV, Chromecast, printers, the router
+                # itself) probes every open port: it connects, sends a plain
+                # HTTP line or nothing at all to an HTTPS socket, and resets.
+                # socketserver would dump a full traceback to the console for
+                # each one. Swallow the connection-level and TLS-handshake
+                # noise; still surface anything genuinely unexpected.
+                exc = sys.exc_info()[1]
+                if isinstance(exc, (ConnectionError, ssl.SSLError,
+                                    socket.timeout, TimeoutError, EOFError)):
+                    return
+                traceback.print_exc()
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"

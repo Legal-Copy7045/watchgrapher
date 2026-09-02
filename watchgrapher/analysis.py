@@ -332,7 +332,7 @@ def analyze(samples: np.ndarray, fs: int, cfg: AnalyzerConfig) -> Measurement:
     # Always record what the audio actually measured, independently of any
     # forced value. Overwriting this with the forced figure hides exactly the
     # case that matters: a caliber selection that does not match the watch.
-    snapped = snap_bph(m.raw_bph, tol_frac=0.03)
+    snapped = snap_bph(m.raw_bph, tol_frac=0.02)
     m.detected_bph = snapped if snapped else int(round(m.raw_bph))
     nominal = int(cfg.forced_bph) if cfg.forced_bph else m.detected_bph
     m.nominal_bph = nominal
