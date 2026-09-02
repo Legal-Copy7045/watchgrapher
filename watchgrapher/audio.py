@@ -75,9 +75,15 @@ class Recorder:
         self._filled = 0
         self._lock = threading.Lock()
         self._stream = None
-        self.peak = 0.0
+        self.peak = 0.0          # raw input peak, EMA -- the level meter reads this
         self.overflows = 0
         self.frames = 0          # total samples ever received; monotonic, for a stall watchdog
+        # Clipping guard + optional digital auto-gain (makeup gain into the ring
+        # buffer, so the DSP has headroom -- it does NOT touch the OS mixer).
+        self.clips = 0           # buffers where the raw input hit full scale
+        self.agc_enabled = True
+        self.gain = 1.0
+        self._agc_target = 0.4
         self._wav: Optional[wave.Wave_write] = None
         self._wav_path = ""
         self._wav_lock = threading.Lock()
@@ -91,27 +97,39 @@ class Recorder:
         p = float(np.max(np.abs(data))) if data.size else 0.0
         self.peak = max(self.peak * 0.92, p)
         self.frames += len(data)
+        if p >= 0.999:
+            self.clips += 1
+        if self.agc_enabled and data.size:
+            if p >= 0.995:
+                self.gain = max(0.25, self.gain * 0.7)        # back off hard on a clip
+            else:
+                want = self._agc_target / max(p * self.gain, 1e-4)
+                self.gain = float(np.clip(self.gain * (0.985 + 0.015 * np.clip(want, 0.2, 5.0)),
+                                          0.25, 32.0))
+        else:
+            self.gain = 1.0
+        buf_data = data * self.gain if abs(self.gain - 1.0) > 1e-3 else data
 
         with self._lock:
-            k = len(data)
+            k = len(buf_data)
             if k >= self.n:
-                self._buf[:] = data[-self.n:]
+                self._buf[:] = buf_data[-self.n:]
                 self._write = 0
                 self._filled = self.n
             else:
                 end = self._write + k
                 if end <= self.n:
-                    self._buf[self._write:end] = data
+                    self._buf[self._write:end] = buf_data
                 else:
                     split = self.n - self._write
-                    self._buf[self._write:] = data[:split]
-                    self._buf[: end - self.n] = data[split:]
+                    self._buf[self._write:] = buf_data[:split]
+                    self._buf[: end - self.n] = buf_data[split:]
                 self._write = end % self.n
                 self._filled = min(self.n, self._filled + k)
 
         with self._wav_lock:
             if self._wav is not None:
-                self._wav.writeframes(
+                self._wav.writeframes(          # raw, pre-gain -- archival
                     np.clip(data * 32767.0, -32768, 32767).astype("<i2").tobytes())
 
     def _device_info(self):
@@ -306,6 +324,9 @@ class SimulatedRecorder:
         self.peak = 0.0
         self.overflows = 0
         self.frames = 0
+        self.clips = 0
+        self.agc_enabled = True
+        self.gain = 1.0
         self._wav = None
         self._wav_path = ""
         self._wav_lock = threading.Lock()
