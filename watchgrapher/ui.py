@@ -4100,6 +4100,11 @@ alongside the application.</p>
             "QPushButton{background:#2a323e;color:#e8eef7;padding:8px;border-radius:6px;}")
         b_gr.clicked.connect(self._guided_regulation)
         abrow.addWidget(b_gr)
+        b_cert = QtWidgets.QPushButton("Timing certificate...")
+        b_cert.setStyleSheet(
+            "QPushButton{background:#2a323e;color:#e8eef7;padding:8px;border-radius:6px;}")
+        b_cert.clicked.connect(self._timing_certificate)
+        abrow.addWidget(b_cert)
         al.addLayout(abrow)
         tabs.addTab(aw, "Advice")
 
@@ -6834,6 +6839,41 @@ alongside the application.</p>
                                                      self.spn_after.value()))
         self.lbl_regassist.setText(
             f"{head}Run <b>{direction}</b> by <b>{abs(err):.1f} s/day</b>.<br><br>{instr}{extra}")
+
+    def _timing_certificate(self):
+        c = self._current_caliber()
+        readings = list(self.readings)
+        if not readings and self.last and self.last.ok:
+            readings = [advisor.Reading(self.cmb_pos.currentText(), self.last.rate,
+                                        self.last.amplitude, self.last.beat_error,
+                                        self.cmb_wind.currentText())]
+        if not readings:
+            QtWidgets.QMessageBox.information(
+                self, "Timing certificate",
+                "Capture at least one position (six for a real certificate) first.")
+            return
+        gkey, gpassed, grows = self._current_grade(readings)
+        w = self._current_watch()
+        label, ok = QtWidgets.QInputDialog.getText(
+            self, "Timing certificate", "Watch label:",
+            text=(w.label if w else (c.label if c else "")))
+        if not ok:
+            return
+        tech, _ = QtWidgets.QInputDialog.getText(self, "Timing certificate", "Tested by:")
+        stem = "".join(ch if ch.isalnum() else "_" for ch in (label or "certificate"))[:40]
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save certificate",
+            os.path.join(REPORT_DIR, f"cert_{stem}_{datetime.now():%Y%m%d}.html"),
+            "HTML (*.html)")
+        if not path:
+            return
+        out = reportmod.build_certificate(
+            path, caliber=c, readings=readings,
+            grade={"standard": gkey, "passed": gpassed, "rows": grows},
+            watch_label=label, serial=(w.serial if w else ""),
+            technician=tech, owner=getattr(self.collection, "owner", ""))
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
+        self.status.showMessage(f"Wrote {out} -- print to PDF from the browser", 9000)
 
     def _current_grade(self, readings):
         key = self.cmb_standard.currentText()
