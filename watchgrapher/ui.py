@@ -1990,6 +1990,51 @@ class MainWindow(QtWidgets.QMainWindow):
             except OSError as e:
                 QtWidgets.QMessageBox.warning(self, "Microphone response", str(e))
 
+    def _apply_preset(self, name):
+        presets = {
+            "Quick check":       dict(win=8, runlen=0, settle=False, auto=False,
+                                      pos="Dial up", page=0),
+            "Timed 30 s":        dict(win=15, runlen=30, settle=True, auto=False,
+                                      pos="Dial up", page=0),
+            "Full 6-position":   dict(win=12, runlen=20, settle=True, auto=True,
+                                      pos="Dial up", page=0, tab="Positions"),
+            "Power reserve":     dict(win=15, runlen=0, settle=False, auto=False,
+                                      page=0, tab="Power reserve", res_int=300, res_h=48),
+            "Vintage / low beat": dict(win=25, runlen=40, settle=True, auto=False,
+                                       pos="Dial up", page=0),
+        }
+        p = presets.get(name)
+        if not p:
+            return
+        self._applying_preset = True
+        self.spn_win.setValue(p["win"])
+        self.spn_runlen.setValue(p["runlen"])
+        self.chk_settle.setChecked(p["settle"])
+        self.chk_auto.setChecked(p["auto"])
+        if "pos" in p:
+            i = self.cmb_pos.findText(p["pos"])
+            if i >= 0:
+                self.cmb_pos.setCurrentIndex(i)
+        if "res_int" in p:
+            self.spn_res_int.setValue(p["res_int"])
+            self.spn_res_hours.setValue(p["res_h"])
+        if "page" in p:
+            self._goto_page(p["page"])
+        if "tab" in p and hasattr(self, "tabs"):
+            for k in range(self.tabs.count()):
+                if self.tabs.tabText(k) == p["tab"]:
+                    self.tabs.setCurrentIndex(k)
+                    break
+        self._applying_preset = False
+        self.status.showMessage(f"Preset: {name}", 4000)
+
+    def _preset_to_custom(self):
+        if not getattr(self, "_applying_preset", False) \
+                and hasattr(self, "cmb_preset") and self.cmb_preset.currentText() != "Custom":
+            self.cmb_preset.blockSignals(True)
+            self.cmb_preset.setCurrentText("Custom")
+            self.cmb_preset.blockSignals(False)
+
     def _set_theme(self, mode):
         _T.save_mode(mode)
         if mode != _T.MODE:
@@ -3215,6 +3260,19 @@ alongside the application.</p>
         lay.setSpacing(6)
         lay.setContentsMargins(8, 8, 8, 8)
 
+        # ---------- session preset ----------
+        pr = QtWidgets.QHBoxLayout()
+        pr.addWidget(QtWidgets.QLabel("Preset"))
+        self.cmb_preset = QtWidgets.QComboBox()
+        self.cmb_preset.addItems(["Custom", "Quick check", "Timed 30 s", "Full 6-position",
+                                  "Power reserve", "Vintage / low beat"])
+        self.cmb_preset.setToolTip(
+            "One-click setups: analysis window, timed-run length, settle, position and "
+            "which tab to work in. Pick Custom to leave your own settings alone.")
+        self.cmb_preset.currentTextChanged.connect(self._apply_preset)
+        pr.addWidget(self.cmb_preset, 1)
+        lay.addLayout(pr)
+
         # ---------- 1. audio input ----------
         g = Collapsible("1.  AUDIO INPUT", True)
         self.cmb_dev = QtWidgets.QComboBox()
@@ -3538,6 +3596,11 @@ alongside the application.</p>
         sv.addWidget(self.prg_run)
 
         self._fill_calibers()
+        for _w in (self.spn_win, self.spn_runlen):
+            _w.valueChanged.connect(self._preset_to_custom)
+        for _w in (self.chk_settle, self.chk_auto):
+            _w.toggled.connect(self._preset_to_custom)
+        self.cmb_pos.currentIndexChanged.connect(self._preset_to_custom)
 
         want = inner.sizeHint().width() + 18
         self._sidebar_width = max(330, min(410, want))

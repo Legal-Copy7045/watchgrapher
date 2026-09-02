@@ -839,6 +839,13 @@ audible separately.
 **Theme** (View menu). Dark, light, or follow the system. The choice is saved
 to `settings.json` and applied on the next start.
 
+**Session presets.** The *Preset* dropdown at the top of the control column
+sets the analysis window, timed-run length, settle, auto-capture, position and
+active tab in one go -- *Quick check* (8 s window, open-ended), *Timed 30 s*,
+*Full 6-position* (auto-capture on, Positions tab), *Power reserve* (opens that
+tab, sets a 48 h target), *Vintage / low beat* (longer window and run). Changing
+any of those settings by hand drops the dropdown back to *Custom*.
+
 **Demagnetiser A/B** (Tools tab). Capture before, demagnetise, capture after.
 The signature to look for is a large rate drop with amplitude roughly
 unchanged: magnetised hairspring coils cling together and behave like a shorter
