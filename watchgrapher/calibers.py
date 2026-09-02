@@ -445,6 +445,65 @@ _LIST = [
 CALIBERS = {c.key: c for c in _LIST}
 
 
+# --------------------------------------------------------------------------
+# Cross-reference: base movements and their clones / equivalents
+# --------------------------------------------------------------------------
+# `members` are (caliber_key_or_None, label). A key links to a CALIBERS entry;
+# None is just a name for something not in the database.
+
+CROSS_REF = [
+    {"family": "ETA 2824-2", "base": "eta_2824_2",
+     "note": "Same escapement geometry and largely interchangeable train and "
+             "keyless parts; balance completes and mainsprings are the usual "
+             "shared spares. Regulator hardware differs on some clones.",
+     "members": [("eta_2824_2", "ETA 2824-2"), ("eta_2836_2", "ETA 2836-2 (day/date)"),
+                 ("sw200_1", "Sellita SW200-1"), (None, "Sea-Gull ST2130"),
+                 (None, "STP1-11 (Fossil/Zodiac)"), (None, "Hangzhou 6300"),
+                 (None, "Myota 82S0 is NOT this -- different base")]},
+    {"family": "ETA 2892-A2", "base": "eta_2892a2",
+     "note": "Thinner base than the 2824, lower torque margin. The 2893 GMT and "
+             "many chronograph modules sit on this.",
+     "members": [("eta_2892a2", "ETA 2892-A2"), ("eta_2893_2", "ETA 2893-2 (GMT)"),
+                 ("sw300_1", "Sellita SW300-1"), (None, "Sea-Gull ST18")]},
+    {"family": "Valjoux 7750", "base": "eta_7750",
+     "note": "Cam-switched chronograph. Expect a 20-40 deg amplitude drop with "
+             "the chrono running on all of these.",
+     "members": [("eta_7750", "ETA/Valjoux 7750"), ("sw500", "Sellita SW500"),
+                 (None, "Sea-Gull ST19 / ST1901 shares the column-wheel lineage, "
+                        "not the cam"), (None, "Concepto/La Joux-Perret 8147")]},
+    {"family": "Unitas 6497 / 6498", "base": "eta_6497_1",
+     "note": "Large slow pocket-watch caliber. 6497 has sub-seconds at 9, 6498 at 6.",
+     "members": [("eta_6497_1", "ETA/Unitas 6497-1"), ("eta_6497_2", "ETA/Unitas 6497-2"),
+                 (None, "Sea-Gull ST36 / ST3600 (6497 clone)"),
+                 (None, "Sea-Gull TY2807 (6498 clone)")]},
+    {"family": "Seiko NH35 / 4R35", "base": "seiko_nh35",
+     "note": "Seiko Instruments (SII/TMI) automatic. Diashock, magic-lever "
+             "winding, moveable stud arm so beat error is adjustable. Cheap parts.",
+     "members": [("seiko_nh35", "Seiko NH35 / NH36"), (None, "Seiko 4R35 / 4R36 (same)"),
+                 ("seiko_6r15", "Seiko 6R15 / 6R35 (related, longer reserve)")]},
+    {"family": "Seiko 7S26", "base": "seiko_7s26",
+     "note": "No hand-wind, no hacking, beat error not adjustable without moving "
+             "the collet. Superseded by the NH/4R line.",
+     "members": [("seiko_7s26", "Seiko 7S26 / 7S36"), (None, "Seiko 7S25 (no day)")]},
+    {"family": "Miyota 9015", "base": None,
+     "note": "Thin high-beat Miyota automatic. Known for a slightly audible "
+             "rotor. The clone family copies the base plate closely.",
+     "members": [(None, "Miyota 9015 / 90S5"), (None, "PT5000 (Perfect/Techma)"),
+                 (None, "Landeron 24"), (None, "Sea-Gull ST1901 is unrelated")]},
+]
+
+_XREF_BY_KEY = {}
+for _f in CROSS_REF:
+    for _k, _ in _f["members"]:
+        if _k:
+            _XREF_BY_KEY[_k] = _f
+
+
+def equivalents(key: str):
+    """The cross-reference family for a caliber key, or None."""
+    return _XREF_BY_KEY.get(key)
+
+
 def _load_reference():
     """
     Merge the bulk WatchGuy lift-angle list.

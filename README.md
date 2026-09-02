@@ -537,6 +537,12 @@ systematic: the final digit is the case metal and the letter suffix is the
 bezel colour abbreviated in French. So 126619LB resolves to white gold with a
 blue bezel even though nobody wrote that row down.
 
+**Caliber cross-reference.** Pick a caliber and the info line names its
+equivalents -- ETA 2824-2 lists the Sellita SW200-1, Sea-Gull ST2130, STP1-11
+and Hangzhou 6300, with a note on what is actually shared (escapement geometry,
+train parts, mainsprings) and what is not. Covers the 2824, 2892, 7750, Unitas
+6497, Seiko NH35 and 7S26, and Miyota 9015 families.
+
 **Documents.** A per-watch vault in My Watches for warranty cards, receipts,
 box-and-papers photos, manuals, valuations and provenance -- tagged by kind
 with a note and date. Files are copied into the collection's `docs/` folder so
