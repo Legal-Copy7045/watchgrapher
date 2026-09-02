@@ -3,6 +3,10 @@ scipy>=1.10
 sounddevice>=0.4.6
 PySide6-Essentials>=6.11
 pyqtgraph>=0.13
+# Only used to serve HTTPS for the phone / browser pickup. Phone browsers
+# refuse microphone access over plain HTTP, so this is required for that
+# feature; everything else works without it.
+cryptography>=42
 
 # Optional: WebRTC transport for the phone/browser pickup. The PCM (WebSocket)
 # transport works without it. `pip install aiortc`
