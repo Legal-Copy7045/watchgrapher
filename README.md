@@ -839,6 +839,12 @@ audible separately.
 **Theme** (View menu). Dark, light, or follow the system. The choice is saved
 to `settings.json` and applied on the next start.
 
+**Undo** (Edit menu, Ctrl+Z). Steps back through changes to the watch
+collection -- an added or edited watch, a deleted service, run or reserve log,
+a filed report -- up to 25 deep. It snapshots the collection file before each
+save, so it does not touch the current measurement and cannot undo the very
+first watch you add (there is no prior state).
+
 **Session presets.** The *Preset* dropdown at the top of the control column
 sets the analysis window, timed-run length, settle, auto-capture, position and
 active tab in one go -- *Quick check* (8 s window, open-ended), *Timed 30 s*,
