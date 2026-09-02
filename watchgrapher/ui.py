@@ -2367,7 +2367,7 @@ class MainWindow(QtWidgets.QMainWindow):
     PPM_TO_SPD = 86400.0 / 1e6         # additive s/day per +1 ppm of clock error
 
     def _clock_key(self):
-        if self.cmb_dev.currentData() == "SIM":
+        if self.cmb_dev.currentData() in ("SIM", "NET"):
             return None
         return (self.cmb_dev.currentText() or "").strip() or None
 
@@ -3370,7 +3370,7 @@ alongside the application.</p>
 
     # ------------------------------------------------------------ pickup profiles
     def _pickup_key(self):
-        if self.cmb_dev.currentData() == "SIM":
+        if self.cmb_dev.currentData() in ("SIM", "NET"):
             return None
         return (self.cmb_dev.currentText() or "").strip() or None
 
@@ -4287,6 +4287,7 @@ alongside the application.</p>
             chosen_row = min(candidates, key=lambda k: (rank(devs[k]), k))
             self.cmb_dev.setCurrentIndex(chosen_row)
 
+        self.cmb_dev.addItem("-- Phone / browser pickup (over Wi-Fi) --", "NET")
         self.cmb_dev.addItem("-- Simulated watch (no microphone) --", "SIM")
         if not devs:
             self.cmb_dev.setCurrentIndex(self.cmb_dev.count() - 1)
@@ -4394,6 +4395,9 @@ alongside the application.</p>
                         rate_spd=self.sim_rate.value(),
                         beat_error_ms=self.sim_be.value(),
                         snr_db=self.sim_snr.value())
+                elif dev == "NET":
+                    from . import netmic
+                    self.recorder = netmic.NetworkRecorder(samplerate=sr, buffer_seconds=buf)
                 else:
                     self.recorder = audio.Recorder(
                         device=dev, samplerate=sr, buffer_seconds=buf)
@@ -4404,6 +4408,14 @@ alongside the application.</p>
                 return
             self.recorder.agc_enabled = self.act_agc.isChecked()
             self._clip_count0 = 0
+            if dev == "NET":
+                url = getattr(self.recorder, "url", "")
+                QtWidgets.QMessageBox.information(
+                    self, "Phone pickup",
+                    f"On a phone or laptop on the same Wi-Fi, open:\n\n    {url}\n\n"
+                    f"Tap Start on that page and put its microphone against the movement. "
+                    f"Choose PCM (works anywhere) or WebRTC (steadier on a weak link) on "
+                    f"the page. This window keeps listening until you press Stop.")
             note = getattr(self.recorder, "opened_note", "")
             if note:
                 self.status.showMessage(note, 12000)
@@ -4734,7 +4746,7 @@ alongside the application.</p>
         place, keeping the rate history and power-reserve log intact.
         """
         rec = self.recorder
-        if rec is None or self.cmb_dev.currentData() == "SIM" or self._run_t0 is not None:
+        if rec is None or self.cmb_dev.currentData() in ("SIM", "NET") or self._run_t0 is not None:
             return
         fr = getattr(rec, "frames", None)
         if fr is None:
@@ -4751,7 +4763,7 @@ alongside the application.</p>
 
     def _restart_stream(self):
         dev = self.cmb_dev.currentData()
-        if dev == "SIM" or self.recorder is None:
+        if dev in ("SIM", "NET") or self.recorder is None:
             return
         sr = self.recorder.samplerate
         buf = getattr(self.recorder, "buffer_seconds", self.recorder.n / sr)
