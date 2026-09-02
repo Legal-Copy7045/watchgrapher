@@ -615,10 +615,14 @@ whose period matches the rotation of the guilty part. On a paper tape that is
 the wavy trace an experienced watchmaker reads instantly. A periodogram of the
 fit residuals finds it more reliably.
 
-The identification is the useful part. One escape wheel revolution spans
-2 x teeth beats (30 for a standard 15-tooth Swiss lever, 3.75 s at 4 Hz); the
-fourth wheel turns once a minute. Which period is modulating tells you which
-part to inspect. Note the honest limit the tab reports: three cycles are needed
+The identification is the useful part. The residual spectrum is drawn with the
+whole gear train overlaid as dashed lines -- balance/roller at two beats, the
+escape wheel and its half cycle, the fourth wheel (the seconds hand, once a
+minute), and estimated third and centre wheels -- with the ones beyond the
+capture's reach greyed and labelled. Which line a peak sits on tells you which
+part to inspect. A caliber can carry exact train periods in its record; without
+them the fourth wheel is taken as the seconds hand and the third wheel
+estimated. Note the honest limit the tab reports: three cycles are needed
 before a period can be called real, so a 60-second capture cannot see a fourth
 wheel at all, and a centre wheel needs three hours.
 
