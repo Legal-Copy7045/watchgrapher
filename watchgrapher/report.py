@@ -701,6 +701,31 @@ def build_watch_report(path, watch, caliber=None, trends=None, notes=None,
     except Exception:
         pass
 
+    if getattr(watch, "regulation_log", None):
+        p.append("<h2>Regulation log</h2>")
+        try:
+            from .collection import regulation_sensitivity
+            s = regulation_sensitivity(watch)
+            if s:
+                p.append(f"<p class='sub'>Learned index sensitivity: "
+                         f"<b>{s['spd_per_unit']:+.1f} s/day per {e(s['unit'])}</b> "
+                         f"(from {s['n']} adjustment(s)"
+                         + (f", &plusmn;{s['scatter']:.1f}" if s['scatter'] else "")
+                         + ").</p>")
+        except Exception:
+            pass
+        p.append("<table><tr><th>Date</th><th class='n'>Before</th>"
+                 "<th class='n'>After</th><th>Move</th><th>Note</th></tr>")
+        for r in sorted(watch.regulation_log, key=lambda x: x.get("when", ""),
+                        reverse=True):
+            amt = f" ({r['amount']:+g} {e(r.get('unit',''))})" if r.get("amount") else ""
+            p.append(f"<tr><td>{e(r.get('when','')[:10])}</td>"
+                     f"<td class='n'>{_fmt(r.get('before'), 1, signed=True)}</td>"
+                     f"<td class='n'>{_fmt(r.get('after'), 1, signed=True)}</td>"
+                     f"<td>{e(r.get('move',''))}{amt}</td>"
+                     f"<td>{e(r.get('note',''))}</td></tr>")
+        p.append("</table>")
+
     p.append(_reserve_section(watch))
     p.append(_service_section(watch, doc_dir))
 
