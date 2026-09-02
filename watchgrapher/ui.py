@@ -3171,6 +3171,10 @@ alongside the application.</p>
         self.btn_portfolio.setMinimumHeight(32)
         self.btn_portfolio.clicked.connect(self._portfolio_report)
         hb2.addWidget(self.btn_portfolio)
+        self.btn_yearreview = QtWidgets.QPushButton("Year in review...")
+        self.btn_yearreview.setMinimumHeight(32)
+        self.btn_yearreview.clicked.connect(self._year_review)
+        hb2.addWidget(self.btn_yearreview)
         hb2.addStretch(1)
         right.addLayout(hb2)
         outer.addLayout(right, 1)
@@ -6519,6 +6523,24 @@ alongside the application.</p>
         if not path:
             return
         out = reportmod.build_portfolio(path, self.collection)
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
+        self.status.showMessage(f"Wrote {out}", 8000)
+
+    def _year_review(self):
+        if not self.collection.watches:
+            QtWidgets.QMessageBox.information(self, "Year in review", "Add a watch first.")
+            return
+        yr, ok = QtWidgets.QInputDialog.getInt(
+            self, "Year in review", "Year:", datetime.now().year, 1970, 2100)
+        if not ok:
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Year in review",
+            os.path.join(REPORT_DIR, f"review_{yr}.html"), "HTML (*.html)")
+        if not path:
+            return
+        out = reportmod.build_year_review(path, self.collection, yr,
+                                          owner=getattr(self.collection, "owner", ""))
         QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
         self.status.showMessage(f"Wrote {out}", 8000)
 

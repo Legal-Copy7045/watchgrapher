@@ -773,6 +773,11 @@ amplitude start to end, projected runway to 220 degrees and the isochronism
 grade -- and double-clicking a row reloads it on the Power reserve tab. It is
 also included in the watch report and the portfolio report.
 
+**Year in review** (button on My Watches) writes a one-page summary for a
+calendar year: watches acquired, every service with cost and water-resistance
+result, total spend, timing and power-reserve activity per watch, and
+wrist-rate checks. Handy at the end of the year, or for an insurer.
+
 Below the plot, the **Isochronism** panel turns that same data into the tests
 a hobby timegrapher usually cannot do: a scatter of rate against amplitude
 with a fitted line (graded good / fair / poor by how much the rate swings as
