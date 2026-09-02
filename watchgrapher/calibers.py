@@ -698,7 +698,7 @@ def load_user_calibers(path: str) -> int:
         for row in csv.DictReader(fh):
             try:
                 key = (row.get("key") or f"{row['brand']}_{row['name']}").strip()
-                key = key.lower().replace(" ", "_").replace("/", "_")
+                key = "".join(ch if ch.isalnum() else "_" for ch in key.lower())
                 amin = float(row.get("amp_min") or 250)
                 amax = float(row.get("amp_max") or 315)
                 CALIBERS[key] = Caliber(

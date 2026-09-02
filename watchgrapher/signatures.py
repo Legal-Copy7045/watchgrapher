@@ -18,6 +18,11 @@ from typing import List, Optional
 
 import numpy as np
 
+# Position names as used by advisor.POSITIONS. Kept local to avoid importing
+# advisor (which pulls in the caliber tables) just for two sets.
+_HORIZONTAL = ("Dial up", "Dial down")
+_VERTICAL = ("Crown down", "Crown left", "Crown right", "Crown up")
+
 
 @dataclass
 class SymptomContext:
@@ -51,12 +56,11 @@ class SymptomContext:
 
     def horiz_rates(self):
         return [v[0] for k, v in self.positions.items()
-                if k in ("Dial up", "Dial down") and v[0] == v[0]]
+                if k in _HORIZONTAL and v[0] == v[0]]
 
     def vert_rates(self):
         return [v[0] for k, v in self.positions.items()
-                if "own" in k or "up" in k or "left" in k or "right" in k
-                if k not in ("Dial up", "Dial down") and v[0] == v[0]]
+                if k in _VERTICAL and v[0] == v[0]]
 
     def positional_delta(self):
         rs = [v[0] for v in self.positions.values() if v[0] == v[0]]
@@ -141,9 +145,14 @@ def match(ctx: SymptomContext) -> List[Signature]:
     # -- poise error -------------------------------------------------------------
     if ctx.positions:
         du_dd = ctx.horiz_rates()
+        verts = ctx.vert_rates()
         pd = ctx.positional_delta()
         horiz_spread = (max(du_dd) - min(du_dd)) if len(du_dd) >= 2 else float("nan")
-        if pd == pd and pd > 18 and (horiz_spread != horiz_spread or horiz_spread < 8):
+        vert_spread = (max(verts) - min(verts)) if len(verts) >= 2 else float("nan")
+        # Poise error: the vertical positions disagree while dial-up and
+        # dial-down match -- a heavy spot on the balance rim, not the hairspring.
+        if (pd == pd and pd > 18 and (horiz_spread != horiz_spread or horiz_spread < 8)
+                and (vert_spread != vert_spread or vert_spread > 10)):
             out.append(Signature(
                 "Balance poise error",
                 float(np.clip(pd / 40.0, 0.2, 0.9)),
