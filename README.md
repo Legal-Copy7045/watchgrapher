@@ -513,8 +513,10 @@ bezel colour abbreviated in French. So 126619LB resolves to white gold with a
 blue bezel even though nobody wrote that row down.
 
 **History and trends.** Save a run against a watch and it joins that watch's
-record. Mean rate, positional delta, peak amplitude and beat error are plotted
-against date, with a least-squares slope per year for each.
+record. Mean rate, positional delta and peak amplitude are plotted against date,
+with a least-squares slope per year for each. The chart carries two scales:
+**rate and positional delta in s/day on the blue left axis**, **peak amplitude
+in degrees on the green right axis**, each axis coloured to its line.
 
 Those slopes are reported against the measurement's own repeatability, and a
 slope smaller than that is called stable rather than dressed up as a finding.
