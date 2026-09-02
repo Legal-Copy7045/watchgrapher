@@ -6,6 +6,127 @@ tells you what to adjust for the caliber you're working on.
 
 ---
 
+## Features
+
+<!-- Keep this list current as features are added or changed. -->
+
+### Measurement
+- Acoustic timegraphy from a microphone or piezo contact pickup: rate (s/day),
+  amplitude (degrees), beat error (ms), beat rate (bph)
+- Exact-harmonic amplitude, not the small-angle approximation, so the reading
+  stays honest near the knocking region
+- Tick/tock anchor correction: removes phantom beat error caused by the two
+  half-swings sounding different
+- Live timegrapher trace, averaged-beat waveform, raw-mic view
+- Instantaneous-rate waterfall with ghost traces
+- Rate history against elapsed time with age-tiered decimation (keeps scrolling
+  on multi-day runs)
+- 95% confidence interval on rate; per-beat amplitude scatter
+- Coarse spectrum / diagnostics view
+- Timed runs with a settling period, or open-ended
+- Simulated-watch mode: full end-to-end operation with no hardware
+- Analyze a recorded WAV offline; record WAV during a session
+- Auto-gain + clipping guard (toggleable); one-press self-tune pickup
+
+### Analysis
+- Rate-stability (Allan deviation) for a single run
+- Long-term stability across a watch's whole history
+- Escapement efficiency: impulse fraction lift / (2 x amplitude)
+- Power-reserve logging: amplitude/rate decay, isochronism (linear or quadratic,
+  toggleable), post-wind "kick" analysis
+- Live power-reserve forecast: projects full runtime, sharpening as the run goes
+- Gear-train / periodic-fault scan with wheel identification
+- Fault-signature library (magnetism, poise error, hairspring flat, rebanking, ...)
+- Rebanking / knocking detection
+
+### Positions & regulation
+- Guided six-position workflow with auto-capture
+- Positional view: table + bars, or a polar compass plot
+- Caliber-specific advice engine, ordered amplitude -> beat error -> rate ->
+  delta / isochronism, keyed to the regulating hardware
+- Guided regulation wizard
+- Regulation session log with learned per-watch index sensitivity
+- Grading against COSC-style / METAS-style / manufacture / vintage standards
+
+### Caliber & watch database
+- Curated caliber database: beat rate, lift angle (with provenance), regulator
+  type, expected amplitude, teeth, jewels, power reserve, service interval,
+  known weak points
+- Bulk WatchGuy lift-angle list merged in (~2,000 movements)
+- "Movement info": plain-language "what's normal for this caliber"
+- Caliber cross-reference (clone / equivalent families)
+- Watch catalogue: model -> movement across generations, per-reference detail,
+  Rolex reference decoder
+- Caliber service templates: phases, lubrication map, specs, weak points
+- Schematic illustrations for every catalogued reference (generated line
+  drawings, not copyrighted photos)
+
+### My Watches (collection)
+- Full profile: identity, movement, case, provenance, purchase, service
+  interval, target rate, photo, tags, notes
+- Test history with trend charts and per-year slope against a noise floor
+- Service history including water-resistance test results
+- Power-reserve run history
+- Wrist-rate log: real on-the-wrist performance vs bench figures
+- Document vault: warranty cards, receipts, box & papers, manuals, valuations
+- Tags and smart collections (Needs service, Divers, Chronographs, ...)
+- Reminders: service overdue, warranty ending, watch gone quiet
+- CSV import with a worked template file
+- Undo for collection changes (Ctrl+Z, 25 deep)
+- Back up / restore the whole collection as a zip
+
+### Reports & output
+- Timing report with inline trace, positional results, grade, reserve run,
+  assessment, fault scan
+- Printable timing certificate (COSC / METAS-style single page)
+- Before/after service report
+- Watch report: profile + full history + trends + long-term stability +
+  regulation log + services + documents
+- Portfolio report and Year-in-review
+- Side-by-side comparison of 2-4 watches
+- Direct PDF output for any report (Qt's own renderer, no extra dependency);
+  optional PDF sidecar for every HTML report
+- Report library: browse, open, convert to PDF, delete
+- CSV export of positional data, reserve runs and history
+
+### Phone as pickup / remote
+- Phone browser streams its mic over Wi-Fi (PCM over WebSocket, or WebRTC),
+  no app to install
+- HTTPS with a runtime self-signed certificate
+- Fixed port, persistent server, auto-reconnect, screen-wake-lock while running
+- Server-side makeup AGC + a boost slider on the page
+- Remote control: pick a stored watch, set the duration, start/stop and get the
+  save/discard prompt all on the phone
+- Dedicated Phone Portal tab with QR code; optional autostart
+- Bound to the LAN address only; watch list and commands token-gated
+
+### Chronograph
+- Dedicated Chrono tab: measure chronograph stopped vs running, quantify the
+  amplitude / rate load, A/B compare
+
+### Tools & calibration
+- Sound-card sample-clock calibration against NTP, with optional background
+  auto-calibration when you start a run on an un-calibrated device
+- Microphone-response calibration (swept-sine)
+- Cross-check against a hardware timegrapher (logged)
+- Lift-angle solver (180-degree method)
+- Demagnetiser A/B
+- Watch-synchronisation clock: NTP-corrected reference time with per-second
+  flash / beep, plus mark-and-return rate measurement
+
+### Guidance & UX
+- Animated escapement diagram running at your measured amplitude and beat error
+- First-run setup wizard, re-runnable any time
+- Glossary and a bench-order guide in Help
+- Guided interpretation of readings
+- Session presets (Quick check, Timed 30 s, Full 6-position, Power reserve,
+  Vintage / low-beat)
+- Light / dark / system theme
+- `WATCHGRAPHER_HOME` to relocate all data
+- One-button `run.bat` launcher: installs Python and dependencies on first run
+
+---
+
 ## Setup
 
 Unzip somewhere your account owns -- `C:\Tools\Timegrapher` is fine,
