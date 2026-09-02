@@ -551,9 +551,12 @@ of systematic error on every rate reading, and cheap interfaces are worse.
 Start listening on the real device (a watch does not need to be on the
 pickup), then press **Calibrate**: for the window you set, it fixes the true
 time against NTP every 25 s and least-squares-fits the sample count against
-it. Twenty minutes gets it to a few ppm. The result is stored per device and
-applied to the rate output only (amplitude and beat error are ratios within
-one capture and do not care). You can also enter a ppm figure by hand, or
+it. Twenty minutes gets it to a few ppm. The result is stored per device, dated,
+and applied to the rate output only (amplitude and beat error are ratios
+within one capture and do not care). One good calibration lasts a year unless
+you move the setup or the room temperature swings with the season -- the Sync
+label shows how old it is, and past four months you get a one-line nudge when
+you start listening. You can also enter a ppm figure by hand, or
 derive one from a watch whose real rate you know from a hardware timegrapher
 (*From reference*: enter what this app reads and what it should read).
 
