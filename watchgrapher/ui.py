@@ -1305,9 +1305,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._watch_set_ref = None  # (true_epoch, watch_epoch) when the watch was set
         self._clock_cal_thread = None
         self._clock_cal_worker = None
-        self._clock_cal_pts = []
+        self._clock_cal_seg = []          # (true_epoch, frames) for the current unbroken stream
+        self._clock_cal_done_segs = []    # segments closed by an audio-stream restart
         self._clock_cal_rec = None
-        self._clock_cal_reanchors = 0
+        self._clock_cal_breaks = 0
         self._settle_pending = False
         self._settle_buf = []
         self._settle_secs = 0
@@ -1893,12 +1894,12 @@ class MainWindow(QtWidgets.QMainWindow):
         if not key:
             return
         self._clock_cal_key = key
-        self._clock_cal_pts = []
+        self._clock_cal_seg = []
+        self._clock_cal_done_segs = []
         self._clock_cal_ovf0 = getattr(self.recorder, "overflows", 0)
-        self._clock_cal_rec = self.recorder     # the exact stream being counted
-        self._clock_cal_reanchors = 0
-        self._clock_cal_win = self.spn_cal_min.value() * 60.0
-        self._clock_cal_end = time.monotonic() + self._clock_cal_win
+        self._clock_cal_rec = self.recorder     # the stream currently being counted
+        self._clock_cal_breaks = 0
+        self._clock_cal_end = time.monotonic() + self.spn_cal_min.value() * 60.0
         self.btn_clock_cal.setText("Stop")
         self.lbl_clock.setText("Calibrating... contacting NTP.")
 
@@ -1920,41 +1921,44 @@ class MainWindow(QtWidgets.QMainWindow):
                 or not hasattr(self.recorder, "frames"):
             self._clock_cal_stop("stopped")
             return
-        # A stall-recovery restart (new recorder) or a buffer overflow both
-        # break continuity with the points already collected -- frames reset or
-        # jump. That is not user error and should not throw the run away: drop
-        # the points, re-anchor on the fresh stream, and keep going. Give up
-        # only if it keeps happening, which means the device cannot hold a
-        # steady stream long enough to calibrate.
-        broke = ("the audio stream restarted" if self.recorder is not self._clock_cal_rec
-                 else "the audio buffer overflowed"
-                 if getattr(self.recorder, "overflows", 0) != self._clock_cal_ovf0
-                 else None)
-        if broke is not None:
-            self._clock_cal_reanchors += 1
-            if self._clock_cal_reanchors > 4:
-                self._clock_cal_stop("unstable")
-                return
+        # The stall-recovery watchdog rebuilding the stream is by design. It
+        # resets the frame counter, so it breaks continuity with the points
+        # collected so far -- but only at that instant. Close the current
+        # segment, open a fresh one on the new stream, and carry on. The final
+        # fit is done per segment and the slopes combined, so nothing is
+        # thrown away and no line is ever fitted across the gap. A buffer
+        # overflow drops samples the same way and is handled the same.
+        broke = (self.recorder is not self._clock_cal_rec
+                 or getattr(self.recorder, "overflows", 0) != self._clock_cal_ovf0)
+        if broke:
+            if len(self._clock_cal_seg) >= 4:
+                self._clock_cal_done_segs.append(self._clock_cal_seg)
+            self._clock_cal_seg = []
             self._clock_cal_rec = self.recorder
             self._clock_cal_ovf0 = getattr(self.recorder, "overflows", 0)
-            self._clock_cal_pts = []
-            self._clock_cal_end = time.monotonic() + self._clock_cal_win
+            self._clock_cal_breaks += 1
+            self._clock_cal_end += 45.0     # recoup the fixes lost around the gap
+            kept = len(self._clock_cal_done_segs)
             self.lbl_clock.setText(
-                f"Calibrating '{self._clock_cal_key}': {broke}, restarting the "
-                f"measurement ({self._clock_cal_reanchors}/4).")
+                f"Calibrating '{self._clock_cal_key}': audio stream restarted, "
+                f"continuing on the new stream ({kept} segment{'s' if kept != 1 else ''} "
+                f"kept).")
             return
         if err:
             self.lbl_clock.setText(f"Calibrating... NTP error: {err}")
-        elif hasattr(self.recorder, "frames"):
+        else:
             # Pull frames back to the instant the NTP fix refers to.
             now = time.time()
             frames = self.recorder.frames - (now - true_epoch) * self.recorder.samplerate
-            self._clock_cal_pts.append((true_epoch, float(frames)))
-            span = (self._clock_cal_pts[-1][0] - self._clock_cal_pts[0][0]) / 60.0
+            self._clock_cal_seg.append((true_epoch, float(frames)))
+            n = sum(len(s) for s in self._clock_cal_done_segs) + len(self._clock_cal_seg)
             left = max(0.0, (self._clock_cal_end - time.monotonic()) / 60.0)
+            extra = (f", {self._clock_cal_breaks} restart"
+                     f"{'s' if self._clock_cal_breaks != 1 else ''}"
+                     if self._clock_cal_breaks else "")
             self.lbl_clock.setText(
-                f"Calibrating '{self._clock_cal_key}': {len(self._clock_cal_pts)} fixes "
-                f"over {span:.1f} min, ~{left:.0f} min left.")
+                f"Calibrating '{self._clock_cal_key}': {n} fixes, "
+                f"~{left:.0f} min left{extra}.")
         if time.monotonic() >= self._clock_cal_end:
             self._clock_cal_stop("done")
 
@@ -1971,44 +1975,57 @@ class MainWindow(QtWidgets.QMainWindow):
         self._clock_cal_rec = None
         self.btn_clock_cal.setText("Calibrate")
 
-        pts = getattr(self, "_clock_cal_pts", [])
+        segs = [s for s in (list(getattr(self, "_clock_cal_done_segs", [])) +
+                            [getattr(self, "_clock_cal_seg", [])]) if len(s) >= 4]
         if reason == "stopped":
             self._refresh_clock_label()
             self.status.showMessage(
                 "Sample-clock calibration stopped -- listening ended before it finished.",
                 8000)
             return
-        if reason == "unstable":
-            self._refresh_clock_label()
-            QtWidgets.QMessageBox.warning(
-                self, "Sample clock",
-                "Calibration gave up -- the audio stream on this device kept restarting "
-                "or dropping samples, so the count never held steady long enough to "
-                "measure. Try a wired input, disable USB power management for the "
-                "device, or enter a ppm figure by hand.")
-            return
-        if reason == "cancelled" or len(pts) < 4:
+
+        nominal = float(self.recorder.samplerate) if self.recorder is not None else 48000.0
+        # Fit each unbroken segment on its own, then combine the per-segment
+        # sample-rate estimates weighted by how tightly each was pinned down.
+        est, wt, tot_pts, tot_span = [], [], 0, 0.0
+        for s in segs:
+            a = np.array(s, dtype=float)
+            t = a[:, 0] - a[0, 0]
+            if t[-1] < 150.0:            # a sub-2.5-min segment gives a mushy slope
+                continue
+            fr = a[:, 1] - a[0, 1]
+            (slope, _c), cov = np.polyfit(t, fr, 1, cov=True)
+            var = float(cov[0, 0]) / (nominal ** 2) * 1e12       # ppm^2
+            if not np.isfinite(var) or var <= 0:
+                var = 25.0
+            est.append((slope / nominal - 1.0) * 1e6)
+            wt.append(1.0 / var)
+            tot_pts += len(s)
+            tot_span += float(t[-1])
+
+        if reason == "cancelled" or not est or tot_pts < 6 or tot_span < 300.0:
             self._refresh_clock_label()
             if reason != "cancelled":
                 QtWidgets.QMessageBox.information(
                     self, "Sample clock",
-                    "Not enough NTP fixes to calibrate -- check the connection and try a "
-                    "longer window.")
+                    "Not enough clean NTP fixes to calibrate -- check the connection, "
+                    "and if the audio stream keeps restarting try a wired input or "
+                    "disable USB power management for the device.")
             return
 
-        a = np.array(pts, dtype=float)
-        t = a[:, 0] - a[0, 0]
-        fr = a[:, 1] - a[0, 1]
-        (slope, _c), cov = np.polyfit(t, fr, 1, cov=True)
-        nominal = float(self.recorder.samplerate)
-        ppm = (slope / nominal - 1.0) * 1e6
-        ppm_sd = float(np.sqrt(cov[0, 0]) / nominal * 1e6)
-        span_min = t[-1] / 60.0
+        W = float(sum(wt))
+        ppm = float(sum(p * w for p, w in zip(est, wt)) / W)
+        ppm_sd = float(np.sqrt(1.0 / W))
+        span_min = tot_span / 60.0
+        nseg = len(est)
 
+        seg_note = (f" across {nseg} segments ({self._clock_cal_breaks} stream "
+                    f"restart{'s' if self._clock_cal_breaks != 1 else ''})"
+                    if nseg > 1 else "")
         ans = QtWidgets.QMessageBox.question(
             self, "Sample clock calibrated",
-            f"Over {span_min:.0f} minutes and {len(pts)} NTP fixes, this device's sample "
-            f"clock measures {ppm:+.1f} ppm ({ppm * self.PPM_TO_SPD:+.2f} s/day), "
+            f"Over {span_min:.0f} minutes and {tot_pts} NTP fixes{seg_note}, this device's "
+            f"sample clock measures {ppm:+.1f} ppm ({ppm * self.PPM_TO_SPD:+.2f} s/day), "
             f"+/-{ppm_sd:.1f} ppm.\n\n"
             f"Save it as the rate correction for '{self._clock_cal_key}'?",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
