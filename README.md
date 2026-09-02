@@ -537,6 +537,14 @@ systematic: the final digit is the case metal and the letter suffix is the
 bezel colour abbreviated in French. So 126619LB resolves to white gold with a
 blue bezel even though nobody wrote that row down.
 
+**Wrist rate.** A watch's bench rate and how it actually keeps time on the
+wrist are different numbers -- position mix, temperature and how much you wear
+it all move the real figure. The Sync tab's watch-drift tool (mark when you set
+it to true time, read it days later) can log each check against a watch; the
+**Wrist rate** tab in My Watches plots the real s/day over time with the bench
+mean rate as a dashed reference. A few weeks of checks tells you what to
+actually regulate toward.
+
 **History and trends.** Save a run against a watch and it joins that watch's
 record. Mean rate, positional delta and peak amplitude are plotted against date,
 with a least-squares slope per year for each. The chart carries two scales:

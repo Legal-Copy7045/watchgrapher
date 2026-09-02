@@ -169,6 +169,10 @@ class Watch:
     history: List[TestRecord] = field(default_factory=list)
     services: List[ServiceRecord] = field(default_factory=list)
     reserves: List[ReserveRecord] = field(default_factory=list)
+    # Real-world "on the wrist" rate checks: [{when, set_when, off_seconds, note}].
+    # off_seconds is how far ahead (+) the watch read at `when`, having been set
+    # to true time at `set_when`.
+    wear_checks: List[dict] = field(default_factory=list)
 
     @property
     def label(self) -> str:
@@ -224,6 +228,25 @@ def _pick(d: dict, cls) -> dict:
     """Only the keys `cls` actually declares -- forward-compatible loading."""
     fields = set(cls.__dataclass_fields__)
     return {k: v for k, v in d.items() if k in fields}
+
+
+def wear_rate_series(watch):
+    """
+    (datetime, rate_spd) per wrist-rate check: the watch's real rate on the
+    wrist, off_seconds spread over the days since it was set to true time.
+    """
+    out = []
+    for c in sorted(watch.wear_checks, key=lambda x: x.get("when", "")):
+        try:
+            when = datetime.fromisoformat(c["when"])
+            set_when = datetime.fromisoformat(c["set_when"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        days = (when - set_when).total_seconds() / 86400.0
+        if days <= 0.02:
+            continue
+        out.append((when, float(c.get("off_seconds", 0.0)) / days))
+    return out
 
 
 class Collection:
