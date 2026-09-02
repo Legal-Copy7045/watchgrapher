@@ -2085,6 +2085,28 @@ class MainWindow(QtWidgets.QMainWindow):
             self.cmb_preset.setCurrentText("Custom")
             self.cmb_preset.blockSignals(False)
 
+    def _settings_get(self, key, default=None):
+        import json
+        try:
+            with open(os.path.join(APP_DIR, "settings.json"), encoding="utf-8") as fh:
+                return json.load(fh).get(key, default)
+        except (OSError, ValueError):
+            return default
+
+    def _settings_set(self, key, value):
+        import json
+        p = os.path.join(APP_DIR, "settings.json")
+        try:
+            data = {}
+            if os.path.exists(p):
+                with open(p, encoding="utf-8") as fh:
+                    data = json.load(fh)
+            data[key] = value
+            with open(p, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+        except OSError:
+            pass
+
     def _set_theme(self, mode):
         _T.save_mode(mode)
         if mode != _T.MODE:
@@ -4724,7 +4746,9 @@ alongside the application.</p>
                         snr_db=self.sim_snr.value())
                 elif dev == "NET":
                     from . import netmic
-                    self.recorder = netmic.NetworkRecorder(samplerate=sr, buffer_seconds=buf)
+                    self.recorder = netmic.NetworkRecorder(
+                        samplerate=sr, buffer_seconds=buf,
+                        port=self._settings_get("phone_port", 8477))
                 else:
                     self.recorder = audio.Recorder(
                         device=dev, samplerate=sr, buffer_seconds=buf)
@@ -4737,6 +4761,9 @@ alongside the application.</p>
             self._clip_count0 = 0
             if dev == "NET":
                 url = getattr(self.recorder, "url", "")
+                got_port = getattr(self.recorder, "port", 0)
+                if got_port and got_port != self._settings_get("phone_port", 8477):
+                    self._settings_set("phone_port", got_port)
                 secure = getattr(self.recorder, "secure", False)
                 if secure:
                     body = (f"On a phone or laptop on the same Wi-Fi, open:\n\n    {url}\n\n"

@@ -82,30 +82,37 @@ microphone back.
 Phone browsers only allow microphone access on a **secure** page (HTTPS), so
 the app serves HTTPS using a throwaway self-signed certificate. That means the
 phone shows a one-time "connection is not private" warning that you tap
-through. This needs the **`cryptography`** package, which is in
-`requirements.txt` -- if it is missing the app falls back to plain HTTP and the
-phone will refuse the mic.
+through. The `cryptography` and `aiortc` packages in `requirements.txt` cover
+this -- `cryptography` for HTTPS, `aiortc` for the WebRTC transport. Without
+`cryptography` the app falls back to plain HTTP and the phone refuses the mic;
+without `aiortc` the WebRTC option on the page is greyed out.
+
+The server runs on a **fixed port** (8477 by default, saved in `settings.json`),
+so the URL stays the same between recordings -- bookmark it on the phone. It
+only moves to the next free port if something else is already using that one.
 
 1. On the computer running WatchGrapher, open the **audio input** dropdown and
    choose **"Phone / browser pickup (over Wi-Fi)"**.
-2. Press **Start**. A dialog shows a URL like `https://192.168.1.42:56411`.
+2. Press **Start**. A dialog shows a URL like `https://192.168.1.42:8477`.
    The computer and the phone must be on the **same Wi-Fi network** (a guest
    network that isolates clients will not work).
-3. On the phone, open that URL in any browser (Safari, Chrome, whatever).
-   Typing it in is quickest; there is no QR code. Mind the `https`.
+3. On the phone, open that URL in any browser (Safari, Chrome, whatever) and
+   bookmark it. Mind the `https`. There is no QR code.
 4. The phone warns the certificate is not trusted. This is expected for a
    local self-signed cert -- tap **Advanced** / **Show details** and
    **proceed** / **visit this website**.
-5. On the page, leave the transport on **PCM** (works on any phone) or switch
-   to **WebRTC** if PCM keeps dropping out -- WebRTC only appears if `aiortc`
-   is installed on the computer (`pip install aiortc`).
-6. Tap **Start** on the page and allow microphone access when the browser
-   asks. The level bar on the page should move; the app's own level meter and
-   trace come alive within a second or two.
-7. Hold the phone with its **microphone port pressed against the watch case**
+5. On the page, leave the transport on **PCM** or switch to **WebRTC** if PCM
+   keeps dropping out on your Wi-Fi.
+6. Tap **Start** on the page and allow microphone access when the browser asks.
+7. Set **Boost**. A watch tick through a phone mic is very quiet -- turn the
+   Boost slider up until the meter on the page sits high but the red **CLIP**
+   line stays quiet. The app also applies its own auto-gain on top (subject to
+   *View -> Auto-gain*). Leave **"Let the phone auto-level"** off unless the
+   signal is hopeless -- it can pump and distort the amplitude reading.
+8. Hold the phone with its **microphone port pressed against the watch case**
    -- the bottom edge on most phones. Contact matters as much as it does for a
    piezo. Keep the screen awake (set a long auto-lock).
-8. Press **Stop** in the app when done. Closing the page or locking the phone
+9. Press **Stop** in the app when done. Closing the page or locking the phone
    also ends the stream.
 
 **What to expect.** A phone mic through this path is roughly as good as a decent
@@ -135,8 +142,11 @@ switch input devices.
 - **Certificate warning has no "proceed" option.** Some corporate-managed
   phones block self-signed certs entirely. Use a personal device, or a wired
   pickup.
-- **PCM keeps stalling.** Switch the page to WebRTC (needs `aiortc` on the
-  computer), move closer to the router, or fall back to a wired pickup.
+- **PCM keeps stalling.** Switch the page to WebRTC, move closer to the router,
+  or fall back to a wired pickup.
+- **Signal too weak / amplitude will not read.** Turn Boost up. If it is
+  already high and still weak, the phone's mic port is not making good contact
+  with the case -- press harder or reposition. A phone case can get in the way.
 - **Level bar moves on the phone but the app shows nothing.** The app was not
   actually started, or you switched input devices after starting -- press Stop
   and Start again.
