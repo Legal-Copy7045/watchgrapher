@@ -180,6 +180,10 @@ class Watch:
     # Document vault: [{file, kind, name, added, note}] -- warranty cards,
     # receipts, box-and-papers photos, manuals, valuations, provenance.
     documents: List[dict] = field(default_factory=list)
+    # Regulation adjustments: [{when, before, after, move, amount, unit, note}].
+    # `amount` is signed: positive = toward faster (Avance / weights inward),
+    # so (after - before) / amount is s/day gained per unit of that move.
+    regulation_log: List[dict] = field(default_factory=list)
 
     @property
     def label(self) -> str:
@@ -235,6 +239,36 @@ def _pick(d: dict, cls) -> dict:
     """Only the keys `cls` actually declares -- forward-compatible loading."""
     fields = set(cls.__dataclass_fields__)
     return {k: v for k, v in d.items() if k in fields}
+
+
+def regulation_sensitivity(watch):
+    """
+    Learn this watch's index sensitivity from its regulation log.
+
+    Returns {unit, spd_per_unit, n, scatter} for the most-used unit, or None.
+    `spd_per_unit` is s/day gained per +1 unit of adjustment toward faster.
+    """
+    by_unit = {}
+    for e in getattr(watch, "regulation_log", []):
+        try:
+            amt = float(e.get("amount", 0) or 0)
+            before = float(e["before"])
+            after = float(e["after"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        unit = (e.get("unit") or "").strip().lower()
+        if not unit or abs(amt) < 1e-6:
+            continue
+        by_unit.setdefault(unit, []).append((after - before) / amt)
+    if not by_unit:
+        return None
+    unit, vals = max(by_unit.items(), key=lambda kv: len(kv[1]))
+    if len(vals) < 1:
+        return None
+    v = np.array(vals, dtype=float)
+    return {"unit": unit, "spd_per_unit": float(np.median(v)),
+            "n": int(v.size),
+            "scatter": float(np.std(v)) if v.size > 1 else 0.0}
 
 
 def wear_rate_series(watch):

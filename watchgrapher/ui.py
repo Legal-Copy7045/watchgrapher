@@ -4748,6 +4748,13 @@ alongside the application.</p>
             "QPushButton{background:#2a323e;color:#e8eef7;padding:8px;border-radius:6px;}")
         b_cert.clicked.connect(self._timing_certificate)
         abrow.addWidget(b_cert)
+        b_reglog = QtWidgets.QPushButton("Log adjustment...")
+        b_reglog.setStyleSheet(
+            "QPushButton{background:#2a323e;color:#e8eef7;padding:8px;border-radius:6px;}")
+        b_reglog.setToolTip("Record a regulator move and its effect. After a few, "
+                            "the assistant learns this watch's index sensitivity.")
+        b_reglog.clicked.connect(self._log_regulation)
+        abrow.addWidget(b_reglog)
         al.addLayout(abrow)
         tabs.addTab(aw, "Advice")
 
@@ -6870,6 +6877,21 @@ alongside the application.</p>
                                   for t, d in zip(hs.taus, hs.dev))
                 html.append(f"<p style='margin:3px 0;color:#8a94a4'>"
                             f"deviation vs runs averaged &mdash; {cells} &nbsp;(s/day)</p>")
+
+        if w.regulation_log:
+            s = coll.regulation_sensitivity(w)
+            html.append("<h4 style='margin:12px 0 4px;color:#4da3ff'>REGULATION LOG</h4>")
+            if s:
+                html.append(f"<p style='margin:4px 0;color:#c8d0dc'>Learned index "
+                            f"sensitivity: <b>{s['spd_per_unit']:+.1f} s/day per "
+                            f"{s['unit']}</b> (from {s['n']} adjustment(s)"
+                            + (f", ±{s['scatter']:.1f}" if s['scatter'] else "") + ").</p>")
+            for e in w.regulation_log[-6:][::-1]:
+                amt = (f" {e['amount']:+g} {e['unit']}" if e.get("amount") else "")
+                html.append(f"<p style='margin:3px 0;color:#8a94a4'>{e['when'][:10]} &mdash; "
+                            f"{e['before']:+.1f} &rarr; {e['after']:+.1f} s/day &mdash; "
+                            f"{e['move']}{amt}"
+                            + (f" &mdash; {e['note']}" if e.get("note") else "") + "</p>")
         html.append("</div>")
         self.txt_wdetail.setHtml("".join(html))
 
@@ -7737,6 +7759,75 @@ alongside the application.</p>
             c, parent=self)
         dlg.exec()
 
+    def _measure_watch(self):
+        """The watch currently attributed on the Measure page, or None."""
+        wid = self.cmb_watch.currentData() if hasattr(self, "cmb_watch") else None
+        return self.collection.watches.get(wid) if wid else None
+
+    def _log_regulation(self):
+        w = self._measure_watch()
+        if not w:
+            QtWidgets.QMessageBox.information(
+                self, "Log adjustment",
+                "Attribute this session to one of your watches first (the "
+                "'My watch' dropdown), so the adjustment is logged against it.")
+            return
+        m = self.last
+        cur_rate = m.rate if (m and m.ok and m.rate == m.rate) else None
+        prev = w.regulation_log[-1] if w.regulation_log else None
+        before_default = (prev["after"] if prev else
+                          (cur_rate if cur_rate is not None else 0.0))
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle(f"Log a regulation adjustment -- {w.label}")
+        fl = QtWidgets.QFormLayout(dlg)
+        sp_before = QtWidgets.QDoubleSpinBox()
+        sp_before.setRange(-9999, 9999); sp_before.setDecimals(1); sp_before.setSuffix(" s/day")
+        sp_before.setValue(float(before_default))
+        sp_after = QtWidgets.QDoubleSpinBox()
+        sp_after.setRange(-9999, 9999); sp_after.setDecimals(1); sp_after.setSuffix(" s/day")
+        sp_after.setValue(float(cur_rate if cur_rate is not None else before_default))
+        cmb_move = QtWidgets.QComboBox()
+        cmb_move.addItems(["Regulator toward + (faster)", "Regulator toward - (slower)",
+                           "Inertia weights inward (faster)", "Inertia weights outward (slower)",
+                           "Stud carrier / beat", "Other"])
+        sp_amt = QtWidgets.QDoubleSpinBox()
+        sp_amt.setRange(0.0, 999.0); sp_amt.setDecimals(2); sp_amt.setValue(0.0)
+        cmb_unit = QtWidgets.QComboBox()
+        cmb_unit.addItems(["mm", "index mark", "notch", "1/8 turn", "1/4 turn", "degree"])
+        e_note = QtWidgets.QLineEdit()
+        fl.addRow("Rate before", sp_before)
+        fl.addRow("Rate after", sp_after)
+        fl.addRow("Move", cmb_move)
+        fl.addRow("Amount", sp_amt)
+        fl.addRow("Unit", cmb_unit)
+        fl.addRow("Note", e_note)
+        bb = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Save |
+                                        QtWidgets.QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject)
+        fl.addRow(bb)
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
+            return
+        move = cmb_move.currentText()
+        # sign the amount: negative for the "slower" moves
+        amt = sp_amt.value()
+        if amt and ("slower" in move or "outward" in move):
+            amt = -amt
+        w.regulation_log.append({
+            "when": datetime.now().isoformat(timespec="seconds"),
+            "before": round(sp_before.value(), 1), "after": round(sp_after.value(), 1),
+            "move": move, "amount": round(amt, 3),
+            "unit": cmb_unit.currentText() if sp_amt.value() else "",
+            "note": e_note.text().strip()})
+        self.collection.save()
+        self._refresh_watches(w.id)
+        s = coll.regulation_sensitivity(w)
+        extra = (f"  Learned: ~{s['spd_per_unit']:+.1f} s/day per {s['unit']} "
+                 f"(from {s['n']})." if s else "")
+        self.status.showMessage(f"Adjustment logged to {w.label}." + extra, 8000)
+        if self.last:
+            self._update_regulation(self.last)
+
     def _update_regulation(self, m):
         if not hasattr(self, "lbl_regassist"):
             return
@@ -7760,7 +7851,18 @@ alongside the application.</p>
         direction = "slower" if err > 0 else "faster"
         instr = advisor.rate_adjust_instructions(c, direction)
         extra = ""
-        if self.spn_before.value() or self.spn_after.value():
+        w = self._measure_watch()
+        s = coll.regulation_sensitivity(w) if w else None
+        if s and abs(s["spd_per_unit"]) > 1e-6:
+            # err > 0 means it is running fast -> need `-err` s/day of change.
+            units = -err / s["spd_per_unit"]
+            band = ("" if not s["scatter"] else
+                    f" (±{abs(s['scatter'] / s['spd_per_unit'] * abs(err)):.2f})")
+            extra = (f"<br><br><i>On this watch</i>, from {s['n']} logged "
+                     f"adjustment(s): about <b>{abs(units):.2f} {s['unit']}</b>{band} "
+                     f"{'toward +' if units > 0 else 'toward -'} "
+                     f"(~{s['spd_per_unit']:+.1f} s/day per {s['unit']}).")
+        elif self.spn_before.value() or self.spn_after.value():
             extra = ("<br><br><i>From your Tools-tab calibration:</i> "
                      + advisor.regulator_sensitivity(self.spn_before.value(),
                                                      self.spn_after.value()))
