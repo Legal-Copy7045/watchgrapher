@@ -4,4 +4,5 @@ __pycache__/
 reports/
 watches/
 *.wav
-pickup_profiles.jsoncrosschecks.json
+pickup_profiles.json
+crosschecks.json
