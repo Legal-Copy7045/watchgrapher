@@ -1279,6 +1279,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last = None
         self.readings = []
         self._rate_hist = []       # (elapsed_s, rate_spd) for the rate-history plot
+        self._amp_hist = []        # (elapsed_s, amplitude_deg) -- right axis of the same plot
         self._be_hist = []         # (elapsed_s, beat_error_ms) for the diagnostics strip
         self._listen_t0 = None     # wall-clock start of the current listen session
         self._rate_last_update = None   # monotonic() of the last appended rate point
@@ -3020,11 +3021,37 @@ alongside the application.</p>
         self._wave_mode = "Average"
         self._set_wave_mode("Average")
 
-        self.p_hist = pg.PlotWidget(title="Rate history")
-        self.p_hist.setLabel("left", "s/day")
-        self.p_hist.setLabel("bottom", "run time", units="min")
-        self.p_hist.showGrid(x=True, y=True, alpha=0.2)
-        self.c_hist = self.p_hist.plot(pen=pg.mkPen(ACCENT, width=2))
+        RATE_C = ACCENT          # blue -- left axis
+        AMP_C = "#ffb648"        # amber -- right axis
+        self.p_hist = pg.PlotWidget(title="Rate history  --  rate (blue, left) and amplitude (amber, right)")
+        pi = self.p_hist.getPlotItem()
+        pi.setLabel("bottom", "run time", units="min")
+        pi.showGrid(x=True, y=True, alpha=0.2)
+        la = pi.getAxis("left")
+        la.setLabel("rate", units="s/day", color=RATE_C)
+        la.setPen(RATE_C)
+        la.setTextPen(RATE_C)
+        self.c_hist = pi.plot(pen=pg.mkPen(RATE_C, width=2))
+
+        # Amplitude rides a second view box sharing the x axis, drawn against a
+        # right-hand scale coloured to match its own line.
+        self._amp_vb = pg.ViewBox()
+        pi.showAxis("right")
+        pi.scene().addItem(self._amp_vb)
+        ra = pi.getAxis("right")
+        ra.linkToView(self._amp_vb)
+        ra.setLabel("amplitude", units="deg", color=AMP_C)
+        ra.setPen(AMP_C)
+        ra.setTextPen(AMP_C)
+        self._amp_vb.setXLink(pi)
+        self.c_amp_hist = pg.PlotCurveItem(pen=pg.mkPen(AMP_C, width=2))
+        self._amp_vb.addItem(self.c_amp_hist)
+
+        def _sync_amp_vb():
+            self._amp_vb.setGeometry(pi.getViewBox().sceneBoundingRect())
+            self._amp_vb.linkedViewChanged(pi.getViewBox(), self._amp_vb.XAxis)
+        pi.getViewBox().sigResized.connect(_sync_amp_vb)
+        _sync_amp_vb()
         right.addWidget(self.p_hist)
         plots.addWidget(right)
         plots.setSizes([620, 420])
@@ -3511,12 +3538,14 @@ alongside the application.</p>
             self._pending_buffer = 0
             self.worker.recorder = self.recorder
             self._rate_hist = []
+            self._amp_hist = []
             self._be_hist = []
             self._listen_t0 = time.time()
             self._rate_last_update = None
             self._cap_frames = None
             self._stream_restarts = 0
             self.c_hist.setData([], [])
+            self.c_amp_hist.setData([], [])
             self.c_be_hist.setData([], [])
         else:
             if self._run_t0 is not None:
@@ -3987,6 +4016,11 @@ alongside the application.</p>
                 a = np.asarray(self._rate_hist, dtype=float)
                 self.c_hist.setData(a[:, 0] / 60.0, a[:, 1])
                 self._rate_last_update = time.monotonic()
+                if m.amplitude == m.amplitude:
+                    self._amp_hist.append((el, float(m.amplitude)))
+                    self._amp_hist = self._decimate_rate_hist(self._amp_hist)
+                    ah = np.asarray(self._amp_hist, dtype=float)
+                    self.c_amp_hist.setData(ah[:, 0] / 60.0, ah[:, 1])
         else:
             why = ("beat rate does not match the caliber" if mismatch else
                    f"template match only {m.quality:.2f}" if m.quality < 0.6 else
