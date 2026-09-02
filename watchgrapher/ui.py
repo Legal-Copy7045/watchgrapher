@@ -4645,6 +4645,22 @@ alongside the application.</p>
         # positions
         pw = QtWidgets.QWidget()
         pl = QtWidgets.QVBoxLayout(pw)
+
+        vrow = QtWidgets.QHBoxLayout()
+        vrow.addWidget(QtWidgets.QLabel("View"))
+        self.rb_pos_table = QtWidgets.QRadioButton("Table + bars")
+        self.rb_pos_polar = QtWidgets.QRadioButton("Polar")
+        for rb in (self.rb_pos_table, self.rb_pos_polar):
+            rb.setStyleSheet("color:#c8d0dc;")
+            vrow.addWidget(rb)
+        vrow.addStretch(1)
+        pl.addLayout(vrow)
+        self.pos_stack = QtWidgets.QStackedWidget()
+        pl.addWidget(self.pos_stack, 1)
+
+        tblpage = QtWidgets.QWidget()
+        tpl = QtWidgets.QVBoxLayout(tblpage)
+        tpl.setContentsMargins(0, 0, 0, 0)
         psplit = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.tbl = QtWidgets.QTableWidget(0, 6)
         self.tbl.setHorizontalHeaderLabels(
@@ -4664,7 +4680,24 @@ alongside the application.</p>
         self._pos_labels = []
         psplit.addWidget(self.p_pos)
         psplit.setSizes([260, 220])
-        pl.addWidget(psplit, 1)
+        tpl.addWidget(psplit, 1)
+        self.pos_stack.addWidget(tblpage)
+
+        self.p_polar = pg.PlotWidget()
+        self.p_polar.setAspectLocked(True)
+        self.p_polar.hideAxis("left")
+        self.p_polar.hideAxis("bottom")
+        self.p_polar.setMenuEnabled(False)
+        self.p_polar.setMouseEnabled(False, False)
+        self.p_polar.setRange(xRange=(-4.1, 4.1), yRange=(-4.1, 4.1), padding=0)
+        self._polar_items = []
+        self.pos_stack.addWidget(self.p_polar)
+
+        self.rb_pos_table.toggled.connect(self._pos_view_changed)
+        self.rb_pos_polar.toggled.connect(self._pos_view_changed)
+        (self.rb_pos_polar if self._settings_get("positions_view", "table") == "polar"
+         else self.rb_pos_table).setChecked(True)
+
         br = QtWidgets.QHBoxLayout()
         for label, slot in (("Delete selected", self._del_row),
                             ("Clear all", self._clear_rows),
@@ -7428,6 +7461,87 @@ alongside the application.</p>
         else:
             self.lbl_delta.setText("")
         self._redraw_positions()
+        if getattr(self, "_polar_items", None) is not None:
+            self._draw_polar()
+
+    def _pos_view_changed(self, *_):
+        polar = self.rb_pos_polar.isChecked()
+        self.pos_stack.setCurrentIndex(1 if polar else 0)
+        self._settings_set("positions_view", "polar" if polar else "table")
+        if polar:
+            self._draw_polar()
+
+    _POLAR_ANGLE = {"Dial up": 90.0, "Crown right": 30.0, "Crown down": -30.0,
+                    "Dial down": -90.0, "Crown left": -150.0, "Crown up": 150.0}
+
+    def _draw_polar(self):
+        import math
+        for it in self._polar_items:
+            self.p_polar.removeItem(it)
+        self._polar_items = []
+
+        def add(it):
+            self.p_polar.addItem(it)
+            self._polar_items.append(it)
+
+        R_IN, R_MID, R_OUT = 1.15, 2.5, 3.8
+        rows = {r.position: r for r in getattr(self, "readings", [])
+                if r.rate == r.rate and r.position in self._POLAR_ANGLE}
+        rates = [r.rate for r in rows.values()]
+        mean = sum(rates) / len(rates) if rates else 0.0
+        span = max(2.0, max((abs(x - mean) for x in rates), default=2.0))
+
+        grey = pg.mkPen("#3a424e", width=1)
+        for rr in (R_IN, R_MID, R_OUT):
+            th = [math.radians(a) for a in range(0, 361, 4)]
+            add(pg.PlotCurveItem([rr * math.cos(t) for t in th],
+                                 [rr * math.sin(t) for t in th], pen=grey))
+        for name, ang in self._POLAR_ANGLE.items():
+            a = math.radians(ang)
+            add(pg.PlotCurveItem([0, R_OUT * math.cos(a)], [0, R_OUT * math.sin(a)], pen=grey))
+            lbl = pg.TextItem(name.replace("Crown ", "C").replace("Dial ", "D"),
+                              color="#8a94a4", anchor=(0.5, 0.5))
+            lbl.setPos((R_OUT + 0.5) * math.cos(a), (R_OUT + 0.5) * math.sin(a))
+            add(lbl)
+        for txt, rr in ((f"mean {mean:+.1f}", R_MID), (f"+{span:.0f}", R_OUT),
+                        (f"-{span:.0f}", R_IN)):
+            t = pg.TextItem(txt, color="#5a6472", anchor=(0.5, 0.5))
+            t.setPos(0, rr)
+            add(t)
+        if not rows:
+            t = pg.TextItem("capture positions to see the shape",
+                            color="#5a6472", anchor=(0.5, 0.5))
+            t.setPos(0, 0)
+            add(t)
+            return
+
+        pts = []
+        for name in ("Dial up", "Crown right", "Crown down", "Dial down",
+                     "Crown left", "Crown up"):
+            r = rows.get(name)
+            if not r:
+                continue
+            a = math.radians(self._POLAR_ANGLE[name])
+            rad = R_MID + (r.rate - mean) / span * (R_OUT - R_MID)
+            rad = min(R_OUT + 0.2, max(R_IN - 0.2, rad))
+            x, y = rad * math.cos(a), rad * math.sin(a)
+            pts.append((x, y, r))
+        if len(pts) >= 3:
+            add(pg.PlotCurveItem([p[0] for p in pts] + [pts[0][0]],
+                                 [p[1] for p in pts] + [pts[0][1]],
+                                 pen=pg.mkPen(ACCENT, width=2)))
+        sizes = []
+        amps = [p[2].amplitude for p in pts if p[2].amplitude == p[2].amplitude]
+        for x, y, r in pts:
+            sz = 12.0
+            if amps and r.amplitude == r.amplitude:
+                lo, hi = min(amps), max(amps)
+                sz = 8 + 14 * ((r.amplitude - lo) / (hi - lo)) if hi > lo else 12
+            add(pg.ScatterPlotItem([x], [y], size=sz, brush=ACCENT, pen="#0d1013"))
+            amp = "" if r.amplitude != r.amplitude else f"\n{r.amplitude:.0f}°"
+            t = pg.TextItem(f"{r.rate:+.1f}{amp}", color="#c8d0dc", anchor=(0.5, 1.15))
+            t.setPos(x, y)
+            add(t)
 
     def _redraw_positions(self):
         for t in self._pos_labels:
