@@ -2113,11 +2113,15 @@ class MainWindow(QtWidgets.QMainWindow):
         wlabel = ""
         if hasattr(self, "cmb_watch") and self.cmb_watch.currentData():
             wlabel = self.cmb_watch.currentText()
+        run_active = self._run_t0 is not None
         st = {
             "device_is_net": self.cmb_dev.currentData() == "NET",
             "listening": self.recorder is not None,
             "watch": wlabel,
             "elapsed": round(time.time() - self._listen_t0, 1) if self._listen_t0 else 0.0,
+            "settling": bool(getattr(self, "_settle_pending", False)),
+            "run_len": float(self._run_len) if run_active else 0.0,
+            "run_elapsed": round(time.time() - self._run_t0, 1) if run_active else 0.0,
             "have_reading": bool(good and m.rate == m.rate),
             "last_save": getattr(self, "_phone_last_save", ""),
             "pending": getattr(self, "_phone_pending", None),
@@ -2141,6 +2145,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self._phone_pending = None
             self._phone_pending_m = None
             if self.cmb_dev.currentData() == "NET" and self.recorder is None:
+                dur = cmd.get("duration")
+                if isinstance(dur, (int, float)) and 0 <= dur <= 7200:
+                    self.spn_runlen.blockSignals(True)
+                    self.spn_runlen.setValue(int(dur))
+                    self.spn_runlen.blockSignals(False)
                 self._phone_starting = True
                 self.btn_go.setChecked(True)
         elif c == "stop":
