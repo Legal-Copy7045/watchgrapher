@@ -545,6 +545,18 @@ Turn on **flash the face on every second** or **beep on every second** to land
 the seconds hand precisely against a hack. **Mark** when you set the watch,
 come back later, type in what it reads, and it works out the daily rate.
 
+**Sample-clock calibration.** Rate is measured against the sound card's own
+sample clock, which is typically 20-100 ppm off nominal -- 50 ppm is 4.3 s/day
+of systematic error on every rate reading, and cheap interfaces are worse.
+Start listening on the real device (a watch does not need to be on the
+pickup), then press **Calibrate**: for the window you set, it fixes the true
+time against NTP every 25 s and least-squares-fits the sample count against
+it. Twenty minutes gets it to a few ppm. The result is stored per device and
+applied to the rate output only (amplitude and beat error are ratios within
+one capture and do not care). You can also enter a ppm figure by hand, or
+derive one from a watch whose real rate you know from a hardware timegrapher
+(*From reference*: enter what this app reads and what it should read).
+
 ---
 
 ## Beyond the four numbers
@@ -675,6 +687,14 @@ the one to believe.
   pickup; amplitude does not.
 - Amplitude accuracy is capped by how well you know the lift angle, not by the
   software.
+- Rate accuracy is capped by the sound card's sample clock -- typically a few
+  s/day of systematic error until you calibrate it against NTP on the Sync
+  tab.
+- When the beats stop matching their own template, the beat rate disagrees
+  with the caliber, or more than ~4.5 noises per beat are being resolved, the
+  readouts are held at the last trustworthy value and greyed, rather than
+  showing a fresh but meaningless number. The trace, waveform and diagnostics
+  keep updating so you can see why.
 - Chronographs read lower with the chrono running -- that's real, not an error.
 - Co-axial and other non-lever escapements have a different noise signature.
   The 38° lift angle is handled, but expect to tune the sub-noise threshold.
