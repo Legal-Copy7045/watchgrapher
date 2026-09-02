@@ -56,6 +56,13 @@ Whatever you use, kill the room noise: no fans, no HVAC, no talking. If your
 interface has gain, set it so the level meter sits in the upper half without
 touching red. Clipping destroys the sub-noise structure that amplitude reads.
 
+**View -> Auto-gain and clipping guard** (on by default) helps here. Auto-gain
+applies a digital makeup gain into the analysis buffer so the DSP keeps
+headroom on a quiet pickup -- it does not touch the Windows mixer, and the
+recorded WAV stays raw. The clipping guard puts a red warning under the trace
+the moment the input hits full scale, because a clipped capture reads amplitude
+wrong. Turn it off to use the signal exactly as it arrives.
+
 Sample rate: 48 kHz is the sensible default. At 4 Hz, one sample at 48 kHz is
 worth roughly 0.7 degrees of amplitude resolution. 96 kHz halves that if your
 interface supports it; it will not fix a bad pickup.
