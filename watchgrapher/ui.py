@@ -2014,6 +2014,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_watch_drift.setStyleSheet("color:#c8d0dc;font-size:12px;")
         side.addWidget(self.lbl_watch_drift)
 
+        lrow = QtWidgets.QHBoxLayout()
+        self.cmb_wear_watch = QtWidgets.QComboBox()
+        b_wear_log = QtWidgets.QPushButton("Log this drift to the watch")
+        b_wear_log.clicked.connect(self._log_wear_check)
+        lrow.addWidget(self.cmb_wear_watch, 1)
+        lrow.addWidget(b_wear_log, 0)
+        side.addLayout(lrow)
+
         line2 = QtWidgets.QFrame()
         line2.setFrameShape(QtWidgets.QFrame.HLine)
         line2.setStyleSheet("color:#2a323e;")
@@ -2192,9 +2200,31 @@ class MainWindow(QtWidgets.QMainWindow):
             self.lbl_watch_drift.setText("Give it longer than a minute before reading drift.")
             return
         rate = drift / elapsed * 86400.0
+        self._last_wear_drift = (
+            datetime.fromtimestamp(self._watch_set_ref).isoformat(timespec="seconds"),
+            datetime.fromtimestamp(now).isoformat(timespec="seconds"), float(drift))
         self.lbl_watch_drift.setText(
             f"Set {ref0:%H:%M:%S}, {elapsed / 3600:.1f} h ago. Watch is {drift:+.0f} s "
             f"versus true time now -> {rate:+.1f} s/day.")
+
+    def _log_wear_check(self):
+        d = getattr(self, "_last_wear_drift", None)
+        if d is None:
+            self.lbl_watch_drift.setText(
+                "Work out a drift first: mark when the watch was set, then read it.")
+            return
+        wid = self.cmb_wear_watch.currentData()
+        w = self.collection.watches.get(wid) if wid else None
+        if not w:
+            QtWidgets.QMessageBox.information(self, "Wrist rate",
+                                             "Add a watch to the collection first.")
+            return
+        set_iso, when_iso, off = d
+        w.wear_checks.append({"when": when_iso, "set_when": set_iso,
+                              "off_seconds": round(off, 1), "note": ""})
+        self.collection.save()
+        self._refresh_watches(w.id)
+        self.status.showMessage(f"Logged wrist-rate check to {w.label}", 5000)
 
     # ---------------------------------------------------- sample-clock calibration
     # A cheap USB sound card's sample clock is typically 20-100 ppm off nominal.
@@ -2754,6 +2784,37 @@ alongside the application.</p>
         rrb.addStretch(1)
         prl.addLayout(rrb)
         wtabs.addTab(pr, "Power reserve")
+
+        # -- wrist rate tab --
+        wr = QtWidgets.QWidget()
+        wrl = QtWidgets.QVBoxLayout(wr)
+        wrl.addWidget(QtWidgets.QLabel(
+            "How the watch actually keeps time on the wrist -- logged from the Sync "
+            "tab's watch-drift tool. The dashed line is the bench mean rate for "
+            "comparison."))
+        self.p_wear = pg.PlotWidget(title="Wrist rate over time")
+        self.p_wear.setLabel("left", "rate", units="s/d")
+        self.p_wear.showGrid(x=True, y=True, alpha=0.25)
+        self.p_wear.setAxisItems({"bottom": pg.DateAxisItem(orientation="bottom")})
+        self.c_wear = self.p_wear.plot(pen=pg.mkPen("#57d38c", width=2), symbol="o",
+                                       symbolSize=7, symbolBrush="#57d38c")
+        self.l_wear_bench = pg.InfiniteLine(angle=0, pen=pg.mkPen(
+            "#8a94a4", width=1, style=QtCore.Qt.DashLine))
+        self.p_wear.addItem(self.l_wear_bench)
+        wrl.addWidget(self.p_wear, 2)
+        self.tbl_wear = QtWidgets.QTableWidget(0, 4)
+        self.tbl_wear.setHorizontalHeaderLabels(
+            ["Checked", "Set to true", "Off by (s)", "Real rate s/d"])
+        self.tbl_wear.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        self.tbl_wear.verticalHeader().setVisible(False)
+        wrl.addWidget(self.tbl_wear, 1)
+        wearb = QtWidgets.QHBoxLayout()
+        b_wear_del = QtWidgets.QPushButton("Delete selected")
+        b_wear_del.clicked.connect(self._wear_delete)
+        wearb.addWidget(b_wear_del)
+        wearb.addStretch(1)
+        wrl.addLayout(wearb)
+        wtabs.addTab(wr, "Wrist rate")
 
         right.addWidget(wtabs, 5)
 
@@ -5404,6 +5465,15 @@ alongside the application.</p>
         i = self.cmb_watch.findData(select_id) if select_id else -1
         self.cmb_watch.setCurrentIndex(i if i >= 0 else 0)
         self.cmb_watch.blockSignals(False)
+        if hasattr(self, "cmb_wear_watch"):
+            keep = self.cmb_wear_watch.currentData()
+            self.cmb_wear_watch.blockSignals(True)
+            self.cmb_wear_watch.clear()
+            for w in self.collection.sorted_watches():
+                self.cmb_wear_watch.addItem(w.label, w.id)
+            j = self.cmb_wear_watch.findData(select_id or keep)
+            self.cmb_wear_watch.setCurrentIndex(max(0, j))
+            self.cmb_wear_watch.blockSignals(False)
         if hasattr(self, "lbl_now"):
             self.lbl_now.setText(
                 f"Testing:  {self.cmb_watch.currentText()}"
@@ -5605,6 +5675,50 @@ alongside the application.</p>
 
         self._fill_service_table(w)
         self._fill_reserve_table(w)
+        self._fill_wear_table(w)
+
+    def _fill_wear_table(self, w):
+        self.tbl_wear.setRowCount(0)
+        self._wear_watch_id = w.id
+        checks = sorted(w.wear_checks, key=lambda c: c.get("when", ""), reverse=True)
+        for c in checks:
+            r = self.tbl_wear.rowCount()
+            self.tbl_wear.insertRow(r)
+            try:
+                days = ((datetime.fromisoformat(c["when"]) -
+                         datetime.fromisoformat(c["set_when"])).total_seconds() / 86400.0)
+                rate = f"{c['off_seconds'] / days:+.1f}" if days > 0.02 else "--"
+            except Exception:
+                rate = "--"
+            for cix, v in enumerate([c.get("when", "")[:16].replace("T", " "),
+                                     c.get("set_when", "")[:16].replace("T", " "),
+                                     f"{c.get('off_seconds', 0):+.0f}", rate]):
+                self.tbl_wear.setItem(r, cix, QtWidgets.QTableWidgetItem(str(v)))
+        series = coll.wear_rate_series(w)
+        if series:
+            self.c_wear.setData([d.timestamp() for d, _ in series], [r for _, r in series])
+        else:
+            self.c_wear.setData([], [])
+        bench = [h.mean_rate for h in w.history if h.mean_rate == h.mean_rate]
+        if bench:
+            self.l_wear_bench.setPos(float(np.mean(bench)))
+            self.l_wear_bench.setVisible(True)
+        else:
+            self.l_wear_bench.setVisible(False)
+
+    def _wear_delete(self):
+        wid = getattr(self, "_wear_watch_id", None)
+        w = self.collection.watches.get(wid) if wid else None
+        r = self.tbl_wear.currentRow()
+        if not w or r < 0:
+            return
+        checks = sorted(w.wear_checks, key=lambda c: c.get("when", ""), reverse=True)
+        if r >= len(checks):
+            return
+        target = checks[r]
+        w.wear_checks = [c for c in w.wear_checks if c is not target]
+        self.collection.save()
+        self._fill_wear_table(w)
 
     def _fill_reserve_table(self, w):
         self.tbl_res_hist.setRowCount(0)
