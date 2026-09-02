@@ -252,6 +252,16 @@ The **sub-noise threshold** control is the knob:
 - Amplitude reads **low** and scatters: threshold is too low, room noise is
   being counted as the unlocking noise. Raise it.
 
+### Reading the rate history
+
+The plot under the beat panel tracks the run over time. It carries two lines on
+two scales: **rate in s/day on the blue left axis**, **amplitude in degrees on
+the amber right axis**, each axis coloured to match its line. The x axis is run
+time in minutes. It clears when you press Start and thins older points on a long
+run so a multi-day trace keeps scrolling. Watch for amplitude sliding while rate
+holds (mainspring or train drag) or rate wandering while amplitude is steady (a
+hairspring or escapement fault).
+
 ---
 
 ## What good looks like
