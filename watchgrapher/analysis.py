@@ -504,6 +504,7 @@ class ReserveStats:
     amp_per_hour: float = float("nan")     # mean slope over the run, deg/h
     hours_to_220: float = float("nan")     # extrapolated from the last third of the run
     hours_to_200: float = float("nan")
+    kick_deg_per_h: float = float("nan")   # amplitude lost per hour over the first hour
     iso_slope: float = float("nan")        # s/day of rate per +1 deg amplitude
     iso_span: float = float("nan")         # rate change across the amplitude range seen
     iso_fit: tuple = ()                    # (slope, intercept) for a rate-vs-amplitude line
@@ -571,6 +572,14 @@ def reserve_analytics(samples, iso_model: str = "linear") -> ReserveStats:
         st.amp_per_hour = float(sl_a)
         # The decay accelerates near the end, so extrapolate the runway from
         # the last third rather than the whole-run slope.
+        # Post-wind "kick": how fast amplitude falls in the first hour. A steep
+        # early drop that then levels off is a mainspring slipping at the barrel
+        # wall, or braking grease that has gone hard.
+        head = ma & (t_h <= min(t_h[ma][0] + 1.0, t_h[ma][-1]))
+        if head.sum() >= 4 and float(t_h[head][-1] - t_h[head][0]) > 0.2:
+            (sk, _), _ = _robust_polyfit(t_h[head], amp[head], 1)
+            st.kick_deg_per_h = float(-sk)          # positive = amplitude falling
+
         cut = t_h[ma][-1] - max(1.0, st.hours / 3.0)
         tail = ma & (t_h >= cut)
         if tail.sum() >= 3:
@@ -644,6 +653,13 @@ def reserve_analytics(samples, iso_model: str = "linear") -> ReserveStats:
                   else "."))
     elif st.amp_per_hour == st.amp_per_hour:
         v.append(f"Amplitude is falling about {abs(st.amp_per_hour):.1f} deg/hour on average.")
+    if st.kick_deg_per_h == st.kick_deg_per_h and st.amp_per_hour == st.amp_per_hour:
+        overall = abs(st.amp_per_hour)
+        if st.kick_deg_per_h > 20 and st.kick_deg_per_h > 3 * max(overall, 0.5):
+            v.append(f"Post-wind kick: amplitude drops {st.kick_deg_per_h:.0f} deg in the "
+                     f"first hour, far steeper than the {overall:.1f} deg/h average. That "
+                     f"is the mainspring slipping at the barrel wall or hard braking "
+                     f"grease -- expected on an automatic, a fault on a hand-wind.")
     return st
 
 
