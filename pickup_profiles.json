@@ -1,0 +1,7 @@
+{
+  "[Windows WDM-KS] Microphone (USB PnP Sound Device)": {
+    "clock_ppm": 4.63,
+    "clock_ppm_source": "NTP, 13 min",
+    "clock_ppm_date": "2026-09-01T23:40:37"
+  }
+}

@@ -657,6 +657,121 @@ class ServiceEditor(QtWidgets.QDialog):
         return rec, list(self._new_docs), list(self._removed)
 
 
+class CrossCheckDialog(QtWidgets.QDialog):
+    """Compare the acoustic reading against a hardware timegrapher's numbers."""
+
+    def __init__(self, measurement, caliber, parent=None):
+        super().__init__(parent)
+        self.m = measurement
+        self.cal = caliber
+        self.setWindowTitle("Cross-check against a hardware timegrapher")
+        self.setMinimumWidth(460)
+        v = QtWidgets.QVBoxLayout(self)
+
+        a_rate = a_amp = a_be = float("nan")
+        if measurement is not None and measurement.ok:
+            a_rate, a_amp, a_be = measurement.rate, measurement.amplitude, measurement.beat_error
+        head = ("This app reads: "
+                + (f"{a_rate:+.1f} s/d, {a_amp:.0f} deg, {a_be:.2f} ms"
+                   if a_rate == a_rate else "no current reading -- enter both sides by hand")
+                + ".")
+        lh = QtWidgets.QLabel(head)
+        lh.setWordWrap(True)
+        v.addWidget(lh)
+
+        form = QtWidgets.QFormLayout()
+        self.e_app_rate = QtWidgets.QDoubleSpinBox(); self.e_app_rate.setRange(-900, 900)
+        self.e_app_amp = QtWidgets.QDoubleSpinBox(); self.e_app_amp.setRange(0, 360)
+        self.e_app_be = QtWidgets.QDoubleSpinBox(); self.e_app_be.setRange(0, 20); self.e_app_be.setDecimals(2)
+        if a_rate == a_rate:
+            self.e_app_rate.setValue(a_rate); self.e_app_amp.setValue(a_amp)
+            self.e_app_be.setValue(a_be if a_be == a_be else 0.0)
+        self.e_hw_rate = QtWidgets.QDoubleSpinBox(); self.e_hw_rate.setRange(-900, 900)
+        self.e_hw_amp = QtWidgets.QDoubleSpinBox(); self.e_hw_amp.setRange(0, 360)
+        self.e_hw_be = QtWidgets.QDoubleSpinBox(); self.e_hw_be.setRange(0, 20); self.e_hw_be.setDecimals(2)
+        self.e_machine = QtWidgets.QLineEdit()
+        self.e_machine.setPlaceholderText("Witschi Chronoscope / Weishi 1000 / ...")
+        form.addRow("This app -- rate s/d", self.e_app_rate)
+        form.addRow("This app -- amplitude", self.e_app_amp)
+        form.addRow("This app -- beat error", self.e_app_be)
+        form.addRow("Machine -- rate s/d", self.e_hw_rate)
+        form.addRow("Machine -- amplitude", self.e_hw_amp)
+        form.addRow("Machine -- beat error", self.e_hw_be)
+        form.addRow("Machine model", self.e_machine)
+        v.addLayout(form)
+
+        self.txt = QtWidgets.QTextBrowser()
+        v.addWidget(self.txt, 1)
+
+        bb = QtWidgets.QDialogButtonBox()
+        b_cmp = bb.addButton("Compare", QtWidgets.QDialogButtonBox.ActionRole)
+        b_log = bb.addButton("Compare && log", QtWidgets.QDialogButtonBox.AcceptRole)
+        bb.addButton(QtWidgets.QDialogButtonBox.Close)
+        b_cmp.clicked.connect(lambda: self._compare(False))
+        b_log.clicked.connect(lambda: self._compare(True))
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+
+    def _compare(self, log):
+        dr = self.e_app_rate.value() - self.e_hw_rate.value()
+        da = self.e_app_amp.value() - self.e_hw_amp.value()
+        db = self.e_app_be.value() - self.e_hw_be.value()
+        lines = [f"<b>Rate</b>: app - machine = {dr:+.1f} s/d",
+                 f"<b>Amplitude</b>: {da:+.0f} deg",
+                 f"<b>Beat error</b>: {db:+.2f} ms", "<hr>"]
+        if abs(dr) <= 2:
+            lines.append("Rate agreement is good (within 2 s/d).")
+        else:
+            lines.append(
+                f"Rate is off by {dr:+.1f} s/d. If this repeats across watches it is a "
+                f"systematic bias -- most likely the sound-card sample clock. Run the "
+                f"Sync tab's sample-clock calibration; {abs(dr):.1f} s/d is about "
+                f"{abs(dr) / (86400.0 / 1e6):.0f} ppm.")
+        if abs(da) <= 12:
+            lines.append("Amplitude agreement is within the lift-angle uncertainty.")
+        else:
+            lines.append(
+                f"Amplitude is off by {da:+.0f} deg. Amplitude scales directly with the "
+                f"assumed lift angle -- a 1 deg lift-angle error moves amplitude about "
+                f"5 deg. Check the caliber's lift angle against a technical sheet, or "
+                f"use the 180-degree trick and the lift-angle solver on the Tools tab. "
+                f"The machine can also be wrong here if its own lift angle is set loosely.")
+        if abs(db) <= 0.2:
+            lines.append("Beat error agrees.")
+        else:
+            lines.append(f"Beat error differs by {db:+.2f} ms -- usually the two are "
+                         f"anchoring the tick/tock on different noises. Small and not "
+                         f"worth chasing unless it is over ~0.4 ms.")
+        self.txt.setHtml("<div style='font-family:Segoe UI;font-size:12px;color:#c8d0dc'>"
+                         + "<br>".join(lines) + "</div>")
+        if log:
+            self._log(dr, da, db)
+            self.accept()
+
+    def _log(self, dr, da, db):
+        import json
+        path = os.path.join(APP_DIR, "crosschecks.json")
+        try:
+            data = json.load(open(path)) if os.path.exists(path) else []
+        except Exception:
+            data = []
+        data.append({
+            "when": datetime.now().isoformat(timespec="seconds"),
+            "caliber": getattr(self.cal, "key", "") if self.cal else "",
+            "machine": self.e_machine.text().strip(),
+            "app": [self.e_app_rate.value(), self.e_app_amp.value(), self.e_app_be.value()],
+            "hw": [self.e_hw_rate.value(), self.e_hw_amp.value(), self.e_hw_be.value()],
+            "delta": [round(dr, 2), round(da, 1), round(db, 3)]})
+        try:
+            with open(path, "w") as fh:
+                json.dump(data[-200:], fh, indent=2)
+            if self.parent() and hasattr(self.parent(), "status"):
+                self.parent().status.showMessage(
+                    f"Cross-check logged ({len(data)} on file)", 5000)
+        except OSError:
+            pass
+
+
 class RegulationWizard(QtWidgets.QDialog):
     """
     Walks a regulation: capture a baseline, fix beat error, then close on the
@@ -1699,6 +1814,22 @@ class MainWindow(QtWidgets.QMainWindow):
             "again with no reading clears the reference.")
         self.act_pin_ref.triggered.connect(self._pin_reference)
         vm.addAction(self.act_pin_ref)
+
+        tm = mb.addMenu("&Tools")
+        xchk_act = QtGui.QAction("Cross-check against a hardware timegrapher...", self)
+        xchk_act.setToolTip(
+            "Enter what a Witschi / Weishi machine reads for the same watch and compare. "
+            "Persistent disagreement points at the lift angle (amplitude) or the "
+            "sample-clock calibration (rate).")
+        xchk_act.triggered.connect(self._cross_check)
+        tm.addAction(xchk_act)
+
+    def _cross_check(self):
+        c = self._current_caliber()
+        dlg = CrossCheckDialog(
+            self._last_good if getattr(self, "_last_good", None) is not None else self.last,
+            c, parent=self)
+        dlg.exec()
 
     def _pin_reference(self):
         m = self._last_good if getattr(self, "_last_good", None) is not None else self.last
