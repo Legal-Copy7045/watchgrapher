@@ -2961,7 +2961,18 @@ alongside the application.</p>
         g2.addRow("My watch", self.cmb_watch)
         g2.addRow("Search", self.txt_search)
         g2.addRow("", self.lbl_hint)
-        g2.addRow("Caliber", self.cmb_cal)
+        cal_row = QtWidgets.QWidget()
+        cal_lay = QtWidgets.QHBoxLayout(cal_row)
+        cal_lay.setContentsMargins(0, 0, 0, 0)
+        cal_lay.setSpacing(6)
+        cal_lay.addWidget(self.cmb_cal, 1)
+        self.btn_whatsnormal = QtWidgets.QPushButton("What's normal?")
+        self.btn_whatsnormal.setToolTip(
+            "Expected beat rate, amplitude, positional delta, service interval and "
+            "known weak points for the selected caliber.")
+        self.btn_whatsnormal.clicked.connect(self._whats_normal)
+        cal_lay.addWidget(self.btn_whatsnormal, 0)
+        g2.addRow("Caliber", cal_row)
         g2.addRow("Lift / bph", lb_row)
         g2.addRow(self.lbl_calinfo)
         lay.addWidget(g2)
@@ -5399,6 +5410,26 @@ alongside the application.</p>
     def _current_caliber(self):
         key = self.cmb_cal.currentData()
         return CALIBERS.get(key)
+
+    def _whats_normal(self):
+        c = self._current_caliber()
+        if not c:
+            QtWidgets.QMessageBox.information(
+                self, "What's normal", "Pick a specific caliber first.")
+            return
+        from .calibers import whats_normal
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle(f"What's normal -- {c.label}")
+        dlg.setMinimumSize(480, 460)
+        lay = QtWidgets.QVBoxLayout(dlg)
+        tb = QtWidgets.QTextBrowser()
+        tb.setMarkdown(whats_normal(c))
+        lay.addWidget(tb)
+        bb = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close)
+        bb.rejected.connect(dlg.reject)
+        bb.accepted.connect(dlg.accept)
+        lay.addWidget(bb)
+        dlg.exec()
 
     def _caliber_changed(self):
         c = self._current_caliber()
