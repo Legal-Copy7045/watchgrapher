@@ -3627,6 +3627,11 @@ alongside the application.</p>
                 self._noise_session = False
                 self._noise_started_listen = False
                 self.btn_noise.setText("Room noise")
+            if self.btn_res.isChecked() and not self._closing:
+                # A power-reserve log only means anything while the app is
+                # listening. Stopping the stream ends it too -- finalising and
+                # filing whatever was captured, rather than leaving it frozen.
+                self.btn_res.setChecked(False)   # -> _toggle_reserve(False)
             self.worker.recorder = None
             if self.recorder:
                 if getattr(self.recorder, "is_recording", False):
@@ -4256,8 +4261,8 @@ alongside the application.</p>
         if target_h and el >= target_h * 3600.0 and m is not None:
             self._reserve.append((el, m.rate, m.amplitude, m.beat_error))
             self._redraw_reserve()
-            self.btn_res.setChecked(False)
             self._reserve_finished(stopped_early=False)
+            self.btn_res.setChecked(False)
             return
         if el < self._res_next or m is None:
             # Keep the label moving between samples -- and while a bad signal is
@@ -4274,10 +4279,12 @@ alongside the application.</p>
         self._reserve.append((el, m.rate, m.amplitude, m.beat_error))
         self._redraw_reserve()
         if target_h and el >= target_h * 3600.0:
-            self.btn_res.setChecked(False)
             self._reserve_finished(stopped_early=False)
+            self.btn_res.setChecked(False)
 
     def _reserve_finished(self, stopped_early: bool):
+        if getattr(self, "_res_done", False):
+            return                      # already finalised (e.g. reached target, then Stop)
         self._res_done = True
         self.btn_res.setText("Start power reserve log")
         if not self._reserve:
