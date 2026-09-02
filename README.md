@@ -51,6 +51,10 @@ In rough order of how well they work:
 - **A stethoscope head taped over a small electret capsule.** Works well.
 - **A good USB condenser mic in a quiet room, watch resting on the grille.**
   Workable for rate and beat error. Amplitude will be marginal.
+- **A phone held against the case.** No cable, no interface -- the phone's own
+  mic streams to the app over Wi-Fi (see *Using a phone as the pickup* below).
+  About as good as the condenser mic: fine for rate and beat error, marginal
+  for amplitude, and better if you press the phone's mic port to the case back.
 
 Whatever you use, kill the room noise: no fans, no HVAC, no talking. If your
 interface has gain, set it so the level meter sits in the upper half without
@@ -66,6 +70,59 @@ wrong. Turn it off to use the signal exactly as it arrives.
 Sample rate: 48 kHz is the sensible default. At 4 Hz, one sample at 48 kHz is
 worth roughly 0.7 degrees of amplitude resolution. 96 kHz halves that if your
 interface supports it; it will not fix a bad pickup.
+
+---
+
+## Using a phone as the pickup
+
+There is no app to install on the phone. WatchGrapher runs a small web server
+on your local network and the phone's browser opens it and streams its
+microphone back.
+
+1. On the computer running WatchGrapher, open the **audio input** dropdown and
+   choose **"Phone / browser pickup (over Wi-Fi)"**.
+2. Press **Start**. A dialog shows a URL like `http://192.168.1.42:8347`. The
+   computer and the phone must be on the **same Wi-Fi network** (a guest
+   network that isolates clients will not work).
+3. On the phone, open that URL in any browser (Safari, Chrome, whatever).
+   Typing it in is quickest; there is no QR code.
+4. On the page, leave the transport on **PCM** (works on any phone) or switch
+   to **WebRTC** if PCM keeps dropping out -- WebRTC only appears if `aiortc`
+   is installed on the computer (`pip install aiortc`).
+5. Tap **Start** on the page and allow microphone access when the browser
+   asks. The level bar on the page should move; the app's own level meter and
+   trace come alive within a second or two.
+6. Hold the phone with its **microphone port pressed against the watch case**
+   -- the bottom edge on most phones. Contact matters as much as it does for a
+   piezo. Keep the screen awake (the page tries, but set a long auto-lock).
+7. Press **Stop** in the app when done. Closing the page or locking the phone
+   also ends the stream.
+
+**What to expect.** A phone mic through this path is roughly as good as a decent
+USB condenser mic: solid for rate and beat error, marginal for amplitude unless
+coupling is good. Run **Self-tune** once the stream is live -- the band a phone
+mic wants is different from a piezo. Sample-clock calibration and per-pickup
+profiles are disabled for the phone input (the phone's clock is not something
+this end can calibrate).
+
+**Privacy and safety.** The server only ever *receives* audio. It serves one
+static page, runs no code from the phone, and is reachable only on the local
+network -- nothing is sent to the internet. It stops when you press Stop or
+switch input devices.
+
+**If it will not connect:**
+
+- **Page will not load on the phone.** Wrong network, or client isolation on
+  the Wi-Fi. Try a normal (non-guest) network, or a phone hotspot with the
+  laptop joined to it.
+- **Windows Firewall prompt on first Start.** Allow WatchGrapher on private
+  networks. If you dismissed it, the phone will not reach the page until you
+  allow it in Windows Defender Firewall settings.
+- **PCM keeps stalling.** Switch the page to WebRTC (needs `aiortc` on the
+  computer), move closer to the router, or fall back to a wired pickup.
+- **Level bar moves on the phone but the app shows nothing.** The app was not
+  actually started, or you switched input devices after starting -- press Stop
+  and Start again.
 
 ---
 
@@ -810,16 +867,9 @@ window and sub-noise threshold against the selected input device; picking that
 device again loads them. A piezo disc and an open-air microphone want very
 different bands, and this remembers each.
 
-**Phone / browser pickup.** Pick "Phone / browser pickup (over Wi-Fi)" as the
-input device and press Start. The app runs a small web server on the local
-network and shows a URL; open it on a phone (or any laptop) on the same Wi-Fi,
-tap Start, and its microphone streams straight into the same buffer a USB mic
-would feed. No app to install. The page offers two transports: **PCM** over a
-WebSocket, which needs nothing and works everywhere, and **WebRTC**, steadier
-on a marginal link but only available if `aiortc` is installed on the machine
-running WatchGrapher. The server only ever receives audio, and nothing leaves
-the local network. Keep the phone screen awake and its mic close to the
-movement; a phone mic is fine for rate and beat error, marginal for amplitude.
+**Phone / browser pickup.** Choose it in the audio input dropdown to use a
+phone's microphone over Wi-Fi instead of a wired pickup -- full instructions
+are under *Using a phone as the pickup* near the top of this file.
 
 **Microphone response calibration** (Tools menu) plays a 4-second sine sweep
 out the default output and measures what the pickup returns, showing where it
@@ -887,9 +937,10 @@ Then check, in this order:
    beyond the escapement is being picked up, and amplitude is the reading at
    risk.
 
-A phone app and this app are both microphone timegraphers with the same
-physical limits. Where they differ, the one whose markers sit on real peaks is
-the one to believe.
+A dedicated phone timegrapher app and this app are both microphone
+timegraphers with the same physical limits -- and with this app's phone pickup
+you can even feed it the same phone mic. Where two readings differ, the one
+whose beat-panel markers sit on real peaks is the one to believe.
 
 ---
 
