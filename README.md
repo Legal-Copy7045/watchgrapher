@@ -93,27 +93,23 @@ The server runs on a **fixed port** (8477 by default, saved in `settings.json`),
 so the URL stays the same every time -- bookmark it on the phone. It only moves
 to the next free port if something else is already using that one.
 
-**Starting the server.** Three ways, pick whichever suits:
+**The Phone Portal tab** (top nav, or Ctrl+5) is where you run and connect the
+server. It shows a big **Start phone server** button, the URL, a **QR code**,
+and a **"Start automatically when WatchGrapher opens"** checkbox. A server
+started here stays up until you stop it, and survives switching input devices.
 
-- **Tools -> Phone pickup server** -- a toggle that runs the server on its own,
-  independent of the input device. This is the easiest: flip it on, open the
-  URL on the phone, and tap **Start test** -- the page switches the desktop to
-  the phone input for you.
-- **Tools -> Start phone pickup server at launch** -- remembers the above so it
-  is always running when WatchGrapher opens.
-- Or just choose **"Phone / browser pickup (over Wi-Fi)"** as the input device
-  and press **Start** on the computer, as before.
+You can also just choose **"Phone / browser pickup (over Wi-Fi)"** as the input
+device and press **Start** on the computer -- that jumps to the Phone Portal so
+you can scan the code, and that server stops when you pick a different input.
 
-However it started, a dialog shows a URL like `https://192.168.1.42:8477`. The
-computer and the phone must be on the **same Wi-Fi network** (a guest network
-that isolates clients will not work). A server started from the Tools menu or
-at launch stays up until you turn it off; one started by selecting the input
-device stops when you switch to a different device.
+Either way, the computer and the phone must be on the **same Wi-Fi network** (a
+guest network that isolates clients will not work). The URL is like
+`https://192.168.1.42:8477` and stays the same every time -- bookmark it.
 
 Then, on the phone:
 
-1. Open that URL in any browser (Safari, Chrome, whatever) and bookmark it.
-   Mind the `https`. There is no QR code.
+1. **Scan the QR code** on the Phone Portal tab, or type the URL into any
+   browser (Safari, Chrome, whatever) and bookmark it. Mind the `https`.
 2. The phone warns the certificate is not trusted. This is expected for a
    local self-signed cert -- tap **Advanced** / **Show details** and
    **proceed** / **visit this website**.
@@ -686,12 +682,13 @@ and Hangzhou 6300, with a note on what is actually shared (escapement geometry,
 train parts, mainsprings) and what is not. Covers the 2824, 2892, 7750, Unitas
 6497, Seiko NH35 and 7S26, and Miyota 9015 families.
 
-**What's normal?** A button by the caliber picker opens the reference for that
-movement: beat rate and lift angle, the amplitude band to expect after a
-service and how much vertical drop is normal, beat-error and positional-delta
-targets, the service interval, the regulating hardware, and that caliber's
-known weak points -- the reversing wheels on a 2824, the fragile centre-seconds
-spring on a 2892, the chrono amplitude drop on a 7750.
+**Movement info.** The button by the caliber picker opens the full reference
+for that movement: the regulating hardware, where the lift angle comes from
+(documented, measured, community, inherited), the expected beat rate and
+amplitude band, how much vertical drop is normal, beat-error and
+positional-delta targets, the service interval, that caliber's known weak
+points -- the reversing wheels on a 2824, the fragile centre-seconds spring on
+a 2892, the chrono amplitude drop on a 7750 -- and its equivalent movements.
 
 **Documents.** A per-watch vault in My Watches for warranty cards, receipts,
 box-and-papers photos, manuals, valuations and provenance -- tagged by kind
@@ -966,8 +963,8 @@ a filed report -- up to 25 deep. It snapshots the collection file before each
 save, so it does not touch the current measurement and cannot undo the very
 first watch you add (there is no prior state).
 
-**Session presets.** The *Preset* dropdown at the top of the control column
-sets the analysis window, timed-run length, settle, auto-capture, position and
+**Session presets.** The *Preset* dropdown in the Test Conditions section sets
+the analysis window, timed-run length, settle, auto-capture, position and
 active tab in one go -- *Quick check* (8 s window, open-ended), *Timed 30 s*,
 *Full 6-position* (auto-capture on, Positions tab), *Power reserve* (opens that
 tab, sets a 48 h target), *Vintage / low beat* (longer window and run). Changing
