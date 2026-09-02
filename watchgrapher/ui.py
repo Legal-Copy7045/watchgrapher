@@ -3070,7 +3070,8 @@ alongside the application.</p>
                             ("Edit", self._service_edit),
                             ("Delete", self._service_delete),
                             ("Open document", self._service_open_doc),
-                            ("Service checklist...", self._service_checklist)):
+                            ("Service checklist...", self._service_checklist),
+                            ("Before / after report...", self._before_after_report)):
             b = QtWidgets.QPushButton(label)
             b.clicked.connect(slot)
             sb.addWidget(b)
@@ -6357,6 +6358,45 @@ alongside the application.</p>
         w.last_service = w.effective_last_service
         self.collection.save()
         self._refresh_watches(w.id)
+
+    def _before_after_report(self):
+        w, s = self._current_service()
+        if not w:
+            w = self._current_watch()
+        if not w or not w.services:
+            QtWidgets.QMessageBox.information(
+                self, "Before / after", "Select a watch with a logged service.")
+            return
+        if s is None:
+            s = sorted(w.services, key=lambda x: x.when, reverse=True)[0]
+        sd = s.date
+        if sd is None:
+            QtWidgets.QMessageBox.information(self, "Before / after",
+                                             "That service entry has no usable date.")
+            return
+        runs = [h for h in w.history if h.date is not None]
+        before = max((h for h in runs if h.date < sd), key=lambda h: h.date, default=None)
+        after = min((h for h in runs if h.date >= sd and h.service_event),
+                    key=lambda h: h.date, default=None) \
+            or min((h for h in runs if h.date >= sd), key=lambda h: h.date, default=None)
+        if before is None and after is None:
+            QtWidgets.QMessageBox.information(
+                self, "Before / after",
+                "No timing runs saved around that service date. Save a run before and "
+                "after a service (mark the after run post-service) to compare them.")
+            return
+        stem = "".join(ch if ch.isalnum() else "_" for ch in w.label)[:40]
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save before/after report",
+            os.path.join(REPORT_DIR, f"beforeafter_{stem}_{s.when}.html"), "HTML (*.html)")
+        if not path:
+            return
+        from .calibers import CALIBERS
+        out = reportmod.build_before_after(
+            path, watch=w, service=s, before=before, after=after,
+            caliber=CALIBERS.get(w.caliber_key))
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
+        self.status.showMessage(f"Wrote {out}", 8000)
 
     def _service_checklist(self):
         w = self._current_watch()

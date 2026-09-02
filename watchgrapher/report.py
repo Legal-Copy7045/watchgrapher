@@ -179,6 +179,81 @@ def build_certificate(path, *, caliber, readings, grade, watch_label="",
     return path
 
 
+def build_before_after(path, *, watch, service, before, after, caliber=None):
+    """One page comparing timing runs either side of a service."""
+    e = html.escape
+
+    def g(rec, attr):
+        v = getattr(rec, attr, float("nan")) if rec else float("nan")
+        return v if v == v else None
+
+    rows = [
+        ("Mean rate", "mean_rate", "s/d", 1, True, "lower magnitude is better"),
+        ("Positional delta", "delta_rate", "s/d", 1, False, "smaller is better"),
+        ("Amplitude, highest", "max_amplitude", "°", 0, False, "higher is better, to a point"),
+        ("Amplitude, lowest", "min_amplitude", "°", 0, False, "higher is better"),
+        ("Beat error, worst", "max_beat_error", "ms", 2, False, "smaller is better"),
+    ]
+    p = ["<!doctype html><html><head><meta charset='utf-8'>",
+         f"<title>Before / after -- {e(watch.label)}</title><style>{CSS}</style></head><body>"]
+    p.append(f"<h1>Service before / after &mdash; {e(watch.label)}</h1>")
+    p.append(f"<p class='sub'>{e((caliber.label + ' &middot; ') if caliber else '')}"
+             f"{e(service.kind)} on {e(service.when)}"
+             f"{' &middot; ' + e(service.performed_by) if service.performed_by else ''}</p>")
+    p.append(f"<p class='sub'>Before run: {e(before.when[:16].replace('T',' ')) if before else 'none found'}"
+             f" &nbsp;&rarr;&nbsp; After run: "
+             f"{e(after.when[:16].replace('T',' ')) if after else 'none found'}</p>")
+
+    p.append("<table><tr><th>Metric</th><th class='n'>Before</th><th class='n'>After</th>"
+             "<th class='n'>Change</th><th></th></tr>")
+    for name, attr, unit, dp, signed, hint in rows:
+        b, a = g(before, attr), g(after, attr)
+        sgn = "+" if signed else ""
+        bs = f"{b:{sgn}.{dp}f} {unit}" if b is not None else "--"
+        as_ = f"{a:{sgn}.{dp}f} {unit}" if a is not None else "--"
+        ch = f"{a - b:+.{dp}f} {unit}" if (b is not None and a is not None) else "--"
+        p.append(f"<tr><td>{e(name)}</td><td class='n'>{bs}</td><td class='n'>{as_}</td>"
+                 f"<td class='n'>{ch}</td><td class='sub'>{e(hint)}</td></tr>")
+    p.append("</table>")
+
+    notes = []
+    ba, aa = g(before, "min_amplitude"), g(after, "min_amplitude")
+    if ba is not None and aa is not None:
+        if aa - ba > 15:
+            notes.append(f"Amplitude recovered {aa - ba:.0f}° at its lowest position -- "
+                         f"the service freed the train.")
+        elif aa - ba < -15:
+            notes.append(f"Amplitude dropped {ba - aa:.0f}° -- check mainspring choice, "
+                         f"barrel-wall lubrication and escapement oiling.")
+    bd, ad = g(before, "delta_rate"), g(after, "delta_rate")
+    if bd is not None and ad is not None and bd - ad > 5:
+        notes.append(f"Positional delta tightened from {bd:.0f} to {ad:.0f} s/d.")
+    bb, ab = g(before, "max_beat_error"), g(after, "max_beat_error")
+    if bb is not None and ab is not None and bb - ab > 0.2:
+        notes.append(f"Beat error set from {bb:.2f} to {ab:.2f} ms.")
+    if notes:
+        p.append("<h2>Summary</h2>")
+        for n in notes:
+            p.append(f"<div class='f good'><div class='d'>{e(n)}</div></div>")
+
+    for tag, rec in (("Before", before), ("After", after)):
+        if rec and getattr(rec, "readings", None):
+            p.append(f"<h2>{tag} &mdash; positions</h2><table><tr><th>Position</th>"
+                     "<th class='n'>Rate</th><th class='n'>Amplitude</th>"
+                     "<th class='n'>Beat error</th></tr>")
+            for rd in rec.readings:
+                p.append(f"<tr><td>{e(str(rd.get('position','')))}</td>"
+                         f"<td class='n'>{_fmt(rd.get('rate'), 1)}</td>"
+                         f"<td class='n'>{_fmt(rd.get('amplitude'), 0)}</td>"
+                         f"<td class='n'>{_fmt(rd.get('beat_error'), 2)}</td></tr>")
+            p.append("</table>")
+
+    p.append("</body></html>")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("".join(p))
+    return path
+
+
 def build(path, caliber, readings, measurement=None, findings=None,
           fault_report=None, tuning=None, reserve_log=None,
           watch_label="", technician="", notes="", grade=None):
