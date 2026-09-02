@@ -283,6 +283,16 @@ def build(path, caliber, readings, measurement=None, findings=None,
         p.append(f"<p class='sub' style='margin-top:6px'>{m.beats} beats, SNR "
                  f"{m.snr_db:.0f} dB, template match {m.quality:.2f}, "
                  f"{3 + m.extra_peaks:.1f} noises per beat.</p>")
+        try:
+            from .analysis import escapement_metrics
+            em = escapement_metrics(m.amplitude, m.lift_angle)
+            if em.rating:
+                p.append(f"<p class='sub'>Escapement impulse fraction "
+                         f"{em.impulse_fraction:.1f}% ({e(em.rating)}) &mdash; "
+                         f"{em.free_arc_deg:.0f}&deg; of free swing per beat. "
+                         f"{e(em.note)}</p>")
+        except Exception:
+            pass
         p.append(trace_svg(m, m.nominal_bph or m.detected_bph))
 
     if readings:
@@ -675,6 +685,21 @@ def build_watch_report(path, watch, caliber=None, trends=None, notes=None,
                      f"spread {t.stdev:.2f}")
             p.append(f"<div class='f {sev}'><div class='t'>{e(t.metric)}{extra}</div>"
                      f"<div class='d'>{e(t.verdict)}</div></div>")
+
+    try:
+        from .analysis import history_stability
+        hs = history_stability([(h.date, h.mean_rate) for h in hist if h.date])
+        if hs.n >= 2:
+            p.append("<h2>Long-term rate stability</h2>")
+            p.append(f"<p class='sub'>{e(hs.verdict)}</p>")
+            if hs.dev:
+                p.append("<table><tr><th>Runs averaged</th>"
+                         "<th class='n'>Rate deviation s/day</th></tr>")
+                for tau, d in zip(hs.taus, hs.dev):
+                    p.append(f"<tr><td>{tau}</td><td class='n'>{d:.2f}</td></tr>")
+                p.append("</table>")
+    except Exception:
+        pass
 
     p.append(_reserve_section(watch))
     p.append(_service_section(watch, doc_dir))

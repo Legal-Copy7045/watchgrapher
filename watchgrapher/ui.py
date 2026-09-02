@@ -19,7 +19,8 @@ from . import (audio, advisor, catalog as catdb, collection as coll,
                faults, references as refdb, report as reportmod, timesync)
 from .analysis import (AnalyzerConfig, analyze, autotune, trace_points,
                        solve_lift_angle, tuning_score, reserve_analytics,
-                       allan_deviation)
+                       allan_deviation, reserve_forecast, escapement_metrics,
+                       history_stability)
 from .calibers import (CALIBERS, GROUP_ORDER, STANDARD_BPH, grouped,
                        load_user_calibers, search)
 
@@ -4822,6 +4823,8 @@ alongside the application.</p>
         self.p_res.showGrid(x=True, y=True, alpha=0.25)
         self.p_res.addLegend(offset=(-10, 10))
         self.c_res_amp = self.p_res.plot(pen=pg.mkPen("#57d38c", width=2), name="amplitude")
+        self.c_res_proj = self.p_res.plot(
+            pen=pg.mkPen("#57d38c", width=1.5, style=QtCore.Qt.DashLine), name="projected")
         self.res_rate_vb = pg.ViewBox()
         self.p_res.scene().addItem(self.res_rate_vb)
         ax2 = pg.AxisItem("right")
@@ -5904,6 +5907,13 @@ alongside the application.</p>
                 self.r_amp.u.setText("degrees -- approaching the knocking region")
             else:
                 self.r_amp.u.setText("degrees")
+            if m.amplitude == m.amplitude:
+                em = escapement_metrics(m.amplitude, m.lift_angle)
+                if em.rating:
+                    self.r_amp.setToolTip(
+                        f"Escapement impulse fraction {em.impulse_fraction:.1f}% "
+                        f"({em.rating}) -- {em.free_arc_deg:.0f}deg of free swing "
+                        f"per beat.\n{em.note}")
             self.r_be.set("--" if m.beat_error != m.beat_error else f"{m.beat_error:.2f}",
                           "#ff5d5d" if m.beat_error > 1.2 else
                           ("#ffb648" if m.beat_error > 0.6 else "#57d38c"))
@@ -5973,6 +5983,10 @@ alongside the application.</p>
                         + (" -- run longer for a firm figure" if m.rate_ci > 3.0 else ""))
         if m.amplitude_spread == m.amplitude_spread:
             bits.append(f"amp scatter +/-{m.amplitude_spread/2:.0f} deg")
+        if m.amplitude == m.amplitude:
+            _em = escapement_metrics(m.amplitude, m.lift_angle)
+            if _em.rating in ("fair", "poor"):
+                bits.append(f"impulse fraction {_em.impulse_fraction:.0f}% ({_em.rating})")
         if abs(m.parity_correction) > 0.15:
             bits.append(f"tick/tock anchor {m.parity_correction:+.2f} ms corrected")
         if m.extra_peaks > 0.2:
@@ -6160,6 +6174,13 @@ alongside the application.</p>
             iso_model="quadratic" if self.chk_iso_nl.isChecked() else "linear")
         lines.extend(st.verdict)
 
+        if stopped_early:
+            fc = reserve_forecast(self._reserve)
+            if fc.ready:
+                lines.append(f"Projection from the decay so far: amplitude reaches "
+                             f"{fc.stop_deg:.0f} deg at about {fc.full_hours:.1f} h "
+                             f"({fc.low:.0f}-{fc.high:.0f}), by a {fc.method} fit.")
+
         saved_to = self._save_reserve_to_watch(st, stopped_early)
         if saved_to:
             lines.append(f"Filed to {saved_to}'s history.")
@@ -6213,8 +6234,19 @@ alongside the application.</p>
         drop = ""
         if ok.sum() >= 2:
             drop = f", amplitude {amp[ok][0]:.0f} -> {amp[ok][-1]:.0f} deg"
+
+        proj = ""
+        fc = reserve_forecast(self._reserve)
+        if fc.ready:
+            self.c_res_proj.setData(fc.curve_h, fc.curve_deg)
+            self._reserve_fc = fc
+            proj = (f"  |  projected full reserve ~{fc.full_hours:.1f} h "
+                    f"({fc.low:.0f}-{fc.high:.0f})")
+        else:
+            self.c_res_proj.setData([], [])
+            self._reserve_fc = None
         self.lbl_res.setText(
-            f"{len(self._reserve)} samples over {hrs[-1]:.2f} h{drop}")
+            f"{len(self._reserve)} samples over {hrs[-1]:.2f} h{drop}{proj}")
         self._update_iso()
 
     def _update_iso(self):
@@ -6828,6 +6860,16 @@ alongside the application.</p>
                         f"<span style='color:#8a94a4'>{t.verdict}</span></p>")
         for n in coll.health_notes(w):
             html.append(f"<p style='margin:6px 0;color:#ffb648'>{n}</p>")
+
+        hs = history_stability([(h.date, h.mean_rate) for h in w.history if h.date])
+        if hs.n >= 2:
+            html.append("<h4 style='margin:12px 0 4px;color:#4da3ff'>LONG-TERM STABILITY</h4>")
+            html.append(f"<p style='margin:4px 0;color:#c8d0dc'>{hs.verdict}</p>")
+            if hs.dev:
+                cells = "  ".join(f"{t}&nbsp;run{'s' if t != 1 else ''}: {d:.1f}"
+                                  for t, d in zip(hs.taus, hs.dev))
+                html.append(f"<p style='margin:3px 0;color:#8a94a4'>"
+                            f"deviation vs runs averaged &mdash; {cells} &nbsp;(s/day)</p>")
         html.append("</div>")
         self.txt_wdetail.setHtml("".join(html))
 
