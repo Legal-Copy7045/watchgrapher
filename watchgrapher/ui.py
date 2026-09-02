@@ -1800,6 +1800,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.collection = coll.Collection(COLLECTION_DIR)
         self._watch_ids = []
+        self._undo_stack = []          # file snapshots before each collection save
+        self._install_collection_undo()
 
         self._build()
         self._refresh_watches()
@@ -1880,6 +1882,17 @@ class MainWindow(QtWidgets.QMainWindow):
         quit_act = QtGui.QAction("Exit", self)
         quit_act.triggered.connect(self.close)
         fm.addAction(quit_act)
+
+        em = mb.addMenu("&Edit")
+        self.act_undo = QtGui.QAction("Undo collection change", self)
+        self.act_undo.setShortcut("Ctrl+Z")
+        self.act_undo.setEnabled(False)
+        self.act_undo.setToolTip(
+            "Step back through changes to your watch collection -- an added or edited "
+            "watch, a deleted service or run, a filed report. Does not affect the "
+            "current measurement.")
+        self.act_undo.triggered.connect(self._undo_collection)
+        em.addAction(self.act_undo)
 
         vm = mb.addMenu("&View")
         for label, idx, key in (("Measure", 0, "Ctrl+1"),
@@ -1989,6 +2002,43 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.status.showMessage(f"Saved microphone response for '{key}'.", 5000)
             except OSError as e:
                 QtWidgets.QMessageBox.warning(self, "Microphone response", str(e))
+
+    def _install_collection_undo(self):
+        real_save = self.collection.save
+
+        def save_with_undo():
+            try:
+                if os.path.exists(self.collection.path):
+                    with open(self.collection.path, "rb") as fh:
+                        self._undo_stack.append(fh.read())
+                    del self._undo_stack[:-25]
+                if hasattr(self, "act_undo"):
+                    self._refresh_undo_action()
+            except OSError:
+                pass
+            real_save()
+
+        self.collection.save = save_with_undo
+
+    def _refresh_undo_action(self):
+        n = len(self._undo_stack)
+        self.act_undo.setEnabled(n > 0)
+        self.act_undo.setText(f"Undo collection change ({n})" if n else "Undo collection change")
+
+    def _undo_collection(self):
+        if not self._undo_stack:
+            return
+        snap = self._undo_stack.pop()
+        try:
+            with open(self.collection.path, "wb") as fh:
+                fh.write(snap)
+        except OSError as e:
+            QtWidgets.QMessageBox.warning(self, "Undo", str(e))
+            return
+        self.collection.load()
+        self._refresh_watches()
+        self._refresh_undo_action()
+        self.status.showMessage("Reverted the last collection change", 5000)
 
     def _apply_preset(self, name):
         presets = {
