@@ -45,6 +45,38 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
 """
 
 
+def html_to_pdf(html, pdf_path, title=""):
+    """
+    Render an HTML report to PDF with Qt's own engine -- no extra dependency.
+    `html` may be a path to an .html file or an HTML string. QTextDocument
+    supports a CSS 2.1 subset, so flex/grid card rows fall back to stacked
+    blocks; tables, colours and the SVG images survive. Returns pdf_path.
+    """
+    from PySide6 import QtGui, QtCore
+    if os.path.exists(str(html)):
+        with open(html, encoding="utf-8") as fh:
+            html_str = fh.read()
+        base = QtCore.QUrl.fromLocalFile(os.path.abspath(html) + "/")
+    else:
+        html_str, base = str(html), QtCore.QUrl()
+
+    doc = QtGui.QTextDocument()
+    doc.setMetaInformation(QtGui.QTextDocument.DocumentTitle, title or "Report")
+    if not base.isEmpty():
+        doc.setBaseUrl(base)
+    doc.setHtml(html_str)
+
+    writer = QtGui.QPdfWriter(str(pdf_path))
+    writer.setPageSize(QtGui.QPageSize(QtGui.QPageSize.A4))
+    writer.setPageMargins(QtCore.QMarginsF(14, 14, 14, 14),
+                          QtGui.QPageLayout.Millimeter)
+    writer.setResolution(150)
+    doc.setPageSize(QtCore.QSizeF(writer.pageLayout().paintRectPixels(
+        writer.resolution()).size()))
+    doc.print_(writer)
+    return str(pdf_path)
+
+
 def _fmt(v, dp=1, dash="--", signed=False):
     try:
         if v != v:

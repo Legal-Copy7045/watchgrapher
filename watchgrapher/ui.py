@@ -2087,9 +2087,111 @@ class MainWindow(QtWidgets.QMainWindow):
         xchk_act.triggered.connect(self._cross_check)
         tm.addAction(xchk_act)
         tm.addSeparator()
+        lib_act = QtGui.QAction("Report library...", self)
+        lib_act.triggered.connect(self._report_library)
+        tm.addAction(lib_act)
+        self.act_pdf_sidecar = QtGui.QAction("Also save a PDF with each report", self)
+        self.act_pdf_sidecar.setCheckable(True)
+        self.act_pdf_sidecar.setChecked(self._settings_get("report_pdf_sidecar", False))
+        self.act_pdf_sidecar.toggled.connect(
+            lambda v: self._settings_set("report_pdf_sidecar", bool(v)))
+        tm.addAction(self.act_pdf_sidecar)
+        tm.addSeparator()
         pp_act = QtGui.QAction("Phone Portal (server, QR code)...", self)
         pp_act.triggered.connect(lambda: self._goto_page(4))
         tm.addAction(pp_act)
+
+    def _show_report(self, out):
+        """Open a freshly built report. If the chosen name ends .pdf, convert
+        the HTML we wrote into a real PDF first; optionally drop a PDF sidecar."""
+        low = str(out).lower()
+        try:
+            if low.endswith(".pdf"):
+                with open(out, encoding="utf-8") as fh:
+                    html = fh.read()
+                reportmod.html_to_pdf(html, out)
+            elif (self._settings_get("report_pdf_sidecar", False)
+                  and low.endswith((".html", ".htm"))):
+                reportmod.html_to_pdf(out, os.path.splitext(out)[0] + ".pdf")
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self, "PDF", f"Could not make the PDF ({e}).")
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
+
+    def _report_library(self):
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Report library")
+        dlg.resize(620, 460)
+        v = QtWidgets.QVBoxLayout(dlg)
+        v.addWidget(QtWidgets.QLabel(
+            f"Everything written to <code>{REPORT_DIR}</code>."))
+        lst = QtWidgets.QListWidget()
+        v.addWidget(lst, 1)
+
+        def reload_():
+            lst.clear()
+            try:
+                files = sorted(os.listdir(REPORT_DIR),
+                               key=lambda f: os.path.getmtime(os.path.join(REPORT_DIR, f)),
+                               reverse=True)
+            except OSError:
+                files = []
+            for f in files:
+                if f.lower().endswith((".html", ".htm", ".pdf", ".csv", ".zip", ".wav")):
+                    p = os.path.join(REPORT_DIR, f)
+                    kb = os.path.getsize(p) / 1024.0
+                    it = QtWidgets.QListWidgetItem(
+                        f"{f}\n{datetime.fromtimestamp(os.path.getmtime(p)):%Y-%m-%d %H:%M}"
+                        f"  --  {kb:.0f} KB")
+                    it.setData(QtCore.Qt.UserRole, p)
+                    lst.addItem(it)
+        reload_()
+
+        def sel():
+            it = lst.currentItem()
+            return it.data(QtCore.Qt.UserRole) if it else None
+
+        row = QtWidgets.QHBoxLayout()
+
+        def _open():
+            p = sel()
+            if p:
+                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(p))
+
+        def _pdf():
+            p = sel()
+            if not p or not p.lower().endswith((".html", ".htm")):
+                return
+            outp = os.path.splitext(p)[0] + ".pdf"
+            try:
+                reportmod.html_to_pdf(p, outp)
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(dlg, "PDF", str(e))
+                return
+            reload_()
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(outp))
+
+        def _del():
+            p = sel()
+            if p and QtWidgets.QMessageBox.question(
+                    dlg, "Delete", f"Delete {os.path.basename(p)}?") == \
+                    QtWidgets.QMessageBox.Yes:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+                reload_()
+
+        for label, fn in (("Open", _open), ("Save as PDF", _pdf),
+                          ("Delete", _del),
+                          ("Open folder", lambda: QtGui.QDesktopServices.openUrl(
+                              QtCore.QUrl.fromLocalFile(REPORT_DIR)))):
+            b = QtWidgets.QPushButton(label)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        v.addLayout(row)
+        lst.itemDoubleClicked.connect(lambda *_: _open())
+        dlg.exec()
 
     def _ensure_net_server(self, pinned=True):
         """Bring the phone pickup server up if it is not already. Returns it."""
@@ -6495,7 +6597,7 @@ alongside the application.</p>
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Save report",
             os.path.join(REPORT_DIR, f"{stem}_{datetime.now():%Y%m%d_%H%M}.html"),
-            "HTML (*.html)")
+            "HTML (*.html);;PDF (*.pdf)")
         if not path:
             return
         readings = list(self.readings)
@@ -6518,7 +6620,7 @@ alongside the application.</p>
                     "sub_threshold": self.spn_thr.value()},
             reserve_log=self._reserve, watch_label=label,
             grade={"standard": gkey, "passed": gpassed, "rows": grows} if grows else None)
-        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
+        self._show_report(out)
         self.status.showMessage(
             f"Wrote {out} -- print to PDF from the browser if you need one", 9000)
 
@@ -7306,14 +7408,14 @@ alongside the application.</p>
         stem = "".join(ch if ch.isalnum() else "_" for ch in w.label)[:40]
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Save before/after report",
-            os.path.join(REPORT_DIR, f"beforeafter_{stem}_{s.when}.html"), "HTML (*.html)")
+            os.path.join(REPORT_DIR, f"beforeafter_{stem}_{s.when}.html"), "HTML (*.html);;PDF (*.pdf)")
         if not path:
             return
         from .calibers import CALIBERS
         out = reportmod.build_before_after(
             path, watch=w, service=s, before=before, after=after,
             caliber=CALIBERS.get(w.caliber_key))
-        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
+        self._show_report(out)
         self.status.showMessage(f"Wrote {out}", 8000)
 
     def _service_checklist(self):
@@ -7429,11 +7531,11 @@ alongside the application.</p>
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Portfolio report",
             os.path.join(REPORT_DIR, f"portfolio_{datetime.now():%Y%m%d}.html"),
-            "HTML (*.html)")
+            "HTML (*.html);;PDF (*.pdf)")
         if not path:
             return
         out = reportmod.build_portfolio(path, self.collection)
-        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
+        self._show_report(out)
         self.status.showMessage(f"Wrote {out}", 8000)
 
     def _year_review(self):
@@ -7446,12 +7548,12 @@ alongside the application.</p>
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Year in review",
-            os.path.join(REPORT_DIR, f"review_{yr}.html"), "HTML (*.html)")
+            os.path.join(REPORT_DIR, f"review_{yr}.html"), "HTML (*.html);;PDF (*.pdf)")
         if not path:
             return
         out = reportmod.build_year_review(path, self.collection, yr,
                                           owner=getattr(self.collection, "owner", ""))
-        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
+        self._show_report(out)
         self.status.showMessage(f"Wrote {out}", 8000)
 
     def _save_test_to_watch(self):
@@ -7504,7 +7606,7 @@ alongside the application.</p>
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Save watch report",
             os.path.join(REPORT_DIR, f"{stem}_{datetime.now():%Y%m%d}.html"),
-            "HTML (*.html)")
+            "HTML (*.html);;PDF (*.pdf)")
         if not path:
             return
         out = reportmod.build_watch_report(
@@ -7512,7 +7614,7 @@ alongside the application.</p>
             trends=coll.summarise(w), notes=coll.health_notes(w),
             photo_path=self.collection.photo_path(w),
             doc_dir=self.collection.docs)
-        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
+        self._show_report(out)
         self.status.showMessage(
             f"Wrote {out} -- use the browser's Print to make a PDF", 9000)
 
@@ -7997,7 +8099,7 @@ alongside the application.</p>
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Save certificate",
             os.path.join(REPORT_DIR, f"cert_{stem}_{datetime.now():%Y%m%d}.html"),
-            "HTML (*.html)")
+            "HTML (*.html);;PDF (*.pdf)")
         if not path:
             return
         out = reportmod.build_certificate(
@@ -8005,7 +8107,7 @@ alongside the application.</p>
             grade={"standard": gkey, "passed": gpassed, "rows": grows},
             watch_label=label, serial=(w.serial if w else ""),
             technician=tech, owner=getattr(self.collection, "owner", ""))
-        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(out))
+        self._show_report(out)
         self.status.showMessage(f"Wrote {out} -- print to PDF from the browser", 9000)
 
     def _current_grade(self, readings):
