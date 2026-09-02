@@ -3118,6 +3118,9 @@ alongside the application.</p>
                 QtWidgets.QMessageBox.critical(self, "Audio error", str(e))
                 self.recorder = None
                 return
+            note = getattr(self.recorder, "opened_note", "")
+            if note:
+                self.status.showMessage(note, 12000)
             self._pending_buffer = 0
             self.worker.recorder = self.recorder
             self._rate_hist = []
@@ -3431,7 +3434,7 @@ alongside the application.</p>
         if dev == "SIM" or self.recorder is None:
             return
         sr = self.recorder.samplerate
-        buf = self.recorder.n / sr
+        buf = getattr(self.recorder, "buffer_seconds", self.recorder.n / sr)
         old = self.recorder
         was_recording = getattr(old, "is_recording", False)
         self.worker.recorder = None
