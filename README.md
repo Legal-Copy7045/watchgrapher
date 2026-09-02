@@ -217,6 +217,12 @@ readouts and trace.
    amount to move, and the regulator-specific instruction for the caliber --
    and grades the run against a standard (COSC-style, METAS-style,
    manufacture-typical or serviceable/vintage).
+7. For a hands-on adjustment, **Guided regulation...** walks it step by step:
+   capture a baseline, fix beat error first with the instruction for that
+   caliber's hardware, then close on the rate one measured move at a time --
+   it learns how far your first regulator move shifted the rate and sizes the
+   next one from that, rather than making you guess. Each step ends by asking
+   for a fresh reading, so the loop is measured, not estimated.
 
 ### Reading the trace
 
