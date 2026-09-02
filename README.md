@@ -543,6 +543,13 @@ and Hangzhou 6300, with a note on what is actually shared (escapement geometry,
 train parts, mainsprings) and what is not. Covers the 2824, 2892, 7750, Unitas
 6497, Seiko NH35 and 7S26, and Miyota 9015 families.
 
+**What's normal?** A button by the caliber picker opens the reference for that
+movement: beat rate and lift angle, the amplitude band to expect after a
+service and how much vertical drop is normal, beat-error and positional-delta
+targets, the service interval, the regulating hardware, and that caliber's
+known weak points -- the reversing wheels on a 2824, the fragile centre-seconds
+spring on a 2892, the chrono amplitude drop on a 7750.
+
 **Documents.** A per-watch vault in My Watches for warranty cards, receipts,
 box-and-papers photos, manuals, valuations and provenance -- tagged by kind
 with a note and date. Files are copied into the collection's `docs/` folder so
