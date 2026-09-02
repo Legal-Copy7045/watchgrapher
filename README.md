@@ -686,6 +686,18 @@ shallow minimum. The quadratic fit reports the amplitude of least rate
 sensitivity, which is the best place to sit the balance when you regulate so
 the rate drifts least as the mainspring runs down.
 
+**Post-wind kick.** The panel measures how fast amplitude falls in the first
+hour of a reserve run. A drop far steeper than the run's average -- then
+levelling off -- is the mainspring slipping at the barrel wall or hard braking
+grease. Normal on an automatic (that slip is the whole design); a fault on a
+hand-wind.
+
+**Rebanking (knocking).** The amplitude readout warns from 330 degrees and
+flags REBANKING at 355: the balance is swinging far enough that the impulse
+pin strikes the fork outside the horns and slams the banking. Almost always
+too strong a mainspring after a service. Sustained knocking damages the
+impulse pin, so stop the watch until it is sorted.
+
 **Per-pickup profiles.** *Save profile* stores the filter band, envelope
 window and sub-noise threshold against the selected input device; picking that
 device again loads them. A piezo disc and an open-air microphone want very
