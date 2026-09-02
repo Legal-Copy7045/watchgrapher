@@ -224,6 +224,10 @@ readouts and trace.
    next one from that, rather than making you guess. Each step ends by asking
    for a fresh reading, so the loop is measured, not estimated.
 
+Hover any of the four readouts, the trace or the beat panel for a plain-language
+explanation of what the number means, how it is measured and the thresholds it
+is judged against.
+
 ### Reading the trace
 
 Two dot lines, one for the tick and one for the tock.
