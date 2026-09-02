@@ -90,45 +90,59 @@ this -- `cryptography` for HTTPS, `aiortc` for the WebRTC transport. Without
 without `aiortc` the WebRTC option on the page is greyed out.
 
 The server runs on a **fixed port** (8477 by default, saved in `settings.json`),
-so the URL stays the same between recordings -- bookmark it on the phone. It
-only moves to the next free port if something else is already using that one.
+so the URL stays the same every time -- bookmark it on the phone. It only moves
+to the next free port if something else is already using that one.
 
-1. On the computer running WatchGrapher, open the **audio input** dropdown and
-   choose **"Phone / browser pickup (over Wi-Fi)"**, then press **Start** on
-   the computer once. A dialog shows a URL like `https://192.168.1.42:8477`.
-   The computer and the phone must be on the **same Wi-Fi network** (a guest
-   network that isolates clients will not work).
-2. On the phone, open that URL in any browser (Safari, Chrome, whatever) and
-   bookmark it. Mind the `https`. There is no QR code.
-3. The phone warns the certificate is not trusted. This is expected for a
+**Starting the server.** Three ways, pick whichever suits:
+
+- **Tools -> Phone pickup server** -- a toggle that runs the server on its own,
+  independent of the input device. This is the easiest: flip it on, open the
+  URL on the phone, and tap **Start test** -- the page switches the desktop to
+  the phone input for you.
+- **Tools -> Start phone pickup server at launch** -- remembers the above so it
+  is always running when WatchGrapher opens.
+- Or just choose **"Phone / browser pickup (over Wi-Fi)"** as the input device
+  and press **Start** on the computer, as before.
+
+However it started, a dialog shows a URL like `https://192.168.1.42:8477`. The
+computer and the phone must be on the **same Wi-Fi network** (a guest network
+that isolates clients will not work). A server started from the Tools menu or
+at launch stays up until you turn it off; one started by selecting the input
+device stops when you switch to a different device.
+
+Then, on the phone:
+
+1. Open that URL in any browser (Safari, Chrome, whatever) and bookmark it.
+   Mind the `https`. There is no QR code.
+2. The phone warns the certificate is not trusted. This is expected for a
    local self-signed cert -- tap **Advanced** / **Show details** and
    **proceed** / **visit this website**.
-4. The page shows the desktop's status, a **watch dropdown** filled from your
+3. The page shows the desktop's status, a **watch dropdown** filled from your
    collection, and four live readout tiles. Under **Audio settings** are the
    PCM/WebRTC transport, the **Boost** slider and the phone-auto-level toggle.
-5. Pick the watch you are testing and the **duration** -- open-ended, or a
+4. Pick the watch you are testing and the **duration** -- open-ended, or a
    timed run of 20 s to 5 minutes. The phone sets it; the desktop's own
    duration is ignored for phone-started runs.
-6. Hold the phone with its **microphone port pressed against the watch case**
+5. Hold the phone with its **microphone port pressed against the watch case**
    -- the bottom edge on most phones. Contact matters as much as it does for a
    piezo.
-7. Tap **Start test**. Allow microphone access when asked. The phone starts
+6. Tap **Start test**. Allow microphone access when asked. The phone starts
    streaming and tells the desktop to begin listening on the chosen watch; the
    tiles fill in within a second or two. A timed run shows a `1:12 / 2:00`
    progress line and ends itself; the *Run finished* panel then appears.
-8. Set **Boost** so the meter sits high but the red **CLIP** line stays quiet.
+7. Set **Boost** so the meter sits high but the red **CLIP** line stays quiet.
    The desktop applies its own auto-gain on top (subject to *View ->
    Auto-gain*). Leave **"Let the phone auto-level"** off unless the signal is
    hopeless -- it pumps and distorts amplitude.
-9. Tap **Stop** when the numbers are steady. Because the run was started from
+8. Tap **Stop** when the numbers are steady. Because the run was started from
    the phone, the "what now" choice appears **on the phone**, not the desktop:
    a *Run finished* panel with the summary and **Save to watch** / **Discard**.
    Save files the reading into the chosen watch's history; Discard keeps
    nothing. (Mid-run, the **Save run to watch** button files a reading without
    stopping.)
-10. The server and the phone's connection stay up between runs, so the next
-    test is just Start test again. Everything shuts down when you change the
-    input device or close WatchGrapher.
+9. The server and the phone's connection stay up between runs, so the next
+   test is just Start test again. A device-selected server stops when you
+   switch input devices; a Tools-menu one stays until you turn it off.
 
 The page holds the screen awake while a test is running -- a screen Wake Lock
 where the browser supports it, plus a hidden looping video as a fallback, which

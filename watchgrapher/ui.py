@@ -1755,6 +1755,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.recorder = None
         self._net_recorder = None       # persistent phone-pickup server for the session
         self._net_fresh = False
+        self._net_server_pinned = False  # kept alive across device changes (Tools menu / autostart)
+        self._net_kill_pending = False   # unpinned mid-run: stop the server once the run ends
         self._phone_last_save = ""
         self._phone_run = False         # the current run was started from the phone
         self._phone_starting = False
@@ -1818,6 +1820,12 @@ class MainWindow(QtWidgets.QMainWindow):
         i = self.cmb_cal.findData("eta_2824_2")
         if i >= 0:
             self.cmb_cal.setCurrentIndex(i)
+        if self._settings_get("phone_autostart", False):
+            try:
+                self._ensure_net_server(pinned=True)
+                self.status.showMessage(self._net_recorder.opened_note, 12000)
+            except Exception:
+                pass
 
     # ---------------------------------------------------------------- build
     def _build(self):
@@ -1975,6 +1983,93 @@ class MainWindow(QtWidgets.QMainWindow):
             "sample-clock calibration (rate).")
         xchk_act.triggered.connect(self._cross_check)
         tm.addAction(xchk_act)
+        tm.addSeparator()
+        self.act_phone_server = QtGui.QAction("Phone pickup server", self)
+        self.act_phone_server.setCheckable(True)
+        self.act_phone_server.setToolTip(
+            "Run the little web server the phone connects to. Once it is up, open "
+            "its URL on a phone to stream audio or drive a run remotely -- you do "
+            "not have to select the phone input first.")
+        self.act_phone_server.toggled.connect(self._toggle_phone_server)
+        tm.addAction(self.act_phone_server)
+        self.act_phone_autostart = QtGui.QAction("Start phone pickup server at launch", self)
+        self.act_phone_autostart.setCheckable(True)
+        self.act_phone_autostart.setChecked(bool(self._settings_get("phone_autostart", False)))
+        self.act_phone_autostart.toggled.connect(
+            lambda on: self._settings_set("phone_autostart", bool(on)))
+        tm.addAction(self.act_phone_autostart)
+
+    def _ensure_net_server(self, pinned=True):
+        """Bring the phone pickup server up if it is not already. Returns it."""
+        from . import netmic
+        nr = getattr(self, "_net_recorder", None)
+        if nr is None or not nr.running:
+            sr = int(self.cmb_sr.currentText())
+            nr = netmic.NetworkRecorder(
+                samplerate=sr, buffer_seconds=90.0,
+                port=self._settings_get("phone_port", 8477))
+            nr.start()
+            self._net_recorder = nr
+            got = getattr(nr, "port", 0)
+            if got and got != self._settings_get("phone_port", 8477):
+                self._settings_set("phone_port", got)
+            self._publish_phone_watches()
+        if pinned:
+            self._net_server_pinned = True
+        if hasattr(self, "act_phone_server"):
+            self.act_phone_server.blockSignals(True)
+            self.act_phone_server.setChecked(True)
+            self.act_phone_server.blockSignals(False)
+        return nr
+
+    def _toggle_phone_server(self, on):
+        if on:
+            nr = self._ensure_net_server(pinned=True)
+            body = getattr(nr, "opened_note", "") or f"Phone pickup server at {nr.url}"
+            QtWidgets.QMessageBox.information(
+                self, "Phone pickup server",
+                body + "\n\nOpen that URL on a phone on the same Wi-Fi. To use the "
+                "phone as the pickup, tap Start test on the page -- it switches the "
+                "desktop input for you.")
+        else:
+            self._net_server_pinned = False
+            nr = getattr(self, "_net_recorder", None)
+            if nr is not None and nr is self.recorder:
+                self._net_kill_pending = True
+                self.status.showMessage(
+                    "Phone pickup server will stop when the current run ends.", 6000)
+            elif nr is not None:
+                self._stop_net_server()
+
+    def _stop_net_server(self):
+        nr = getattr(self, "_net_recorder", None)
+        if nr is None:
+            return
+        try:
+            nr.stop()
+        except Exception:
+            pass
+        self._net_recorder = None
+        self._net_kill_pending = False
+        self._phone_run = False
+        self._phone_pending = None
+        if hasattr(self, "act_phone_server"):
+            self.act_phone_server.blockSignals(True)
+            self.act_phone_server.setChecked(False)
+            self.act_phone_server.blockSignals(False)
+
+    def _maybe_stop_net_server(self):
+        """Stop the phone server unless it is still wanted -- pinned, the NET
+        input is still selected, or a run is in progress on it."""
+        nr = getattr(self, "_net_recorder", None)
+        if nr is None or nr is self.recorder:
+            return
+        if getattr(self, "_net_kill_pending", False):
+            self._stop_net_server()
+            return
+        if self.cmb_dev.currentData() == "NET" or getattr(self, "_net_server_pinned", False):
+            return
+        self._stop_net_server()
 
     def _mic_response_cal(self):
         if not audio.HAVE_SD:
@@ -2144,7 +2239,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self._phone_last_save = ""
             self._phone_pending = None
             self._phone_pending_m = None
-            if self.cmb_dev.currentData() == "NET" and self.recorder is None:
+            if self.recorder is not None:
+                return
+            if self.cmb_dev.currentData() != "NET":
+                # The phone drove this, so make the phone the pickup.
+                j = self.cmb_dev.findData("NET")
+                if j >= 0:
+                    self.cmb_dev.setCurrentIndex(j)
+            if self.cmb_dev.currentData() == "NET":
                 dur = cmd.get("duration")
                 if isinstance(dur, (int, float)) and 0 <= dur <= 7200:
                     self.spn_runlen.blockSignals(True)
@@ -3835,16 +3937,10 @@ alongside the application.</p>
 
     def _device_changed(self):
         dev = self.cmb_dev.currentData()
-        # The phone server outlives individual runs but not a device change.
-        if dev != "NET" and getattr(self, "_net_recorder", None) is not None \
-                and self.recorder is not self._net_recorder:
-            try:
-                self._net_recorder.stop()
-            except Exception:
-                pass
-            self._net_recorder = None
-            self._phone_run = False
-            self._phone_pending = None
+        # The phone server outlives runs, and a device change, if it was pinned
+        # (Tools -> Phone pickup server / autostart). Otherwise it goes away when
+        # the phone input is no longer selected.
+        self._maybe_stop_net_server()
         is_sim = dev == "SIM"
         self.g_sim.setVisible(is_sim)
         if not self._tuning and not self._selftune_session:
@@ -4893,24 +4989,16 @@ alongside the application.</p>
                         beat_error_ms=self.sim_be.value(),
                         snr_db=self.sim_snr.value())
                 elif dev == "NET":
-                    from . import netmic
                     nr = getattr(self, "_net_recorder", None)
-                    if nr is not None and (not nr.running or nr.samplerate != sr):
+                    if nr is not None and nr.running and nr.samplerate != sr:
                         nr.stop()
-                        nr = None
-                    if nr is None:
-                        nr = netmic.NetworkRecorder(
-                            samplerate=sr, buffer_seconds=buf,
-                            port=self._settings_get("phone_port", 8477))
-                        nr.start()
-                        self._net_recorder = nr
-                        self._net_fresh = True
-                        self._publish_phone_watches()
-                    else:
+                        self._net_recorder = nr = None
+                    self._net_fresh = nr is None or not nr.running
+                    nr = self._ensure_net_server(pinned=self._net_server_pinned)
+                    if not self._net_fresh:
                         nr.clear()
                         nr.peak = 0.0
                         nr.gain = 1.0
-                        self._net_fresh = False
                     self._phone_last_save = ""
                     self.recorder = nr
                 else:
@@ -5018,6 +5106,8 @@ alongside the application.</p>
             self.status.showMessage("Idle")
             if not self._suppress_finish and not self._closing:
                 self._offer_after_listening()
+            if not self._closing:
+                self._maybe_stop_net_server()
 
     def _reading_summary(self, m):
         if m is None or not m.ok:
