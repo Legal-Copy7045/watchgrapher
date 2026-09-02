@@ -69,6 +69,11 @@ class Caliber:
     # periodic fault scan. None -> the fourth wheel is assumed to carry the
     # seconds hand (60 s) and the third wheel is estimated.
     train: Optional[dict] = None
+    # "What's normal" reference.
+    service_interval_years: int = 5
+    power_reserve_h: float = 0.0        # 0 = unknown
+    jewels: int = 0                     # 0 = unknown
+    known_issues: str = ""
     notes: str = ""
 
     @property
@@ -444,6 +449,42 @@ _LIST = [
 
 CALIBERS = {c.key: c for c in _LIST}
 
+# "What's normal" detail for the common calibers -- power reserve (h), jewels,
+# service interval (years), and the failure points worth knowing, ";"-separated.
+_NORMS = {
+    "eta_2824_2": (38, 25, 5,
+        "Reversing wheels get gummy -- clean, treat with epilame, do not oil the pawls; "
+        "date jumper spring launches easily; the etachron boot left too wide opens up "
+        "the positional delta"),
+    "eta_2836_2": (38, 25, 5, "As the 2824-2, plus a day-star that can bind if the "
+        "quickset is forced against the changeover"),
+    "eta_2892a2": (42, 21, 5, "Thin caliber with a narrow torque margin; the "
+        "centre-seconds friction spring is fragile; a set mainspring shows as low "
+        "amplitude that recovers after service"),
+    "eta_7750": (44, 25, 5, "Amplitude drops 20-40 deg with the chrono running -- "
+        "that is normal; the minute-counter jumper and the hammer cam faces need "
+        "the right grease, not oil; check the hammer heart-piece contact"),
+    "eta_6497_1": (46, 17, 6, "Long thin mainspring takes a set; big slow balance "
+        "means amplitude in the 260s is fine; check the sub-seconds pinion"),
+    "sw200_1": (38, 26, 5, "As the ETA 2824-2; some batches have had escape-wheel "
+        "and pallet quality complaints -- inspect the stones"),
+    "sw300_1": (56, 25, 5, "Sellita rates this as low as 200 deg amplitude at full "
+        "wind -- do not chase 300; 56 h reserve from a longer mainspring"),
+    "seiko_nh35": (41, 24, 6, "Magic-lever automatic -- do not oil the pawl levers; "
+        "Diashock settings on balance and escape; parts are cheap enough that a new "
+        "mainspring and pallet fork often beat fettling"),
+    "seiko_7s26": (41, 21, 6, "No hand-wind, no hacking; factory beat error of "
+        "0.5-1.0 ms is normal and not adjustable without moving the collet"),
+    "seiko_6r15": (50, 23, 6, "Longer reserve than the NH35 from a Spron mainspring; "
+        "otherwise the same automatic works and cautions"),
+}
+for _k, (_pr, _j, _si, _ki) in _NORMS.items():
+    if _k in CALIBERS:
+        CALIBERS[_k].power_reserve_h = _pr
+        CALIBERS[_k].jewels = _j
+        CALIBERS[_k].service_interval_years = _si
+        CALIBERS[_k].known_issues = _ki
+
 
 # --------------------------------------------------------------------------
 # Cross-reference: base movements and their clones / equivalents
@@ -502,6 +543,57 @@ for _f in CROSS_REF:
 def equivalents(key: str):
     """The cross-reference family for a caliber key, or None."""
     return _XREF_BY_KEY.get(key)
+
+
+def whats_normal(cal) -> str:
+    """A plain-language 'what to expect from a healthy one' summary."""
+    lo, hi = cal.amp_full_wind if cal.amp_full_wind else (250.0, 315.0)
+    lines = [f"# What's normal -- {cal.label}", ""]
+    freq = f"{cal.bph:,} bph ({cal.bph / 7200:.1f} Hz)" if cal.bph else "auto-detected"
+    lines.append(f"- **Beat rate**: {freq}")
+    _srcmap = {"documented": "from documentation", "measured": "bench-measured",
+               "community": "community value", "inherited": "inherited from the base",
+               "watchguy": "WatchGuy list"}
+    _src = _srcmap.get(getattr(cal, "lift_source", "community"), "")
+    lines.append(f"- **Lift angle**: {cal.lift_angle:g} deg ({_src})")
+    if cal.jewels:
+        lines.append(f"- **Jewels**: {cal.jewels}")
+    if cal.power_reserve_h:
+        lines.append(f"- **Power reserve**: about {cal.power_reserve_h:g} h")
+    lines.append(f"- **Amplitude, dial up, full wind**: {lo:.0f}-{hi:.0f} deg after a "
+                 f"service; a few degrees lower is acceptable with age")
+    lines.append("- **Amplitude, vertical positions**: 20-50 deg below the horizontal "
+                 "figure is normal; more than 60 points at the hairspring or poise")
+    lines.append("- **Beat error**: under 0.3 ms is the target; under 0.5 ms is fine")
+    lines.append("- **Positional delta**: under 15 s/day is good for a modern caliber, "
+                 "under 25 acceptable; vintage and budget movements run wider")
+    lines.append(f"- **Service interval**: roughly every {cal.service_interval_years} years, "
+                 f"or when amplitude or the positional delta has visibly drifted")
+    reg = {
+        "etachron": "Etachron: rate at the index, beat by rotating the stud carrier.",
+        "index": "Plain index arm for rate; beat error needs the hairspring collet.",
+        "index_stud": "Index arm for rate, moveable stud arm for beat.",
+        "freesprung": "Free-sprung: rate by the balance inertia weights, beat by the "
+                      "moveable stud carrier. No index.",
+        "swan_neck": "Index with a swan-neck fine adjuster for rate.",
+    }.get(cal.regulator, cal.regulator)
+    lines.append(f"- **Regulating hardware**: {reg}")
+    if cal.known_issues:
+        lines.append("")
+        lines.append("## Known weak points")
+        for part in cal.known_issues.split(";"):
+            part = part.strip()
+            if part:
+                lines.append(f"- {part}")
+    if cal.notes:
+        lines.append("")
+        lines.append(f"_{cal.notes}_")
+    fam = equivalents(cal.key)
+    if fam:
+        lines.append("")
+        lines.append(f"**Equivalents**: " + "; ".join(
+            lbl for k, lbl in fam["members"] if k != cal.key))
+    return "\n".join(lines)
 
 
 def _load_reference():
