@@ -235,6 +235,16 @@ Two dot lines, one for the tick and one for the tock.
 - **Wandering, non-straight lines** point at a real fault -- a bent pivot, a
   hairspring catching, dirt in the train.
 
+### Cross-checking against a hardware timegrapher
+
+**Tools -> Cross-check against a hardware timegrapher...** takes what a Witschi
+or Weishi machine reads for the same watch and compares it to the acoustic
+reading. Rate off by more than 2 s/day that repeats across watches is a
+systematic bias, almost always the sound-card sample clock -- it converts the
+gap to ppm and points you at the Sync tab's calibration. Amplitude off by more
+than ~12 degrees is a lift-angle disagreement. Each comparison can be logged to
+`crosschecks.json` to build a picture over time.
+
 ### Comparing two runs
 
 **View -> Pin current reading as trace reference** (Ctrl+P) freezes the current
