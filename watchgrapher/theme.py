@@ -13,7 +13,9 @@ import json
 import os
 
 _SETTINGS = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "settings.json")
+    os.path.abspath(os.environ.get("WATCHGRAPHER_HOME")
+                    or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "settings.json")
 
 DARK = {
     "BG": "#12151a", "BG2": "#171b22", "PANEL": "#1a1f27", "PANEL2": "#20262f",
