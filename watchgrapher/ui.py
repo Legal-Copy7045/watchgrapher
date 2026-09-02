@@ -18,7 +18,8 @@ from . import __version__
 from . import (audio, advisor, catalog as catdb, collection as coll,
                faults, references as refdb, report as reportmod, timesync)
 from .analysis import (AnalyzerConfig, analyze, autotune, trace_points,
-                       solve_lift_angle, tuning_score, reserve_analytics)
+                       solve_lift_angle, tuning_score, reserve_analytics,
+                       allan_deviation)
 from .calibers import (CALIBERS, GROUP_ORDER, STANDARD_BPH, grouped,
                        load_user_calibers, search)
 
@@ -3334,7 +3335,11 @@ alongside the application.</p>
         # ---- diagnostics ----
         dw = QtWidgets.QWidget()
         dl = QtWidgets.QVBoxLayout(dw)
+        self.diag_tabs = QtWidgets.QTabWidget()
+        dl.addWidget(self.diag_tabs)
 
+        sig_w = QtWidgets.QWidget()
+        sig_l = QtWidgets.QVBoxLayout(sig_w)
         live = QtWidgets.QHBoxLayout()
 
         self.p_amp_hist = pg.PlotWidget(title="Per-beat amplitude  --  spread, not just the median")
@@ -3367,24 +3372,50 @@ alongside the application.</p>
                                             movable=False)
         self.p_spec.addItem(self.reg_band)
         live.addWidget(self.p_spec)
+        sig_l.addLayout(live, 1)
+        self.diag_tabs.addTab(sig_w, "Live signal")
 
-        dl.addLayout(live, 3)
+        # -- stability sub-tab --
+        stab_w = QtWidgets.QWidget()
+        stab_l = QtWidgets.QVBoxLayout(stab_w)
+        self.p_allan = pg.PlotWidget(
+            title="Rate stability (Allan deviation) -- scatter left after averaging for tau")
+        self.p_allan.setLabel("bottom", "averaging time tau", units="s")
+        self.p_allan.setLabel("left", "rate deviation", units="s/d")
+        self.p_allan.showGrid(x=True, y=True, alpha=0.25)
+        self.p_allan.setLogMode(x=True, y=True)
+        self.c_allan = self.p_allan.plot(
+            pen=pg.mkPen("#4da3ff", width=2), symbol="o", symbolSize=6, symbolBrush="#4da3ff")
+        self.c_allan_ref = self.p_allan.plot(
+            pen=pg.mkPen("#5a6472", width=1, style=QtCore.Qt.DashLine))
+        stab_l.addWidget(self.p_allan, 3)
+        self.lbl_allan = QtWidgets.QLabel(
+            "Listen for a minute or more, or run a power-reserve log, and the rate's "
+            "stability curve builds here.")
+        self.lbl_allan.setWordWrap(True)
+        self.lbl_allan.setStyleSheet("color:#8a94a4;")
+        stab_l.addWidget(self.lbl_allan, 1)
+        self.diag_tabs.addTab(stab_w, "Stability")
 
+        # -- faults sub-tab --
+        flt_w = QtWidgets.QWidget()
+        flt_l = QtWidgets.QVBoxLayout(flt_w)
         self.p_fault = pg.PlotWidget(title="Timing residual spectrum -- peaks are repeating faults")
         self.p_fault.setLabel("bottom", "period", units="beats")
         self.p_fault.setLabel("left", "swing", units="ms")
         self.p_fault.showGrid(x=True, y=True, alpha=0.25)
         self.p_fault.setLogMode(x=True, y=False)
         self.c_fault = self.p_fault.plot(pen=pg.mkPen("#4da3ff", width=1.5))
-        dl.addWidget(self.p_fault, 2)
+        flt_l.addWidget(self.p_fault, 2)
         self.txt_fault = QtWidgets.QTextBrowser()
-        dl.addWidget(self.txt_fault, 2)
+        flt_l.addWidget(self.txt_fault, 2)
         b_fault = QtWidgets.QPushButton("Scan for periodic faults")
         b_fault.setStyleSheet(
             f"QPushButton{{background:{ACCENT};color:#08101c;font-weight:bold;"
             "padding:8px;border-radius:6px;}")
         b_fault.clicked.connect(self._scan_faults)
-        dl.addWidget(b_fault)
+        flt_l.addWidget(b_fault)
+        self.diag_tabs.addTab(flt_w, "Faults")
         tabs.addTab(dw, "Diagnostics")
 
         self.tabs = tabs
@@ -4016,6 +4047,48 @@ alongside the application.</p>
             lo = max(20.0, float(self.spn_lo.value()))
             hi = max(lo + 1.0, float(self.spn_hi.value()))
             self.reg_band.setRegion([np.log10(lo), np.log10(hi)])
+
+        if time.monotonic() - getattr(self, "_allan_last", 0.0) > 5.0:
+            self._allan_last = time.monotonic()
+            self._update_allan()
+
+    def _update_allan(self):
+        """Rate stability curve from whatever rate history is on hand."""
+        src = self._rate_hist if len(self._rate_hist) >= 32 else []
+        if not src:
+            self.c_allan.setData([], [])
+            self.c_allan_ref.setData([], [])
+            return
+        a = np.asarray(src, dtype=float)
+        tau, dev = allan_deviation(a[:, 0], a[:, 1])
+        if tau.size < 3:
+            self.c_allan.setData([], [])
+            self.c_allan_ref.setData([], [])
+            self.lbl_allan.setText(
+                "Not enough steady readings yet -- keep listening (about a minute "
+                "clean) and the curve will fill in.")
+            return
+        self.c_allan.setData(tau, dev)
+        # White-FM reference: tau**-0.5 anchored at the first point.
+        ref = dev[0] * np.sqrt(tau[0] / tau)
+        self.c_allan_ref.setData(tau, ref)
+
+        i_min = int(np.argmin(dev))
+        floor, floor_tau = float(dev[i_min]), float(tau[i_min])
+        tail_falling = dev[-1] < dev[max(0, len(dev) - 2)] * 0.85
+        if i_min >= len(dev) - 2 and tail_falling:
+            self.lbl_allan.setText(
+                f"Still white-noise limited at tau = {tau[-1]:.0f} s (down to "
+                f"+/-{dev[-1]:.2f} s/d). The reading is averaging down as expected -- "
+                f"a longer capture will tighten it further. Dashed line is the ideal "
+                f"tau**-0.5 slope.")
+        else:
+            self.lbl_allan.setText(
+                f"Rate stops averaging down past about tau = {floor_tau:.0f} s, where "
+                f"it floors at +/-{floor:.2f} s/d. That is the watch itself wandering, "
+                f"not measurement noise: expect the rate to move by roughly that much "
+                f"between captures however carefully it is regulated. Dashed line is the "
+                f"tau**-0.5 slope a noise-limited reading would follow.")
 
     def _draw_mic_scope(self):
         if self._wave_mode != "Mic" or self.recorder is None:

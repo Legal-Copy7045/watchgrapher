@@ -580,8 +580,9 @@ derive one from a watch whose real rate you know from a hardware timegrapher
 
 ## Beyond the four numbers
 
-**Diagnostics tab -- live plots.** Above the fault scanner, three plots update
-every analysis cycle:
+**Diagnostics tab.** Split into **Live signal**, **Stability** and **Faults**.
+
+*Live signal* -- three plots update every analysis cycle:
 
 - **Per-beat amplitude** -- a histogram of the individual amplitude estimates
   behind the single median. Wide or bimodal points at poor coupling, a
@@ -591,6 +592,14 @@ every analysis cycle:
 - **Audio spectrum** -- a log-binned spectrum of the raw signal with the
   current filter band shaded, so you can see where the escapement energy sits
   and whether rotor or case-resonance energy is leaking in.
+
+*Stability* -- the **Allan deviation** of the rate history: the rate scatter
+left after averaging for a time tau. A curve that keeps falling along the
+dashed tau**-0.5 line means the reading is only noise-limited and a longer
+capture tightens it. A curve that flattens or turns up means the rate itself
+is wandering -- the floor it settles at is roughly how much the rate will move
+between captures no matter how carefully it is regulated. Needs a minute or
+more of clean listening, or a power-reserve log.
 
 **Diagnostics tab -- periodic fault scan.** Rate, amplitude and beat error
 describe a movement's average behaviour. They say nothing about whether that
