@@ -22,6 +22,7 @@ receives audio -- it never plays anything back or runs code from the page.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -128,15 +129,20 @@ class NetworkRecorder:
         self._want_port = int(port)
         self._srv: Optional[ThreadingHTTPServer] = None
         self._srv_thread: Optional[threading.Thread] = None
+        self._closing = threading.Event()
         self.port = 0
         self.url = ""
-        self.connected = False
         self._last_rx = 0.0
         self._rtc_pcs = set()
         self._rtc_loop = None
+        self._rtc_thread: Optional[threading.Thread] = None
+        self._certfile = None
 
     # -- lifecycle --------------------------------------------------------------
     def start(self):
+        if self._srv is not None:
+            return                      # already serving -- reuse it
+        self._closing.clear()
         rec = self
 
         class _Server(ThreadingHTTPServer):
@@ -231,33 +237,71 @@ class NetworkRecorder:
         self._srv_thread.start()
 
     def stop(self):
-        if self._srv is not None:
+        self._closing.set()
+        srv = self._srv
+        self._srv = None
+        if srv is not None:
             try:
-                self._srv.shutdown()
-                self._srv.server_close()
+                srv.shutdown()
             except Exception:
                 pass
-            self._srv = None
-        cf = getattr(self, "_certfile", None)
-        if cf:
+            try:
+                srv.server_close()
+            except Exception:
+                pass
+        t = self._srv_thread
+        if t is not None and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=2.0)
+        self._srv_thread = None
+
+        loop = self._rtc_loop
+        if loop is not None and not loop.is_closed():
+            async def _closeall():
+                for pc in list(self._rtc_pcs):
+                    try:
+                        await pc.close()
+                    except Exception:
+                        pass
+                self._rtc_pcs.clear()
+            try:
+                asyncio.run_coroutine_threadsafe(_closeall(), loop).result(timeout=3.0)
+            except Exception:
+                pass
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except Exception:
+                pass
+            rt = self._rtc_thread
+            if rt is not None and rt.is_alive():
+                rt.join(timeout=2.0)
+            try:
+                loop.close()
+            except Exception:
+                pass
+        self._rtc_loop = None
+        self._rtc_thread = None
+        self._rtc_pcs = set()
+
+        if self._certfile:
             try:
                 import os
-                os.remove(cf)
+                os.remove(self._certfile)
             except OSError:
                 pass
             self._certfile = None
-        loop = self._rtc_loop
-        if loop is not None:
-            for pc in list(self._rtc_pcs):
-                try:
-                    loop.call_soon_threadsafe(lambda p=pc: loop.create_task(p.close()))
-                except Exception:
-                    pass
+        self._last_rx = 0.0
+        self.port = 0
+        self.url = ""
 
     # -- Recorder surface -----------------------------------------------------
     @property
     def running(self):
-        return self._srv is not None
+        return self._srv is not None and not self._closing.is_set()
+
+    @property
+    def connected(self):
+        """True while audio has arrived in the last few seconds."""
+        return (time.time() - self._last_rx) < 3.0
 
     @property
     def is_recording(self):
@@ -296,7 +340,6 @@ class NetworkRecorder:
         data = _resample(np.asarray(pcm, dtype=np.float32), src_sr, self.samplerate)
         if data.size == 0:
             return
-        self.connected = True
         self._last_rx = time.time()
         raw_p = float(np.max(np.abs(data)))
         if raw_p >= 0.999:
@@ -351,10 +394,14 @@ class NetworkRecorder:
         handler.send_header("Sec-WebSocket-Accept", accept)
         handler.end_headers()
         conn = handler.connection
+        try:
+            conn.settimeout(1.0)
+        except OSError:
+            pass
         src_sr = float(self.samplerate)
         try:
-            while self._srv is not None:
-                frame = _ws_read_frame(conn)
+            while not self._closing.is_set():
+                frame = _ws_read_frame(conn, self._closing)
                 if frame is None:
                     break
                 opcode, payload = frame
@@ -376,8 +423,6 @@ class NetworkRecorder:
                     self.feed(pcm, src_sr)
         except OSError:
             pass
-        finally:
-            self.connected = False
 
     # -- WebRTC (optional) ----------------------------------------------------
     def _rtc_answer(self, offer: dict) -> dict:
@@ -389,7 +434,9 @@ class NetworkRecorder:
 
         if self._rtc_loop is None:
             self._rtc_loop = asyncio.new_event_loop()
-            threading.Thread(target=self._rtc_loop.run_forever, daemon=True).start()
+            self._rtc_thread = threading.Thread(
+                target=self._rtc_loop.run_forever, daemon=True)
+            self._rtc_thread.start()
         loop = self._rtc_loop
 
         async def negotiate():
@@ -438,18 +485,25 @@ class NetworkRecorder:
 # minimal WebSocket frame codec
 # --------------------------------------------------------------------------
 
-def _recv_exact(conn, n):
+def _recv_exact(conn, n, stop=None):
     out = b""
     while len(out) < n:
-        chunk = conn.recv(n - len(out))
+        try:
+            chunk = conn.recv(n - len(out))
+        except socket.timeout:
+            if stop is not None and stop.is_set():
+                return None
+            continue
+        except OSError:
+            return None
         if not chunk:
             return None
         out += chunk
     return out
 
 
-def _ws_read_frame(conn):
-    hdr = _recv_exact(conn, 2)
+def _ws_read_frame(conn, stop=None):
+    hdr = _recv_exact(conn, 2, stop)
     if hdr is None:
         return None
     b0, b1 = hdr[0], hdr[1]
@@ -457,19 +511,19 @@ def _ws_read_frame(conn):
     masked = b1 & 0x80
     length = b1 & 0x7F
     if length == 126:
-        ext = _recv_exact(conn, 2)
+        ext = _recv_exact(conn, 2, stop)
         if ext is None:
             return None
         length = struct.unpack(">H", ext)[0]
     elif length == 127:
-        ext = _recv_exact(conn, 8)
+        ext = _recv_exact(conn, 8, stop)
         if ext is None:
             return None
         length = struct.unpack(">Q", ext)[0]
-    mask = _recv_exact(conn, 4) if masked else b"\x00\x00\x00\x00"
+    mask = _recv_exact(conn, 4, stop) if masked else b"\x00\x00\x00\x00"
     if mask is None:
         return None
-    payload = _recv_exact(conn, length) if length else b""
+    payload = _recv_exact(conn, length, stop) if length else b""
     if payload is None:
         return None
     if masked and payload:
@@ -535,10 +589,11 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
 Keep this screen on. Press the phone's mic port against the case back.<br>
 Turn Boost up until the meter sits high but the red CLIP line stays quiet.</p>
 <script>
-let ac, node, src, gainNode, dest, stream, ws, pc, running=false, clips=0;
+let ac, node, src, gainNode, dest, stream, ws, pc, wake, running=false, clips=0, retry=0;
 const status=document.getElementById('status'), bar=document.getElementById('bar'),
       clip=document.getElementById('clip'), gainEl=document.getElementById('gain'),
-      gval=document.getElementById('gval');
+      gval=document.getElementById('gval'),
+      goBtn=document.getElementById('go'), stopBtn=document.getElementById('stop');
 fetch('/rtc-available').then(r=>r.json()).then(j=>{
   if(!j.aiortc){const o=document.getElementById('rtcopt');o.disabled=true;
     o.parentNode.style.opacity=.4;
@@ -547,8 +602,20 @@ fetch('/rtc-available').then(r=>r.json()).then(j=>{
 gainEl.oninput=()=>{ gval.innerHTML=gainEl.value+'&times;';
   if(gainNode) gainNode.gain.value=parseFloat(gainEl.value); };
 function mode(){return document.querySelector('input[name=mode]:checked').value;}
+function meter(pk){
+  bar.style.width=Math.min(100,pk*120)+'%';
+  if(pk>=0.99){ clips++; clip.textContent='CLIP -- turn Boost down'; }
+  else if(clips>0 && pk<0.6){ clips=Math.max(0,clips-1); if(clips===0) clip.textContent=''; }
+}
+async function keepAwake(){
+  try{ if('wakeLock' in navigator) wake=await navigator.wakeLock.request('screen'); }catch(e){}
+}
+document.addEventListener('visibilitychange',()=>{
+  if(running && document.visibilityState==='visible') keepAwake();
+});
 
 async function start(){
+  stopStreams();                 // clear any half-torn-down state first
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
     status.innerHTML='This browser will not give microphone access unless the '+
       'page is loaded over <b>https</b> (or localhost). '+
@@ -563,29 +630,18 @@ async function start(){
     stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,
       noiseSuppression:false,autoGainControl:agc}});
   }catch(e){status.textContent='mic denied: '+e+' -- check the browser did not block it.';return;}
-  running=true; clips=0;
-  document.getElementById('go').disabled=true;
-  document.getElementById('stop').disabled=false;
+  running=true; clips=0; retry=0;
+  goBtn.disabled=true; stopBtn.disabled=false;
+  keepAwake();
   ac=new (window.AudioContext||window.webkitAudioContext)();
   try{ await ac.resume(); }catch(e){}
   src=ac.createMediaStreamSource(stream);
   gainNode=ac.createGain(); gainNode.gain.value=parseFloat(gainEl.value);
   src.connect(gainNode);
-  if(mode()==='rtc'){ await startRtc(); } else { await startPcm(); }
+  if(mode()==='rtc'){ await startRtc(); } else { startPcm(); }
 }
 
-function meter(pk){
-  bar.style.width=Math.min(100,pk*120)+'%';
-  if(pk>=0.99){ clips++; clip.textContent='CLIP -- turn Boost down'; }
-  else if(clips>0 && pk<0.6){ clips=Math.max(0,clips-1); if(clips===0) clip.textContent=''; }
-}
-
-async function startPcm(){
-  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
-  ws.binaryType='arraybuffer';
-  ws.onopen=()=>{ ws.send(JSON.stringify({sr:ac.sampleRate}));
-    status.textContent='streaming (PCM) @ '+Math.round(ac.sampleRate)+' Hz'; };
-  ws.onclose=()=>{ if(running) stop(); };
+function startPcm(){
   node=ac.createScriptProcessor(2048,1,1);
   node.onaudioprocess=e=>{
     const f=e.inputBuffer.getChannelData(0);
@@ -593,9 +649,25 @@ async function startPcm(){
     for(let i=0;i<f.length;i++){ const s=Math.max(-1,Math.min(1,f[i]));
       buf[i]=s<0?s*32768:s*32767; if(Math.abs(s)>pk)pk=Math.abs(s); }
     meter(pk);
-    if(ws.readyState===1) ws.send(buf.buffer);
+    if(ws && ws.readyState===1) ws.send(buf.buffer);
   };
   gainNode.connect(node); node.connect(ac.destination);
+  connectWs();
+}
+function connectWs(){
+  if(!running) return;
+  try{ ws && ws.close(); }catch(e){}
+  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
+  ws.binaryType='arraybuffer';
+  ws.onopen=()=>{ retry=0; ws.send(JSON.stringify({sr:ac.sampleRate}));
+    status.textContent='streaming (PCM) @ '+Math.round(ac.sampleRate)+' Hz'; };
+  ws.onclose=ws.onerror=()=>{
+    if(!running) return;
+    retry++;
+    if(retry>20){ status.textContent='lost the connection to WatchGrapher -- tap Start again'; stop(); return; }
+    status.textContent='reconnecting to WatchGrapher... ('+retry+')';
+    setTimeout(connectWs, Math.min(1000*retry, 5000));
+  };
 }
 
 async function startRtc(){
@@ -603,12 +675,20 @@ async function startRtc(){
   gainNode.connect(dest);
   pc=new RTCPeerConnection();
   dest.stream.getAudioTracks().forEach(t=>pc.addTrack(t,dest.stream));
+  pc.onconnectionstatechange=()=>{
+    if(!running) return;
+    if(pc.connectionState==='failed'||pc.connectionState==='disconnected'){
+      status.textContent='WebRTC connection lost -- tap Start again'; stop();
+    }
+  };
   const offer=await pc.createOffer({offerToReceiveAudio:false});
   await pc.setLocalDescription(offer);
   await new Promise(res=>{ if(pc.iceGatheringState==='complete')res();
     else pc.onicegatheringstatechange=()=>{ if(pc.iceGatheringState==='complete')res(); }; });
-  const r=await fetch('/rtc-offer',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(pc.localDescription)});
+  let r;
+  try{ r=await fetch('/rtc-offer',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(pc.localDescription)}); }
+  catch(e){ status.textContent='WebRTC could not reach WatchGrapher'; stop(); return; }
   if(!r.ok){ status.textContent='WebRTC failed: '+await r.text(); stop(); return; }
   await pc.setRemoteDescription(await r.json());
   status.textContent='streaming (WebRTC)';
@@ -619,18 +699,24 @@ async function startRtc(){
     meter(pk); requestAnimationFrame(tick); })();
 }
 
+function stopStreams(){
+  try{node&&node.disconnect();node=null;}catch(e){}
+  try{gainNode&&gainNode.disconnect();gainNode=null;}catch(e){}
+  try{src&&src.disconnect();src=null;}catch(e){}
+  try{ws&&(ws.onclose=ws.onerror=null,ws.close());ws=null;}catch(e){}
+  try{pc&&(pc.onconnectionstatechange=null,pc.close());pc=null;}catch(e){}
+  try{stream&&stream.getTracks().forEach(t=>t.stop());stream=null;}catch(e){}
+  try{ac&&ac.close();ac=null;}catch(e){}
+}
 function stop(){
   running=false;
-  document.getElementById('go').disabled=false;
-  document.getElementById('stop').disabled=true;
-  status.textContent='stopped'; bar.style.width=0; clip.textContent='';
-  try{node&&node.disconnect();}catch(e){}
-  try{gainNode&&gainNode.disconnect();}catch(e){}
-  try{ws&&ws.close();}catch(e){}
-  try{pc&&pc.close();}catch(e){}
-  try{stream&&stream.getTracks().forEach(t=>t.stop());}catch(e){}
-  try{ac&&ac.close();}catch(e){}
+  goBtn.disabled=false; stopBtn.disabled=true;
+  bar.style.width=0; clip.textContent='';
+  if(status.textContent.indexOf('lost')<0 && status.textContent.indexOf('failed')<0)
+    status.textContent='stopped';
+  try{ wake&&wake.release(); wake=null; }catch(e){}
+  stopStreams();
 }
-document.getElementById('go').onclick=start;
-document.getElementById('stop').onclick=stop;
+goBtn.onclick=start;
+stopBtn.onclick=stop;
 </script></body></html>"""

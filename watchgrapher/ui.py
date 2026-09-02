@@ -1753,6 +1753,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setMinimumSize(940, 560)
         self.resize(1380, 860)
         self.recorder = None
+        self._net_recorder = None       # persistent phone-pickup server for the session
+        self._net_fresh = False
         self.last = None
         self.readings = []
         self._rate_hist = []       # (elapsed_s, rate_spd) for the rate-history plot
@@ -3699,7 +3701,16 @@ alongside the application.</p>
         self.chk_parity.setChecked(True)
 
     def _device_changed(self):
-        is_sim = self.cmb_dev.currentData() == "SIM"
+        dev = self.cmb_dev.currentData()
+        # The phone server outlives individual runs but not a device change.
+        if dev != "NET" and getattr(self, "_net_recorder", None) is not None \
+                and self.recorder is not self._net_recorder:
+            try:
+                self._net_recorder.stop()
+            except Exception:
+                pass
+            self._net_recorder = None
+        is_sim = dev == "SIM"
         self.g_sim.setVisible(is_sim)
         if not self._tuning and not self._selftune_session:
             self.btn_tune.setEnabled(not is_sim)
@@ -4746,13 +4757,28 @@ alongside the application.</p>
                         snr_db=self.sim_snr.value())
                 elif dev == "NET":
                     from . import netmic
-                    self.recorder = netmic.NetworkRecorder(
-                        samplerate=sr, buffer_seconds=buf,
-                        port=self._settings_get("phone_port", 8477))
+                    nr = getattr(self, "_net_recorder", None)
+                    if nr is not None and (not nr.running or nr.samplerate != sr):
+                        nr.stop()
+                        nr = None
+                    if nr is None:
+                        nr = netmic.NetworkRecorder(
+                            samplerate=sr, buffer_seconds=buf,
+                            port=self._settings_get("phone_port", 8477))
+                        nr.start()
+                        self._net_recorder = nr
+                        self._net_fresh = True
+                    else:
+                        nr.clear()
+                        nr.peak = 0.0
+                        nr.gain = 1.0
+                        self._net_fresh = False
+                    self.recorder = nr
                 else:
                     self.recorder = audio.Recorder(
                         device=dev, samplerate=sr, buffer_seconds=buf)
-                self.recorder.start()
+                if dev != "NET":
+                    self.recorder.start()
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Audio error", str(e))
                 self.recorder = None
@@ -4765,21 +4791,33 @@ alongside the application.</p>
                 if got_port and got_port != self._settings_get("phone_port", 8477):
                     self._settings_set("phone_port", got_port)
                 secure = getattr(self.recorder, "secure", False)
-                if secure:
-                    body = (f"On a phone or laptop on the same Wi-Fi, open:\n\n    {url}\n\n"
-                            f"The phone will warn that the connection is not private -- "
-                            f"that is expected for a local self-signed certificate. Tap "
-                            f"Advanced / Show details and proceed, then tap Start on the "
-                            f"page and hold the phone's microphone against the case.\n\n"
-                            f"Pick PCM (works anywhere) or WebRTC (steadier on a weak "
-                            f"link) on the page. This window listens until you press Stop.")
+                connected = getattr(self.recorder, "connected", False)
+                if not self._net_fresh:
+                    # Server already up from an earlier run -- do not nag with the
+                    # full dialog, just say the URL is unchanged.
+                    self.status.showMessage(
+                        f"Phone pickup still running at {url}"
+                        + (" -- phone connected." if connected
+                           else " -- open it on the phone and tap Start."), 12000)
+                elif secure:
+                    QtWidgets.QMessageBox.information(
+                        self, "Phone pickup",
+                        f"On a phone or laptop on the same Wi-Fi, open:\n\n    {url}\n\n"
+                        f"The phone will warn that the connection is not private -- that "
+                        f"is expected for a local self-signed certificate. Tap Advanced / "
+                        f"Show details and proceed, then tap Start on the page, set the "
+                        f"Boost slider and hold the phone's microphone against the case.\n\n"
+                        f"The URL stays the same for every run, so bookmark it. This "
+                        f"window listens until you press Stop; the phone stays connected "
+                        f"between runs.")
                 else:
-                    body = (f"Server running at:\n\n    {url}\n\n"
-                            f"WARNING: it could only start plain HTTP, and phone browsers "
-                            f"block microphone access over HTTP. Install the 'cryptography' "
-                            f"package (pip install cryptography) and restart so it can "
-                            f"serve HTTPS.")
-                QtWidgets.QMessageBox.information(self, "Phone pickup", body)
+                    QtWidgets.QMessageBox.information(
+                        self, "Phone pickup",
+                        f"Server running at:\n\n    {url}\n\n"
+                        f"WARNING: it could only start plain HTTP, and phone browsers "
+                        f"block microphone access over HTTP. Install the 'cryptography' "
+                        f"package (pip install cryptography) and restart so it can "
+                        f"serve HTTPS.")
             note = getattr(self.recorder, "opened_note", "")
             if note:
                 self.status.showMessage(note, 12000)
@@ -4824,7 +4862,11 @@ alongside the application.</p>
                     p = self.recorder.stop_recording()
                     if p:
                         self.status.showMessage(f"WAV saved: {os.path.basename(p)}", 8000)
-                self.recorder.stop()
+                # The phone server is kept alive across runs so the URL and the
+                # phone's connection stay put -- it is torn down on app close or
+                # when the input device is changed.
+                if self.recorder is not getattr(self, "_net_recorder", None):
+                    self.recorder.stop()
             self.recorder = None
             if self.act_rec.isChecked():
                 self.act_rec.blockSignals(True)
@@ -7215,8 +7257,14 @@ alongside the application.</p>
             self.thread.wait(1500)
         except Exception:
             pass
-        if self.recorder:
+        if self.recorder and self.recorder is not self._net_recorder:
             self.recorder.stop()
+        if self._net_recorder is not None:
+            try:
+                self._net_recorder.stop()
+            except Exception:
+                pass
+            self._net_recorder = None
         super().closeEvent(e)
 
 

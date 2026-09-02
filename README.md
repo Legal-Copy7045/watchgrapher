@@ -112,20 +112,27 @@ only moves to the next free port if something else is already using that one.
 8. Hold the phone with its **microphone port pressed against the watch case**
    -- the bottom edge on most phones. Contact matters as much as it does for a
    piezo. Keep the screen awake (set a long auto-lock).
-9. Press **Stop** in the app when done. Closing the page or locking the phone
-   also ends the stream.
+9. Press **Stop** in the app when done. The server and the phone's connection
+   stay up between runs -- press Start again and it picks straight back up, no
+   need to touch the phone. It shuts down when you change the input device or
+   close WatchGrapher.
+
+The phone page reconnects on its own if the Wi-Fi blips or WatchGrapher
+restarts, so you rarely have to re-tap Start on the phone. If it does give up
+it says so.
 
 **What to expect.** A phone mic through this path is roughly as good as a decent
 USB condenser mic: solid for rate and beat error, marginal for amplitude unless
 coupling is good. Run **Self-tune** once the stream is live -- the band a phone
 mic wants is different from a piezo. Sample-clock calibration and per-pickup
 profiles are disabled for the phone input (the phone's clock is not something
-this end can calibrate).
+this end can calibrate). Changing the sample rate restarts the server (and the
+URL may move) so set it before you start.
 
 **Privacy and safety.** The server only ever *receives* audio. It serves one
 static page, runs no code from the phone, and is reachable only on the local
-network -- nothing is sent to the internet. It stops when you press Stop or
-switch input devices.
+network -- nothing is sent to the internet. It shuts down when you change the
+input device or close the app.
 
 **If it will not connect:**
 
@@ -142,8 +149,8 @@ switch input devices.
 - **Certificate warning has no "proceed" option.** Some corporate-managed
   phones block self-signed certs entirely. Use a personal device, or a wired
   pickup.
-- **PCM keeps stalling.** Switch the page to WebRTC, move closer to the router,
-  or fall back to a wired pickup.
+- **PCM keeps stalling / "reconnecting..." on the phone.** Switch the page to
+  WebRTC, move closer to the router, or fall back to a wired pickup.
 - **Signal too weak / amplitude will not read.** Turn Boost up. If it is
   already high and still weak, the phone's mic port is not making good contact
   with the case -- press harder or reposition. A phone case can get in the way.
