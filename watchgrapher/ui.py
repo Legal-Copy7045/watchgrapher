@@ -657,6 +657,183 @@ class ServiceEditor(QtWidgets.QDialog):
         return rec, list(self._new_docs), list(self._removed)
 
 
+class RegulationWizard(QtWidgets.QDialog):
+    """
+    Walks a regulation: capture a baseline, fix beat error, then close on the
+    rate move by move, learning the index sensitivity from the first move and
+    using it to size the next one. Every step ends by asking for a fresh
+    reading so the loop is measured, not guessed.
+    """
+
+    def __init__(self, get_reading, caliber, parent=None):
+        super().__init__(parent)
+        self._get = get_reading          # callable -> Measurement or None
+        self.cal = caliber
+        self.setWindowTitle("Guided regulation")
+        self.setMinimumSize(520, 460)
+        self.step = 0                    # 0 baseline, 1 beat, 2 first rate move, 3 rate loop, 4 done
+        self.caps = []                   # list of (rate, beat_error, amplitude)
+        self._pre_rate = None            # rate before the last deliberate move
+        self._first_step_delta = None
+
+        v = QtWidgets.QVBoxLayout(self)
+        self.lbl_head = QtWidgets.QLabel()
+        self.lbl_head.setStyleSheet("font-weight:bold;font-size:14px;color:#e8eef7;")
+        v.addWidget(self.lbl_head)
+        self.lbl_body = QtWidgets.QLabel()
+        self.lbl_body.setWordWrap(True)
+        self.lbl_body.setStyleSheet(
+            "background:#1a1f27;border:1px solid #2a323e;border-radius:6px;"
+            "padding:12px;color:#c8d0dc;font-size:12px;")
+        v.addWidget(self.lbl_body, 1)
+
+        tr = QtWidgets.QHBoxLayout()
+        tr.addWidget(QtWidgets.QLabel("Target rate"))
+        self.spn_target = QtWidgets.QDoubleSpinBox()
+        self.spn_target.setRange(-60, 60)
+        self.spn_target.setValue(0.0)
+        self.spn_target.setSuffix(" s/d")
+        tr.addWidget(self.spn_target)
+        tr.addWidget(QtWidgets.QLabel("tolerance"))
+        self.spn_tol = QtWidgets.QDoubleSpinBox()
+        self.spn_tol.setRange(1, 15)
+        self.spn_tol.setValue(3.0)
+        self.spn_tol.setSuffix(" s/d")
+        tr.addWidget(self.spn_tol)
+        tr.addStretch(1)
+        v.addLayout(tr)
+
+        self.lbl_log = QtWidgets.QLabel()
+        self.lbl_log.setStyleSheet("color:#8a94a4;font-family:monospace;font-size:11px;")
+        v.addWidget(self.lbl_log)
+
+        br = QtWidgets.QHBoxLayout()
+        self.b_cap = QtWidgets.QPushButton("Capture reading")
+        self.b_cap.clicked.connect(self._capture)
+        self.b_skip = QtWidgets.QPushButton("Beat error good enough")
+        self.b_skip.clicked.connect(self._skip_beat)
+        self.b_restart = QtWidgets.QPushButton("Restart")
+        self.b_restart.clicked.connect(self._restart)
+        b_close = QtWidgets.QPushButton("Close")
+        b_close.clicked.connect(self.accept)
+        for b in (self.b_cap, self.b_skip, self.b_restart, b_close):
+            br.addWidget(b)
+        v.addLayout(br)
+        self._render()
+
+    # -- flow ---------------------------------------------------------------
+    def _restart(self):
+        self.step = 0
+        self.caps = []
+        self._pre_rate = None
+        self._first_step_delta = None
+        self._render()
+
+    def _capture(self):
+        m = self._get()
+        if m is None or not m.ok or m.rate != m.rate:
+            QtWidgets.QMessageBox.information(
+                self, "Guided regulation",
+                "No steady reading available. Let the trace settle on the Measure tab, "
+                "then capture.")
+            return
+        cap = (float(m.rate), float(m.beat_error), float(m.amplitude))
+        self.caps.append(cap)
+        self._advance(cap)
+        self._render()
+
+    def _skip_beat(self):
+        if self.step == 1:
+            self.step = 2
+            self._render()
+
+    def _advance(self, cap):
+        rate, be, amp = cap
+        tol = self.spn_tol.value()
+        tgt = self.spn_target.value()
+        if self.step == 0:
+            self.step = 1 if be > 0.3 else 2
+        elif self.step == 1:
+            if be <= 0.3:
+                self.step = 2
+        elif self.step == 2:
+            # first deliberate rate move just happened; learn the step size
+            if self._pre_rate is not None:
+                self._first_step_delta = rate - self._pre_rate
+            self.step = 3 if abs(rate - tgt) > tol else 4
+        elif self.step == 3:
+            if abs(rate - tgt) <= tol:
+                self.step = 4
+
+    # -- rendering --------------------------------------------------------------
+    def _render(self):
+        self.b_skip.setVisible(self.step == 1)
+        self.b_cap.setVisible(self.step < 4)
+        cal = self.cal
+        rname = getattr(cal, "regulator", "index") if cal else "index"
+        tgt, tol = self.spn_target.value(), self.spn_tol.value()
+        last = self.caps[-1] if self.caps else None
+
+        if self.step == 0:
+            self.lbl_head.setText("1 / 4  --  Baseline")
+            self.lbl_body.setText(
+                "Wind the watch fully, sit it dial-up on the pickup, and let the reading "
+                "settle for 15-30 seconds. Then press Capture reading.\n\n"
+                "Everything below is driven off this baseline, so it needs to be a clean, "
+                "steady reading -- demagnetise first if you have not.")
+        elif self.step == 1:
+            instr = advisor.beat_adjust_instructions(cal) if cal else (
+                "Adjust the beat: rotate the moveable stud carrier, or the collet if the "
+                "caliber has no moveable stud.")
+            self.lbl_head.setText("2 / 4  --  Beat error")
+            self.lbl_body.setText(
+                f"Beat error is {last[1]:.2f} ms (target under 0.30). Fix this before rate "
+                f"-- a large beat error costs amplitude and drags the rate around.\n\n{instr}\n\n"
+                f"Make one small adjustment, let it settle, then Capture reading again. "
+                f"If it is close enough, use the button.")
+        elif self.step == 2:
+            direction = "slower" if last[0] > tgt else "faster"
+            instr = advisor.rate_adjust_instructions(cal, direction) if cal else (
+                f"Move the regulator toward {'-' if direction == 'slower' else '+'} "
+                f"in a small step.")
+            self._pre_rate = last[0]
+            self.lbl_head.setText("3 / 4  --  Rate, first move")
+            self.lbl_body.setText(
+                f"Rate is {last[0]:+.1f} s/d, you want {tgt:+.0f}. Make one small, "
+                f"deliberate move to run {direction} -- do not try to nail it in one go, "
+                f"the point of the next step is to measure how far that move took you.\n\n"
+                f"{instr}\n\nThen Capture reading.")
+        elif self.step == 3:
+            note = ""
+            if self._first_step_delta:
+                note = advisor.regulator_sensitivity(
+                    self._pre_rate, last[0], "your last move")
+                remaining = tgt - last[0]
+                frac = remaining / self._first_step_delta if self._first_step_delta else 0
+                note += (f"\n\nSo: about {abs(frac):.2f}x your last move, "
+                         f"{'same direction' if frac > 0 else 'back the other way'}.")
+            self._pre_rate = last[0]
+            self.lbl_head.setText("3 / 4  --  Rate, closing in")
+            self.lbl_body.setText(
+                f"Rate is {last[0]:+.1f} s/d, target {tgt:+.0f} +/-{tol:.0f}.\n\n{note}\n\n"
+                f"Make the move and Capture reading. Halve your step each time you cross "
+                f"the target.")
+        else:
+            self.lbl_head.setText("4 / 4  --  Done at dial-up")
+            r, be, amp = last if last else (float("nan"),) * 3
+            self.lbl_body.setText(
+                f"Dial-up rate {r:+.1f} s/d, beat error {be:.2f} ms, amplitude {amp:.0f}.\n\n"
+                f"Now capture the other five positions (Positions tab). Regulate for the "
+                f"smallest spread between positions first, then nudge the index to "
+                f"re-centre the mean. Re-check after 24 hours -- a fresh service can "
+                f"drift as the oils spread.")
+
+        rows = []
+        for i, (r, be, amp) in enumerate(self.caps):
+            rows.append(f"#{i+1}  rate {r:+7.1f}   beat {be:4.2f}   amp {amp:3.0f}")
+        self.lbl_log.setText("\n".join(rows))
+
+
 class ServiceChecklistDialog(QtWidgets.QDialog):
     """A working checklist for a caliber, saved back as an attached document."""
 
@@ -3303,11 +3480,18 @@ alongside the application.</p>
         self.cmb_standard.currentTextChanged.connect(lambda _: self._advise())
         grow.addWidget(self.cmb_standard, 1)
         al.addLayout(grow)
+        abrow = QtWidgets.QHBoxLayout()
         b = QtWidgets.QPushButton("Analyze and advise")
         b.setStyleSheet(
             f"QPushButton{{background:{ACCENT};color:#08101c;font-weight:bold;padding:8px;border-radius:6px;}}")
         b.clicked.connect(self._advise)
-        al.addWidget(b)
+        abrow.addWidget(b, 1)
+        b_gr = QtWidgets.QPushButton("Guided regulation...")
+        b_gr.setStyleSheet(
+            "QPushButton{background:#2a323e;color:#e8eef7;padding:8px;border-radius:6px;}")
+        b_gr.clicked.connect(self._guided_regulation)
+        abrow.addWidget(b_gr)
+        al.addLayout(abrow)
         tabs.addTab(aw, "Advice")
 
         # tools
@@ -5822,6 +6006,14 @@ alongside the application.</p>
             except ValueError:
                 pass
         return 0.0
+
+    def _guided_regulation(self):
+        c = self._current_caliber()
+        dlg = RegulationWizard(
+            lambda: (self._last_good if getattr(self, "_last_good", None) is not None
+                     else self.last),
+            c, parent=self)
+        dlg.exec()
 
     def _update_regulation(self, m):
         if not hasattr(self, "lbl_regassist"):
