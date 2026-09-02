@@ -1416,6 +1416,16 @@ class MainWindow(QtWidgets.QMainWindow):
         rescan_act.setShortcut("Ctrl+R")
         rescan_act.triggered.connect(self._refresh_devices)
         vm.addAction(rescan_act)
+        vm.addSeparator()
+        self.act_gate = QtGui.QAction("Hold readouts on a weak signal", self)
+        self.act_gate.setCheckable(True)
+        self.act_gate.setChecked(False)
+        self.act_gate.setToolTip(
+            "When on, the rate/amplitude/beat-error readouts freeze at their last "
+            "trustworthy value (greyed) whenever the beats stop matching their "
+            "template, the beat rate disagrees with the caliber, or the pickup is "
+            "hearing the room. When off, they always show the current number.")
+        vm.addAction(self.act_gate)
 
     def _build_header(self):
         bar = QtWidgets.QFrame()
@@ -3866,6 +3876,9 @@ alongside the application.</p>
         # a stale-but-real figure beats a fresh garbage one.
         trustworthy = (m.quality >= 0.6 and not mismatch and m.rate == m.rate
                        and m.extra_peaks <= 1.5)
+        # Holding the readouts on a weak signal is opt-in (View menu, off by
+        # default). When off, the current number is always shown.
+        hold = (not trustworthy) and self.act_gate.isChecked()
 
         # The trace, waveform and diagnostics always update -- you want to see
         # the mess to understand why the numbers are being withheld.
@@ -3879,8 +3892,9 @@ alongside the application.</p>
             self._render_wave(m)
         self._update_diag(m)
 
-        if trustworthy:
-            self._last_good = m
+        if not hold:
+            if trustworthy:
+                self._last_good = m
             good = m.quality > 0.8
             self.r_rate.set(f"{m.rate:+.1f}", "#e8eef7" if abs(m.rate) < 15 else "#ffb648")
             unit = "seconds / day"
@@ -3916,21 +3930,21 @@ alongside the application.</p>
 
         self._update_regulation(m)
         self._check_stable(m)
-        self._log_reserve(m if trustworthy else None)
+        self._log_reserve(None if hold else m)
 
         if hasattr(self, "lbl_live"):
-            if not trustworthy:
+            if hold:
                 self.lbl_live.setText(f"reading held: {why}")
                 self.lbl_live.setStyleSheet("color:#ffb648;font-size:12px;")
             else:
-                warn = mismatch or m.extra_peaks > 1.0
+                warn = mismatch or m.extra_peaks > 1.0 or m.quality < 0.6
                 self.lbl_live.setText(
                     f"{3 + m.extra_peaks:.1f} noises/beat  |  match {m.quality:.2f}")
                 self.lbl_live.setStyleSheet(
                     f"color:{'#ffb648' if warn else '#5a6472'};font-size:12px;")
 
         bits = [f"{m.beats} beats", f"SNR {m.snr_db:.0f} dB", f"match {m.quality:.2f}"]
-        if not trustworthy:
+        if hold:
             bits.insert(0, f"HELD ({why})")
         if m.rate_ci == m.rate_ci:
             bits.append(f"rate +/-{m.rate_ci:.1f} s/d (95%)"
