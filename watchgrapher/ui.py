@@ -1779,9 +1779,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if ppm is None:
             entry.pop("clock_ppm", None)
             entry.pop("clock_ppm_source", None)
+            entry.pop("clock_ppm_date", None)
         else:
             entry["clock_ppm"] = round(float(ppm), 2)
             entry["clock_ppm_source"] = source
+            entry["clock_ppm_date"] = datetime.now().isoformat(timespec="seconds")
         try:
             with open(self._profiles_path(), "w", encoding="utf-8") as fh:
                 json.dump(self._pickup_profiles, fh, indent=2)
@@ -1809,9 +1811,54 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"listening on this device, then Calibrate.")
         else:
             src = prof.get("clock_ppm_source", "")
-            self.lbl_clock.setText(
-                f"{key}: {float(ppm):+.1f} ppm ({src or 'saved'}). Rate readings are "
-                f"corrected by {float(ppm) * self.PPM_TO_SPD:+.2f} s/day.")
+            when = self._ago(prof.get("clock_ppm_date"))
+            stale = self._cal_days_old(prof.get("clock_ppm_date"))
+            txt = (f"{key}: {float(ppm):+.1f} ppm ({src or 'saved'}"
+                   + (f", calibrated {when}" if when else "") + "). "
+                   f"Rate readings are corrected by "
+                   f"{float(ppm) * self.PPM_TO_SPD:+.2f} s/day.")
+            if stale is not None and stale > 120:
+                txt += (" This calibration is getting old -- redo it if you have moved "
+                        "the setup or the room temperature has changed with the season.")
+            self.lbl_clock.setText(txt)
+
+    @staticmethod
+    def _cal_days_old(iso):
+        try:
+            return (datetime.now() - datetime.fromisoformat(iso)).days
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _ago(iso):
+        d = MainWindow._cal_days_old(iso)
+        if d is None:
+            return ""
+        if d <= 0:
+            return "today"
+        if d == 1:
+            return "yesterday"
+        if d < 14:
+            return f"{d} days ago"
+        if d < 60:
+            return f"{d // 7} weeks ago"
+        if d < 730:
+            return f"{max(1, d // 30)} months ago"
+        return f"{d // 365} years ago"
+
+    def _nudge_stale_calibration(self):
+        """One status-bar line when a listen starts on a stale/uncalibrated device."""
+        key = self._clock_key()
+        if not key:
+            return
+        prof = self._load_profiles().get(key) or {}
+        if prof.get("clock_ppm") is None:
+            return
+        days = self._cal_days_old(prof.get("clock_ppm_date"))
+        if days is not None and days > 120:
+            self.status.showMessage(
+                f"Sample-clock calibration for '{key}' is {self._ago(prof.get('clock_ppm_date'))}"
+                f" -- consider redoing it on the Sync tab if conditions have changed.", 10000)
 
     def _rate_correction(self):
         """Additive s/day applied to a live rate reading for the current device."""
@@ -3440,6 +3487,8 @@ alongside the application.</p>
             note = getattr(self.recorder, "opened_note", "")
             if note:
                 self.status.showMessage(note, 12000)
+            else:
+                self._nudge_stale_calibration()
             self._pending_buffer = 0
             self.worker.recorder = self.recorder
             self._rate_hist = []
