@@ -4,3 +4,4 @@ __pycache__/
 reports/
 watches/
 *.wav
+pickup_profiles.json
