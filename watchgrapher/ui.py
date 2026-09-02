@@ -27,8 +27,12 @@ pg.setConfigOptions(antialias=True, background="#12151a", foreground="#c8d0dc")
 
 # Everything the app writes lives beside the package, in named folders, so a
 # report or a collection is somewhere you can find it later rather than
-# wherever the last file dialog happened to be pointing.
-APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# wherever the last file dialog happened to be pointing. Set WATCHGRAPHER_HOME
+# to keep the data (collection, reports, settings) somewhere else -- and so a
+# test run can never touch a real collection.
+APP_DIR = (os.environ.get("WATCHGRAPHER_HOME")
+           or os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+APP_DIR = os.path.abspath(APP_DIR)
 REPORT_DIR = os.path.join(APP_DIR, "reports")
 COLLECTION_DIR = os.path.join(APP_DIR, "watches")
 for _d in (REPORT_DIR, COLLECTION_DIR):
