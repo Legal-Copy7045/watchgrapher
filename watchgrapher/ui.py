@@ -1307,6 +1307,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._clock_cal_worker = None
         self._clock_cal_pts = []
         self._clock_cal_rec = None
+        self._clock_cal_reanchors = 0
         self._settle_pending = False
         self._settle_buf = []
         self._settle_secs = 0
@@ -1895,7 +1896,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._clock_cal_pts = []
         self._clock_cal_ovf0 = getattr(self.recorder, "overflows", 0)
         self._clock_cal_rec = self.recorder     # the exact stream being counted
-        self._clock_cal_end = time.monotonic() + self.spn_cal_min.value() * 60.0
+        self._clock_cal_reanchors = 0
+        self._clock_cal_win = self.spn_cal_min.value() * 60.0
+        self._clock_cal_end = time.monotonic() + self._clock_cal_win
         self.btn_clock_cal.setText("Stop")
         self.lbl_clock.setText("Calibrating... contacting NTP.")
 
@@ -1911,14 +1914,34 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_clock_point(self, true_epoch, roundtrip, err):
         if getattr(self, "_clock_cal_thread", None) is None:
             return
-        # The count is only meaningful if the same unbroken stream is still
-        # running and nothing has been dropped. Stop-then-start resets frames
-        # to zero, which would wreck the fit.
-        if self.recorder is not self._clock_cal_rec:
-            self._clock_cal_stop("interrupted")
+        # The count is only meaningful while the same stream keeps running
+        # unbroken. If the user pressed Stop there is nothing to measure.
+        if self.recorder is None or isinstance(self.recorder, audio.SimulatedRecorder) \
+                or not hasattr(self.recorder, "frames"):
+            self._clock_cal_stop("stopped")
             return
-        if getattr(self.recorder, "overflows", 0) != self._clock_cal_ovf0:
-            self._clock_cal_stop("overflow")
+        # A stall-recovery restart (new recorder) or a buffer overflow both
+        # break continuity with the points already collected -- frames reset or
+        # jump. That is not user error and should not throw the run away: drop
+        # the points, re-anchor on the fresh stream, and keep going. Give up
+        # only if it keeps happening, which means the device cannot hold a
+        # steady stream long enough to calibrate.
+        broke = ("the audio stream restarted" if self.recorder is not self._clock_cal_rec
+                 else "the audio buffer overflowed"
+                 if getattr(self.recorder, "overflows", 0) != self._clock_cal_ovf0
+                 else None)
+        if broke is not None:
+            self._clock_cal_reanchors += 1
+            if self._clock_cal_reanchors > 4:
+                self._clock_cal_stop("unstable")
+                return
+            self._clock_cal_rec = self.recorder
+            self._clock_cal_ovf0 = getattr(self.recorder, "overflows", 0)
+            self._clock_cal_pts = []
+            self._clock_cal_end = time.monotonic() + self._clock_cal_win
+            self.lbl_clock.setText(
+                f"Calibrating '{self._clock_cal_key}': {broke}, restarting the "
+                f"measurement ({self._clock_cal_reanchors}/4).")
             return
         if err:
             self.lbl_clock.setText(f"Calibrating... NTP error: {err}")
@@ -1949,20 +1972,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_clock_cal.setText("Calibrate")
 
         pts = getattr(self, "_clock_cal_pts", [])
-        if reason == "interrupted":
+        if reason == "stopped":
             self._refresh_clock_label()
-            QtWidgets.QMessageBox.warning(
-                self, "Sample clock",
-                "Calibration stopped -- audio listening was stopped or restarted, which "
-                "resets the sample count. Start listening again and calibrate without "
-                "touching Start/Stop.")
+            self.status.showMessage(
+                "Sample-clock calibration stopped -- listening ended before it finished.",
+                8000)
             return
-        if reason == "overflow":
+        if reason == "unstable":
             self._refresh_clock_label()
             QtWidgets.QMessageBox.warning(
                 self, "Sample clock",
-                "Calibration stopped -- the audio overflowed and dropped samples, so the "
-                "count is no longer reliable. Fix the dropouts and calibrate again.")
+                "Calibration gave up -- the audio stream on this device kept restarting "
+                "or dropping samples, so the count never held steady long enough to "
+                "measure. Try a wired input, disable USB power management for the "
+                "device, or enter a ppm figure by hand.")
             return
         if reason == "cancelled" or len(pts) < 4:
             self._refresh_clock_label()
