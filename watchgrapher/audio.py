@@ -295,6 +295,52 @@ def load_wav(path: str):
     return a, fr
 
 
+def _sweep_and_reference(seconds, samplerate, f0, f1):
+    n = int(seconds * samplerate)
+    t = np.arange(n) / samplerate
+    k = np.log(f1 / f0)
+    phase = 2 * np.pi * f0 * seconds / k * (np.exp(t / seconds * k) - 1.0)
+    x = np.sin(phase).astype(np.float32)
+    win = np.ones(n)
+    edge = int(0.02 * samplerate)
+    win[:edge] = np.linspace(0, 1, edge)
+    win[-edge:] = np.linspace(1, 0, edge)
+    return (x * win).astype(np.float32)
+
+
+def mic_response_from_capture(rec, ref, samplerate, f0=80.0, f1=16000.0, bins=48):
+    """
+    Magnitude response of the record chain: captured spectrum / swept-sine
+    reference spectrum, in log-frequency bins, normalised to 0 dB at its
+    median. Returns (freqs_hz, level_db). This is speaker + room + mic, so it
+    is only as flat a reference as the playback side is.
+    """
+    rec = np.asarray(rec, dtype=float)
+    ref = np.asarray(ref, dtype=float)
+    n = min(rec.size, ref.size)
+    if n < samplerate // 2:
+        return np.array([]), np.array([])
+    rec, ref = rec[:n], ref[:n]
+    w = np.hanning(n)
+    R = np.abs(np.fft.rfft(rec * w))
+    X = np.abs(np.fft.rfft(ref * w))
+    fr = np.fft.rfftfreq(n, 1.0 / samplerate)
+    keep = (fr >= f0) & (fr <= f1) & (X > X.max() * 1e-3)
+    fr, ratio = fr[keep], R[keep] / X[keep]
+    if fr.size < bins:
+        return np.array([]), np.array([])
+    edges = np.logspace(np.log10(fr[0]), np.log10(fr[-1]), bins + 1)
+    idx = np.clip(np.digitize(fr, edges) - 1, 0, bins - 1)
+    out_f, out_db = [], []
+    for b in range(bins):
+        sel = idx == b
+        if sel.any():
+            out_f.append(float(np.sqrt(edges[b] * edges[b + 1])))
+            out_db.append(20.0 * np.log10(np.median(ratio[sel]) + 1e-9))
+    db = np.asarray(out_db) - float(np.median(out_db))
+    return np.asarray(out_f), db
+
+
 # ==========================================================================
 # Simulated watch -- no hardware required
 # ==========================================================================
