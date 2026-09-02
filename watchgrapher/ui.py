@@ -1305,6 +1305,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._clock_cal_thread = None
         self._clock_cal_worker = None
         self._clock_cal_pts = []
+        self._clock_cal_rec = None
         self._settle_pending = False
         self._settle_buf = []
         self._settle_secs = 0
@@ -1892,6 +1893,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._clock_cal_key = key
         self._clock_cal_pts = []
         self._clock_cal_ovf0 = getattr(self.recorder, "overflows", 0)
+        self._clock_cal_rec = self.recorder     # the exact stream being counted
         self._clock_cal_end = time.monotonic() + self.spn_cal_min.value() * 60.0
         self.btn_clock_cal.setText("Stop")
         self.lbl_clock.setText("Calibrating... contacting NTP.")
@@ -1908,9 +1910,18 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_clock_point(self, true_epoch, roundtrip, err):
         if getattr(self, "_clock_cal_thread", None) is None:
             return
+        # The count is only meaningful if the same unbroken stream is still
+        # running and nothing has been dropped. Stop-then-start resets frames
+        # to zero, which would wreck the fit.
+        if self.recorder is not self._clock_cal_rec:
+            self._clock_cal_stop("interrupted")
+            return
+        if getattr(self.recorder, "overflows", 0) != self._clock_cal_ovf0:
+            self._clock_cal_stop("overflow")
+            return
         if err:
             self.lbl_clock.setText(f"Calibrating... NTP error: {err}")
-        elif self.recorder is not None and hasattr(self.recorder, "frames"):
+        elif hasattr(self.recorder, "frames"):
             # Pull frames back to the instant the NTP fix refers to.
             now = time.time()
             frames = self.recorder.frames - (now - true_epoch) * self.recorder.samplerate
@@ -1933,9 +1944,25 @@ class MainWindow(QtWidgets.QMainWindow):
             th.wait(3000)
         self._clock_cal_worker = None
         self._clock_cal_thread = None
+        self._clock_cal_rec = None
         self.btn_clock_cal.setText("Calibrate")
 
         pts = getattr(self, "_clock_cal_pts", [])
+        if reason == "interrupted":
+            self._refresh_clock_label()
+            QtWidgets.QMessageBox.warning(
+                self, "Sample clock",
+                "Calibration stopped -- audio listening was stopped or restarted, which "
+                "resets the sample count. Start listening again and calibrate without "
+                "touching Start/Stop.")
+            return
+        if reason == "overflow":
+            self._refresh_clock_label()
+            QtWidgets.QMessageBox.warning(
+                self, "Sample clock",
+                "Calibration stopped -- the audio overflowed and dropped samples, so the "
+                "count is no longer reliable. Fix the dropouts and calibrate again.")
+            return
         if reason == "cancelled" or len(pts) < 4:
             self._refresh_clock_label()
             if reason != "cancelled":
@@ -1943,14 +1970,6 @@ class MainWindow(QtWidgets.QMainWindow):
                     self, "Sample clock",
                     "Not enough NTP fixes to calibrate -- check the connection and try a "
                     "longer window.")
-            return
-        if self.recorder is not None and \
-                getattr(self.recorder, "overflows", 0) != getattr(self, "_clock_cal_ovf0", 0):
-            QtWidgets.QMessageBox.warning(
-                self, "Sample clock",
-                "Audio overflowed during the calibration -- samples were dropped, so the "
-                "result would be wrong. Fix the dropouts and calibrate again.")
-            self._refresh_clock_label()
             return
 
         a = np.array(pts, dtype=float)
@@ -5428,6 +5447,13 @@ alongside the application.</p>
 
     def closeEvent(self, e):
         self._closing = True
+        w = getattr(self, "_clock_cal_worker", None)
+        if w is not None:
+            w.stop()
+        th = getattr(self, "_clock_cal_thread", None)
+        if th is not None:
+            th.quit()
+            th.wait(2000)
         try:
             self.worker.stop()
             self.thread.quit()
