@@ -230,6 +230,12 @@ def allan_deviation(t_s, y_spd, min_points: int = 32):
     dt = float(np.median(np.diff(t)))
     if not np.isfinite(dt) or dt <= 0:
         return np.array([]), np.array([])
+    span = float(t[-1] - t[0])
+    # Cap the uniform grid so a tiny median spacing (or a very long run) cannot
+    # blow the array up. Above the cap the grid is coarsened to fit.
+    max_grid = 200_000
+    if span / dt > max_grid:
+        dt = span / max_grid
     grid = np.arange(t[0], t[-1] + dt * 0.5, dt)
     yu = np.interp(grid, t, y)
     n = yu.size
@@ -406,7 +412,11 @@ def analyze(samples: np.ndarray, fs: int, cfg: AnalyzerConfig) -> Measurement:
         if inst.size >= 8:
             k = max(3, (int(round(1.0 / nominal_period)) | 1))
             if inst.size > k:
-                inst = np.convolve(inst, np.ones(k) / k, mode="same")
+                # "valid" (not "same") so the edges are a true running mean
+                # rather than a zero-padded one that droops toward 0.
+                sm = np.convolve(inst, np.ones(k) / k, mode="valid")
+                off = (inst.size - sm.size) // 2
+                inst, t_mid = sm, t_mid[off:off + sm.size]
             m.inst_rate_t, m.inst_rate = t_mid, inst
 
     # 95% confidence half-width on the rate, from the scatter of the beat
@@ -518,6 +528,26 @@ class ReserveStats:
     verdict: list = field(default_factory=list)
 
 
+def _polyfit(x, y, deg):
+    """
+    polyfit that scales x into [-1, 1] first, so a degree-2 fit over, say,
+    amplitude 240-265 deg is not wrecked by the x**2 column dwarfing the
+    constant one. Returns descending coeffs in the original x, like np.polyfit.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.size <= deg:
+        return np.zeros(deg + 1)
+    try:
+        p = np.polynomial.Polynomial.fit(x, y, deg)
+        c = np.asarray(p.convert().coef, dtype=float)          # ascending, in x
+        if c.size < deg + 1:
+            c = np.pad(c, (0, deg + 1 - c.size))
+        return c[::-1]
+    except Exception:
+        return np.polyfit(x, y, deg)
+
+
 def _robust_polyfit(x, y, deg=1, n_sigma=3.5, iters=3):
     """
     Least-squares polynomial fit that discards gross outliers.
@@ -536,8 +566,8 @@ def _robust_polyfit(x, y, deg=1, n_sigma=3.5, iters=3):
     y = np.asarray(y, dtype=float)
     keep = np.ones(x.size, dtype=bool)
     if x.size < deg + 2:
-        return (np.polyfit(x, y, deg) if x.size > deg else np.zeros(deg + 1)), keep
-    coef = np.polyfit(x, y, deg)
+        return _polyfit(x, y, deg), keep
+    coef = _polyfit(x, y, deg)
     floor = max(deg + 2, int(np.ceil(0.6 * x.size)))
     for _ in range(iters):
         resid = y - np.polyval(coef, x)
@@ -546,13 +576,12 @@ def _robust_polyfit(x, y, deg=1, n_sigma=3.5, iters=3):
         if mad <= 1e-12:
             break
         good = np.abs(resid - med) <= n_sigma * 1.4826 * mad
-        if good.sum() < floor or np.array_equal(good, keep):
-            if good.sum() >= floor and not np.array_equal(good, keep):
-                keep = good
-                coef = np.polyfit(x[keep], y[keep], deg)
-            break
+        if np.array_equal(good, keep):
+            break                        # converged
+        if good.sum() < floor:
+            break                        # would drop too many -- keep the last fit
         keep = good
-        coef = np.polyfit(x[keep], y[keep], deg)
+        coef = _polyfit(x[keep], y[keep], deg)
     return coef, keep
 
 
@@ -585,9 +614,12 @@ def reserve_analytics(samples, iso_model: str = "linear") -> ReserveStats:
         if tail.sum() >= 3:
             (sl, ic), _ = _robust_polyfit(t_h[tail], amp[tail], 1)
             if sl < -1e-3:
+                # Cap the extrapolation: a shallow, noisy tail slope can throw
+                # the crossing hundreds of hours out, which is not a measurement.
+                horizon = t_h[tail][-1] + 3.0 * st.hours + 24.0
                 for target, name in ((220.0, "hours_to_220"), (200.0, "hours_to_200")):
                     th = (target - ic) / sl
-                    if th > t_h[tail][0]:
+                    if t_h[tail][0] < th <= horizon:
                         setattr(st, name, float(th))
 
     mi = np.isfinite(amp) & np.isfinite(rate)
