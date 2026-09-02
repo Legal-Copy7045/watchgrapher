@@ -68,6 +68,33 @@ SERVICE_KINDS = ["Full service", "Partial service", "Regulation only", "Repair",
 
 
 @dataclass
+class ReserveRecord:
+    """One power-reserve run: the sample series and the analytics off it."""
+    when: str = ""                    # ISO, start of the run
+    caliber_key: str = ""
+    lift_angle: float = 52.0
+    interval_s: int = 300
+    stopped_early: bool = False
+    hours: float = float("nan")
+    samples: List[list] = field(default_factory=list)   # [elapsed_s, rate, amp, beat_error]
+    amp_first: float = float("nan")
+    amp_last: float = float("nan")
+    hours_to_220: float = float("nan")
+    hours_to_200: float = float("nan")
+    iso_slope: float = float("nan")   # s/day of rate per +1 deg amplitude
+    iso_span: float = float("nan")    # rate change over the amplitude range seen
+    be_slope: float = float("nan")    # ms beat error per +1 deg amplitude
+    notes: str = ""
+
+    @property
+    def date(self) -> Optional[datetime]:
+        try:
+            return datetime.fromisoformat(self.when)
+        except (ValueError, TypeError):
+            return None
+
+
+@dataclass
 class ServiceRecord:
     """One visit to a watchmaker, with any scanned paperwork attached."""
     when: str = ""                    # ISO date
@@ -125,6 +152,7 @@ class Watch:
     notes: str = ""
     history: List[TestRecord] = field(default_factory=list)
     services: List[ServiceRecord] = field(default_factory=list)
+    reserves: List[ReserveRecord] = field(default_factory=list)
 
     @property
     def label(self) -> str:
@@ -205,10 +233,12 @@ class Collection:
         for d in raw.get("watches", []):
             hist = [TestRecord(**_pick(h, TestRecord)) for h in d.pop("history", [])]
             svcs = [ServiceRecord(**_pick(s, ServiceRecord)) for s in d.pop("services", [])]
+            rsvs = [ReserveRecord(**_pick(r, ReserveRecord)) for r in d.pop("reserves", [])]
             known = {f for f in Watch.__dataclass_fields__}
             w = Watch(**{k: v for k, v in d.items() if k in known})
             w.history = hist
             w.services = svcs
+            w.reserves = rsvs
             self.watches[w.id] = w
 
     def save(self):
@@ -219,6 +249,7 @@ class Collection:
             d = asdict(w)
             d["history"] = [asdict(h) for h in w.history]
             d["services"] = [asdict(s) for s in w.services]
+            d["reserves"] = [asdict(r) for r in w.reserves]
             data["watches"].append(d)
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)

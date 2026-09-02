@@ -347,6 +347,33 @@ def _service_section(watch, doc_dir=""):
     return "".join(out)
 
 
+def _reserve_section(watch):
+    e = html.escape
+    runs = sorted(getattr(watch, "reserves", []), key=lambda r: r.when, reverse=True)
+    if not runs:
+        return ""
+    out = ["<h2>Power reserve runs</h2>",
+           "<table><tr><th>Date</th><th class='n'>Hours</th>"
+           "<th class='n'>Amplitude start &rarr; end</th><th class='n'>To 220&deg;</th>"
+           "<th>Isochronism</th></tr>"]
+    for r in runs:
+        amp = (f"{r.amp_first:.0f} &rarr; {r.amp_last:.0f}"
+               if r.amp_first == r.amp_first else "--")
+        to220 = f"{r.hours_to_220:.0f} h" if r.hours_to_220 == r.hours_to_220 else "--"
+        if r.iso_span == r.iso_span:
+            mag = abs(r.iso_span)
+            iso = (f"{'good' if mag < 4 else 'fair' if mag < 12 else 'poor'} "
+                   f"({r.iso_span:+.1f} s/d across the range)")
+        else:
+            iso = "--"
+        note = " &mdash; stopped early" if r.stopped_early else ""
+        out.append(f"<tr><td>{e(r.when[:16].replace('T', ' '))}{note}</td>"
+                   f"<td class='n'>{_fmt(r.hours, 1)}</td><td class='n'>{amp}</td>"
+                   f"<td class='n'>{to220}</td><td>{iso}</td></tr>")
+    out.append("</table>")
+    return "".join(out)
+
+
 def build_watch_report(path, watch, caliber=None, trends=None, notes=None,
                        photo_path=None, owner="", doc_dir=""):
     """One printable page for a watch: what it is, and how it has behaved."""
@@ -473,6 +500,7 @@ def build_watch_report(path, watch, caliber=None, trends=None, notes=None,
             p.append(f"<div class='f {sev}'><div class='t'>{e(t.metric)}{extra}</div>"
                      f"<div class='d'>{e(t.verdict)}</div></div>")
 
+    p.append(_reserve_section(watch))
     p.append(_service_section(watch, doc_dir))
 
     if notes:
@@ -587,6 +615,15 @@ def build_portfolio(path, collection, owner=""):
                     p.append(f"<p class='sub'>{e(t.metric)}: {e(t.verdict)}</p>")
         else:
             p.append("<p class='sub'>No timing runs recorded yet.</p>")
+
+        rsv = sorted(getattr(w, "reserves", []), key=lambda r: r.when, reverse=True)
+        if rsv:
+            last = rsv[0]
+            p.append(f"<p><b>{len(rsv)} power-reserve run(s).</b> Most recent "
+                     f"({last.when[:10]}): {_fmt(last.hours, 1)} h, amplitude "
+                     f"{_fmt(last.amp_first, 0)}&ndash;{_fmt(last.amp_last, 0)} deg"
+                     + (f", isochronism {last.iso_span:+.1f} s/d across the range"
+                        if last.iso_span == last.iso_span else "") + ".</p>")
 
         svcs = sorted(getattr(w, "services", []), key=lambda s: s.when, reverse=True)
         if svcs:
