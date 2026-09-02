@@ -836,6 +836,9 @@ drop stages lit as the beat passes through them. *Play the beat, slowed* plays
 the most recent beat back at a reduced sample rate so the three noises are
 audible separately.
 
+**Theme** (View menu). Dark, light, or follow the system. The choice is saved
+to `settings.json` and applied on the next start.
+
 **Demagnetiser A/B** (Tools tab). Capture before, demagnetise, capture after.
 The signature to look for is a large rate drop with amplitude roughly
 unchanged: magnetised hairspring coils cling together and behave like a shorter

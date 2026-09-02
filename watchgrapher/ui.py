@@ -34,10 +34,14 @@ COLLECTION_DIR = os.path.join(APP_DIR, "watches")
 for _d in (REPORT_DIR, COLLECTION_DIR):
     os.makedirs(_d, exist_ok=True)
 
-ACCENT = "#4da3ff"
-TICK_C = "#4da3ff"
-TOCK_C = "#ff9d4d"
-SEV_COLOR = {"critical": "#ff5d5d", "warn": "#ffb648", "info": "#7fb2ff", "good": "#57d38c"}
+from . import theme as _T
+
+BG, BG2, PANEL, PANEL2, LINE = (_T.get(k) for k in ("BG", "BG2", "PANEL", "PANEL2", "LINE"))
+INK_HI, INK, MUT, MUT2 = (_T.get(k) for k in ("INK_HI", "INK", "MUT", "MUT2"))
+ACCENT, ACCENT2, ON_ACCENT = _T.get("ACCENT"), _T.get("ACCENT2"), _T.get("ON_ACCENT")
+GOOD, WARN, WARN2, BAD = (_T.get(k) for k in ("GOOD", "WARN", "WARN2", "BAD"))
+TICK_C, TOCK_C = _T.get("TICK"), _T.get("TOCK")
+SEV_COLOR = {"critical": BAD, "warn": WARN, "info": ACCENT2, "good": GOOD}
 
 
 # ==========================================================================
@@ -1926,6 +1930,15 @@ class MainWindow(QtWidgets.QMainWindow):
             "signal is used exactly as it arrives.")
         self.act_agc.toggled.connect(self._set_agc)
         vm.addAction(self.act_agc)
+        vm.addSeparator()
+        thm = vm.addMenu("Theme")
+        self._theme_group = QtGui.QActionGroup(self)
+        for label, mode in (("Dark", "dark"), ("Light", "light"), ("Follow system", "system")):
+            a = QtGui.QAction(label, self, checkable=True)
+            a.setChecked(_T.MODE == mode)
+            a.triggered.connect(lambda _=False, m=mode: self._set_theme(m))
+            self._theme_group.addAction(a)
+            thm.addAction(a)
 
         tm = mb.addMenu("&Tools")
         mic_act = QtGui.QAction("Microphone response calibration...", self)
@@ -1976,6 +1989,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.status.showMessage(f"Saved microphone response for '{key}'.", 5000)
             except OSError as e:
                 QtWidgets.QMessageBox.warning(self, "Microphone response", str(e))
+
+    def _set_theme(self, mode):
+        _T.save_mode(mode)
+        if mode != _T.MODE:
+            QtWidgets.QMessageBox.information(
+                self, "Theme",
+                f"Theme set to {mode}. Restart WatchGrapher to apply it.")
 
     def _set_agc(self, on):
         if self.recorder is not None:
@@ -7050,20 +7070,45 @@ alongside the application.</p>
         super().closeEvent(e)
 
 
+def _install_theme(app):
+    """Re-colour every inline stylesheet by mapping the dark palette to the
+    active one. Identity in dark mode, so it costs nothing there."""
+    subs = {_T.DARK[k]: _T.P[k] for k in _T.DARK if _T.DARK[k] != _T.P[k]}
+    if subs:
+        _orig = QtWidgets.QWidget.setStyleSheet
+
+        def _themed(self, s):
+            for a, b in subs.items():
+                s = s.replace(a, b)
+            _orig(self, s)
+        QtWidgets.QWidget.setStyleSheet = _themed
+
+    try:
+        pg.setConfigOption("background", _T.get("PLOT_BG"))
+        pg.setConfigOption("foreground", _T.get("PLOT_FG"))
+    except Exception:
+        pass
+
+    app.setStyle("Fusion")
+    P = _T.P
+    pal = QtGui.QPalette()
+    pal.setColor(QtGui.QPalette.Window, QtGui.QColor(P["BG"]))
+    pal.setColor(QtGui.QPalette.Base, QtGui.QColor(P["PANEL"]))
+    pal.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(P["PANEL2"]))
+    pal.setColor(QtGui.QPalette.Text, QtGui.QColor(P["INK"]))
+    pal.setColor(QtGui.QPalette.WindowText, QtGui.QColor(P["INK"]))
+    pal.setColor(QtGui.QPalette.Button, QtGui.QColor(P["PANEL2"]))
+    pal.setColor(QtGui.QPalette.ButtonText, QtGui.QColor(P["INK"]))
+    pal.setColor(QtGui.QPalette.ToolTipBase, QtGui.QColor(P["PANEL"]))
+    pal.setColor(QtGui.QPalette.ToolTipText, QtGui.QColor(P["INK"]))
+    pal.setColor(QtGui.QPalette.Highlight, QtGui.QColor(P["ACCENT"]))
+    pal.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor(P["ON_ACCENT"]))
+    app.setPalette(pal)
+
+
 def main():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    app.setStyle("Fusion")
-    pal = QtGui.QPalette()
-    pal.setColor(QtGui.QPalette.Window, QtGui.QColor("#12151a"))
-    pal.setColor(QtGui.QPalette.Base, QtGui.QColor("#1a1f27"))
-    pal.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor("#20262f"))
-    pal.setColor(QtGui.QPalette.Text, QtGui.QColor("#c8d0dc"))
-    pal.setColor(QtGui.QPalette.WindowText, QtGui.QColor("#c8d0dc"))
-    pal.setColor(QtGui.QPalette.Button, QtGui.QColor("#232a34"))
-    pal.setColor(QtGui.QPalette.ButtonText, QtGui.QColor("#c8d0dc"))
-    pal.setColor(QtGui.QPalette.Highlight, QtGui.QColor(ACCENT))
-    pal.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor("#08101c"))
-    app.setPalette(pal)
+    _install_theme(app)
     w = MainWindow()
     w.show()
     app.exec()
