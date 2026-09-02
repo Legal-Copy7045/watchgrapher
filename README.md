@@ -630,6 +630,16 @@ Two-beat cycles are excluded on purpose -- that IS beat error, reported as its
 own number. A genuine impulse-jewel fault also lands at two beats and is not
 separable from beat error by this method.
 
+**Fault signature library.** *Match fault signatures* on the Faults sub-tab
+weighs everything on hand -- the current reading, the captured positions, the
+last periodic scan, a demagnetiser A/B -- against the patterns a watchmaker
+carries in their head: high rate with normal amplitude that moves on
+demagnetising is a magnetised hairspring; a big positional spread while dial-up
+and dial-down agree is a poise error; low amplitude with a clean beat is power
+delivery, with a noisy beat is the escapement. Each match shows a confidence,
+why it fired, and what to look at. They are weighted guesses from the numbers,
+not a diagnosis.
+
 **Auto-capture when stable.** Ticks over in Test conditions. It captures the
 position shown in the dropdown once six consecutive readings agree; move the
 watch and change the dropdown yourself for the next one. It
