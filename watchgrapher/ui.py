@@ -3297,8 +3297,11 @@ alongside the application.</p>
         self.p_iso.setLabel("left", "rate", units="s/d")
         self.p_iso.showGrid(x=True, y=True, alpha=0.25)
         self.s_iso = pg.ScatterPlotItem(size=5, brush=pg.mkBrush("#ff9d4d"), pen=None)
+        self.s_iso_out = pg.ScatterPlotItem(size=7, symbol="x", pen=pg.mkPen("#5a6472", width=1),
+                                            brush=None)
         self.c_iso_fit = self.p_iso.plot(pen=pg.mkPen("#e8eef7", width=1, style=QtCore.Qt.DashLine))
         self.p_iso.addItem(self.s_iso)
+        self.p_iso.addItem(self.s_iso_out)
         iso.addWidget(self.p_iso)
         self.txt_iso = QtWidgets.QTextBrowser()
         self.txt_iso.setMaximumWidth(360)
@@ -4344,6 +4347,7 @@ alongside the application.</p>
     def _update_iso(self):
         if not self._reserve:
             self.s_iso.setData([], [])
+            self.s_iso_out.setData([], [])
             self.c_iso_fit.setData([], [])
             self.txt_iso.setHtml("<p style='color:#8a94a4;font-family:Segoe UI'>"
                                  "Run a power-reserve log; the isochronism analysis appears "
@@ -4351,16 +4355,21 @@ alongside the application.</p>
             return
         st = reserve_analytics(self._reserve)
         a = np.array(self._reserve, dtype=float) if self._reserve else np.zeros((0, 4))
-        if a.shape[0]:
-            m = np.isfinite(a[:, 2]) & np.isfinite(a[:, 1])
-            self.s_iso.setData(a[m, 2], a[m, 1])
-        else:
-            self.s_iso.setData([], [])
         if st.iso_fit:
+            # Once the fit exists, colour the points by whether it used them.
+            self.s_iso.setData(list(st.iso_in[0]), list(st.iso_in[1]))
+            self.s_iso_out.setData(list(st.iso_out[0]), list(st.iso_out[1]))
             sl, ic = st.iso_fit
-            xs = np.array([np.nanmin(a[:, 2]), np.nanmax(a[:, 2])])
+            xin = np.asarray(st.iso_in[0], dtype=float)
+            xs = np.array([xin.min(), xin.max()])
             self.c_iso_fit.setData(xs, sl * xs + ic)
         else:
+            if a.shape[0]:
+                m = np.isfinite(a[:, 2]) & np.isfinite(a[:, 1])
+                self.s_iso.setData(a[m, 2], a[m, 1])
+            else:
+                self.s_iso.setData([], [])
+            self.s_iso_out.setData([], [])
             self.c_iso_fit.setData([], [])
         if st.verdict:
             body = "".join(f"<p style='margin:6px 0'>{ln}</p>" for ln in st.verdict)

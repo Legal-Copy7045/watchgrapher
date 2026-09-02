@@ -441,7 +441,48 @@ class ReserveStats:
     iso_span: float = float("nan")         # rate change across the amplitude range seen
     iso_fit: tuple = ()                    # (slope, intercept) for a rate-vs-amplitude line
     be_slope: float = float("nan")         # ms beat error per +1 deg amplitude
+    iso_n_out: int = 0                     # rate-vs-amplitude points rejected as outliers
+    iso_in: tuple = ()                     # (amp[], rate[]) points kept for the fit
+    iso_out: tuple = ()                    # (amp[], rate[]) points discarded
     verdict: list = field(default_factory=list)
+
+
+def _robust_polyfit(x, y, deg=1, n_sigma=3.5, iters=3):
+    """
+    Least-squares polynomial fit that discards gross outliers.
+
+    A power-reserve log run overnight will have the odd sample where the
+    pickup caught a knock or a truncated capture -- a point sitting far off
+    an otherwise tight trend. Ordinary least squares lets one such point
+    swing the slope. This fits, measures the residual spread with the MAD
+    (which the outliers themselves barely move), drops anything more than
+    n_sigma robust-sigma off the line, and refits, a couple of times.
+
+    Returns (coeffs, keep_mask). keep_mask is all-True if nothing had to go
+    or too few points would survive to fit safely.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    keep = np.ones(x.size, dtype=bool)
+    if x.size < deg + 2:
+        return (np.polyfit(x, y, deg) if x.size > deg else np.zeros(deg + 1)), keep
+    coef = np.polyfit(x, y, deg)
+    floor = max(deg + 2, int(np.ceil(0.6 * x.size)))
+    for _ in range(iters):
+        resid = y - np.polyval(coef, x)
+        med = np.median(resid[keep])
+        mad = np.median(np.abs(resid[keep] - med))
+        if mad <= 1e-12:
+            break
+        good = np.abs(resid - med) <= n_sigma * 1.4826 * mad
+        if good.sum() < floor or np.array_equal(good, keep):
+            if good.sum() >= floor and not np.array_equal(good, keep):
+                keep = good
+                coef = np.polyfit(x[keep], y[keep], deg)
+            break
+        keep = good
+        coef = np.polyfit(x[keep], y[keep], deg)
+    return coef, keep
 
 
 def reserve_analytics(samples) -> ReserveStats:
@@ -456,13 +497,14 @@ def reserve_analytics(samples) -> ReserveStats:
     ma = np.isfinite(amp) & np.isfinite(t_h)
     if ma.sum() >= 4:
         st.amp_first, st.amp_last = float(amp[ma][0]), float(amp[ma][-1])
-        st.amp_per_hour = float(np.polyfit(t_h[ma], amp[ma], 1)[0])
+        (sl_a, _), _ = _robust_polyfit(t_h[ma], amp[ma], 1)
+        st.amp_per_hour = float(sl_a)
         # The decay accelerates near the end, so extrapolate the runway from
         # the last third rather than the whole-run slope.
         cut = t_h[ma][-1] - max(1.0, st.hours / 3.0)
         tail = ma & (t_h >= cut)
         if tail.sum() >= 3:
-            sl, ic = np.polyfit(t_h[tail], amp[tail], 1)
+            (sl, ic), _ = _robust_polyfit(t_h[tail], amp[tail], 1)
             if sl < -1e-3:
                 for target, name in ((220.0, "hours_to_220"), (200.0, "hours_to_200")):
                     th = (target - ic) / sl
@@ -471,14 +513,21 @@ def reserve_analytics(samples) -> ReserveStats:
 
     mi = np.isfinite(amp) & np.isfinite(rate)
     if mi.sum() >= 5 and float(amp[mi].max() - amp[mi].min()) > 15.0:
-        sl, ic = np.polyfit(amp[mi], rate[mi], 1)
+        ai, ri = amp[mi], rate[mi]
+        (sl, ic), keep = _robust_polyfit(ai, ri, 1)
+        st.iso_n_out = int((~keep).sum())
+        st.iso_in = (ai[keep].tolist(), ri[keep].tolist())
+        st.iso_out = (ai[~keep].tolist(), ri[~keep].tolist())
         st.iso_slope = float(sl)
         st.iso_fit = (float(sl), float(ic))
-        st.iso_span = float(sl * (amp[mi].max() - amp[mi].min()))
+        # Span across the amplitude range that actually informed the fit.
+        span_lo, span_hi = float(ai[keep].min()), float(ai[keep].max())
+        st.iso_span = float(sl * (span_hi - span_lo))
 
     mb = np.isfinite(amp) & np.isfinite(be)
     if mb.sum() >= 5 and float(amp[mb].max() - amp[mb].min()) > 15.0:
-        st.be_slope = float(np.polyfit(amp[mb], be[mb], 1)[0])
+        (sl_b, _), _ = _robust_polyfit(amp[mb], be[mb], 1)
+        st.be_slope = float(sl_b)
 
     v = st.verdict
     if st.iso_span == st.iso_span:
@@ -494,6 +543,10 @@ def reserve_analytics(samples) -> ReserveStats:
                      f"amplitude falls ({st.iso_slope:+.2f} s/day per degree). The "
                      f"hairspring is not developing evenly -- suspect pinning, a "
                      f"sticky terminal curve, or the regulator pins.")
+        if st.iso_n_out:
+            v.append(f"{st.iso_n_out} outlier "
+                     f"{'reading was' if st.iso_n_out == 1 else 'readings were'} "
+                     f"set aside for the fit -- shown dimmed on the plot.")
     if st.be_slope == st.be_slope and abs(st.be_slope) > 0.01:
         v.append(f"Beat error changes {st.be_slope:+.3f} ms per degree of amplitude -- "
                  f"a hairspring that is not breathing concentrically, not a collet that "
