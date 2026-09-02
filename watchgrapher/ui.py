@@ -1756,6 +1756,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._net_recorder = None       # persistent phone-pickup server for the session
         self._net_fresh = False
         self._phone_last_save = ""
+        self._phone_run = False         # the current run was started from the phone
+        self._phone_starting = False
+        self._phone_pending = None      # {"summary","have"} awaiting a save/discard from the phone
+        self._phone_pending_m = None
         self.last = None
         self.readings = []
         self._rate_hist = []       # (elapsed_s, rate_spd) for the rate-history plot
@@ -2116,6 +2120,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "elapsed": round(time.time() - self._listen_t0, 1) if self._listen_t0 else 0.0,
             "have_reading": bool(good and m.rate == m.rate),
             "last_save": getattr(self, "_phone_last_save", ""),
+            "pending": getattr(self, "_phone_pending", None),
         }
         if good:
             st["rate"] = num(m.rate)
@@ -2133,15 +2138,57 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.cmb_watch.setCurrentIndex(i)
         elif c == "start":
             self._phone_last_save = ""
+            self._phone_pending = None
+            self._phone_pending_m = None
             if self.cmb_dev.currentData() == "NET" and self.recorder is None:
+                self._phone_starting = True
                 self.btn_go.setChecked(True)
         elif c == "stop":
             if self.recorder is not None:
-                self._suppress_finish = True
                 self.btn_go.setChecked(False)
-                self._suppress_finish = False
         elif c == "save":
             self._phone_save()
+        elif c == "save_pending":
+            self._phone_save_pending()
+        elif c == "discard":
+            self._phone_pending = None
+            self._phone_pending_m = None
+            self._phone_run = False
+            self._phone_last_save = "discarded"
+
+    def _phone_finish(self, summary, m, ok=True):
+        """A phone-started run ended -- stash the outcome for the phone to decide."""
+        have = bool(ok and m is not None and m.ok and m.rate == m.rate)
+        self._phone_pending = {"summary": summary, "have": have}
+        self._phone_pending_m = m if have else None
+        self._phone_last_save = ""
+
+    def _phone_save_pending(self):
+        m = self._phone_pending_m
+        wid = self.cmb_watch.currentData() if hasattr(self, "cmb_watch") else None
+        w = self.collection.watches.get(wid) if wid else None
+        if not w:
+            self._phone_last_save = "pick a watch first"
+            return
+        if m is None or not m.ok or m.rate != m.rate:
+            self._phone_last_save = "nothing usable to save"
+            self._phone_pending = None
+            return
+        readings = list(self.readings) or [advisor.Reading(
+            self.cmb_pos.currentText(), m.rate, m.amplitude, m.beat_error,
+            self.cmb_wind.currentText())]
+        c = self._current_caliber()
+        rec = coll.record_from_readings(
+            readings, c.key if c else w.caliber_key, float(self.spn_lift.value()),
+            notes="Saved from phone")
+        w.history.append(rec)
+        self.collection.save()
+        self._end_session()
+        self._refresh_watches(w.id)
+        self._phone_pending = None
+        self._phone_pending_m = None
+        self._phone_run = False
+        self._phone_last_save = f"saved to {w.label} ({len(w.history)} runs)"
 
     def _phone_save(self):
         wid = self.cmb_watch.currentData() if hasattr(self, "cmb_watch") else None
@@ -3787,6 +3834,8 @@ alongside the application.</p>
             except Exception:
                 pass
             self._net_recorder = None
+            self._phone_run = False
+            self._phone_pending = None
         is_sim = dev == "SIM"
         self.g_sim.setVisible(is_sim)
         if not self._tuning and not self._selftune_session:
@@ -4817,6 +4866,8 @@ alongside the application.</p>
 
     def _toggle_listen(self, on):
         if on:
+            self._phone_run = self._phone_starting
+            self._phone_starting = False
             dev = self.cmb_dev.currentData()
             try:
                 buf = max(60.0, self.spn_win.value() * 2,
@@ -4959,10 +5010,31 @@ alongside the application.</p>
             if not self._suppress_finish and not self._closing:
                 self._offer_after_listening()
 
+    def _reading_summary(self, m):
+        if m is None or not m.ok:
+            return "No usable reading."
+        amp = "n/a" if m.amplitude != m.amplitude else f"{m.amplitude:.0f} deg"
+        be = "n/a" if m.beat_error != m.beat_error else f"{m.beat_error:.2f} ms"
+        s = (f"Rate  {m.rate:+.1f} s/day\nAmplitude  {amp}\nBeat error  {be}\n"
+             f"Beat rate  {m.detected_bph} bph\n\nmatch {m.quality:.2f}, "
+             f"{3 + m.extra_peaks:.1f} noises/beat")
+        if m.nominal_bph and m.detected_bph != m.nominal_bph:
+            s += "\n\nBeat rate does not match the caliber -- the rate figure is not valid."
+        elif m.quality < 0.6:
+            s += "\n\nLow template match -- treat these numbers with caution."
+        return s
+
     def _offer_after_listening(self):
         """Same four options after a continuous session, if there is anything to file."""
         m = self.last
         have_reading = m is not None and m.ok and m.rate == m.rate
+        if getattr(self, "_phone_run", False):
+            if not have_reading and not self.readings:
+                self._phone_finish("Run finished -- no steady reading was captured.",
+                                   None, ok=False)
+            else:
+                self._phone_finish(self._reading_summary(m), m)
+            return
         if not have_reading and not self.readings:
             return
         lines = []
@@ -5013,11 +5085,17 @@ alongside the application.</p>
         except Exception:
             m = None
         if m is None or not m.ok:
-            QtWidgets.QMessageBox.warning(
-                self, "Run finished",
-                f"{'Stopped' if stopped_early else 'Completed'} after {elapsed:.0f} s, "
-                f"but the capture could not be analysed.\n\n"
-                + (m.message if m else "Not enough usable audio."))
+            msg = (f"{'Stopped' if stopped_early else 'Completed'} after {elapsed:.0f} s, "
+                   f"but the capture could not be analysed.\n\n"
+                   + (m.message if m else "Not enough usable audio."))
+            if getattr(self, "_phone_run", False):
+                self._suppress_finish = True
+                self._toggle_listen(False)
+                self._suppress_finish = False
+                self._set_go(False)
+                self._phone_finish(msg, None, ok=False)
+            else:
+                QtWidgets.QMessageBox.warning(self, "Run finished", msg)
             return
 
         # A run that ends should actually end. Leaving the stream open meant the
@@ -5053,6 +5131,9 @@ alongside the application.</p>
                          f"repeating cleanly. Treat these numbers with caution before "
                          f"filing them.")
 
+        if getattr(self, "_phone_run", False):
+            self._phone_finish("\n".join(lines), m)
+            return
         self._offer_outcome("\n".join(lines), "Test finished")
 
     def _offer_outcome(self, summary, title):
