@@ -4212,6 +4212,12 @@ alongside the application.</p>
             self.r_amp.set("--" if m.amplitude != m.amplitude else f"{m.amplitude:.0f}",
                            "#ff5d5d" if m.amplitude > 330 else
                            ("#ffb648" if m.amplitude < 220 else "#e8eef7"))
+            if m.amplitude == m.amplitude and m.amplitude >= 355:
+                self.r_amp.u.setText("REBANKING -- balance is knocking; reduce mainspring power")
+            elif m.amplitude == m.amplitude and m.amplitude > 330:
+                self.r_amp.u.setText("degrees -- approaching the knocking region")
+            else:
+                self.r_amp.u.setText("degrees")
             self.r_be.set("--" if m.beat_error != m.beat_error else f"{m.beat_error:.2f}",
                           "#ff5d5d" if m.beat_error > 1.2 else
                           ("#ffb648" if m.beat_error > 0.6 else "#57d38c"))
@@ -4517,6 +4523,8 @@ alongside the application.</p>
             return
         model = "quadratic" if self.chk_iso_nl.isChecked() else "linear"
         st = reserve_analytics(self._reserve, iso_model=model)
+        self._postwind_kick = (st.kick_deg_per_h if st.kick_deg_per_h == st.kick_deg_per_h
+                               else None)
         a = np.array(self._reserve, dtype=float) if self._reserve else np.zeros((0, 4))
         if st.iso_coef:
             # Once the fit exists, colour the points by whether it used them.
