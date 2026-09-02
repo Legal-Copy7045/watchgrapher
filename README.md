@@ -601,6 +601,12 @@ is wandering -- the floor it settles at is roughly how much the rate will move
 between captures no matter how carefully it is regulated. Needs a minute or
 more of clean listening, or a power-reserve log.
 
+Below it, **instantaneous rate** -- each beat's own period against nominal,
+smoothed to about a second, plotted across the analysis window with the last
+few windows left faint behind it as a waterfall. A flat line is a healthy
+escapement. A slow wave while amplitude holds steady is poor isochronism or a
+train fault; the fault scan on the next sub-tab identifies which part.
+
 **Diagnostics tab -- periodic fault scan.** Rate, amplitude and beat error
 describe a movement's average behaviour. They say nothing about whether that
 average is produced smoothly. A bent escape wheel tooth or an eccentric pinion
