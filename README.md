@@ -626,9 +626,10 @@ it is done; set 0 to run until you stop it.
 This is a long run, not a twenty second test. With the default five minute
 interval nothing visible happens between samples, so the label beside the
 buttons counts down to the next one and shows time remaining -- that is there
-purely so a working run does not look like a crashed one. Leave the watch on
-the pickup and the app listening throughout; if either stops, the curve has a
-hole in it.
+purely so a working run does not look like a crashed one. Keep the watch on the
+pickup throughout. Pressing **Stop** on the main run ends the reserve log too
+and files what it has so far -- a reserve log has no meaning once the app is not
+listening.
 
 At the end it reports the amplitude and rate change across the run, and flags
 the point amplitude crossed 200 degrees. That crossing, not the moment the
