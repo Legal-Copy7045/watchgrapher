@@ -540,7 +540,16 @@ service is the clearest read on whether it achieved anything.
 **Service log.** Each entry records the date, type (full service, regulation,
 repair, warranty...), who did it and where, cost and currency, warranty
 period, notes, and any number of attached documents -- a scanned invoice or
-service report, PDF or image. Logging a service updates the watch's
+service report, PDF or image.
+
+**Service checklist.** *Service checklist...* opens a working checklist for the
+watch's caliber -- phases in order (teardown, cleaning, inspection, lubrication
+and assembly, timing and closing), the lubrication map (which oil where), the
+specs worth having on the bench, and that caliber's known weak points. A
+generic Swiss-lever template covers anything; ETA 2824 / 2892 / 7750, Unitas
+6497 and the Seiko NH35 / 7S26 add their own detail. Tick items as you go, add
+notes, and *Attach to a new service entry* files the completed checklist as a
+markdown document against the watch. Logging a service updates the watch's
 last-serviced date, so the service-due reminder and the trend markers follow.
 Attachments are copied into the collection when you save them, so deleting the
 original file elsewhere does not lose them.

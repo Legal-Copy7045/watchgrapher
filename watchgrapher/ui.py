@@ -657,6 +657,88 @@ class ServiceEditor(QtWidgets.QDialog):
         return rec, list(self._new_docs), list(self._removed)
 
 
+class ServiceChecklistDialog(QtWidgets.QDialog):
+    """A working checklist for a caliber, saved back as an attached document."""
+
+    def __init__(self, template, caliber_label="", parent=None):
+        super().__init__(parent)
+        self.t = template
+        self.setWindowTitle(f"Service checklist -- {template.title}")
+        self.setMinimumSize(560, 640)
+        self._boxes = {}                       # "phase\tstep" -> QCheckBox
+
+        outer = QtWidgets.QVBoxLayout(self)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(inner)
+
+        for phase, steps in template.phases:
+            gb = QtWidgets.QGroupBox(phase)
+            gl = QtWidgets.QVBoxLayout(gb)
+            for s in steps:
+                cb = QtWidgets.QCheckBox(s)
+                self._boxes[f"{phase}\t{s}"] = cb
+                gl.addWidget(cb)
+            v.addWidget(gb)
+
+        if template.lubrication:
+            v.addWidget(self._ref_box("Lubrication map",
+                        [f"{p}  --  {o}" for p, o in template.lubrication]))
+        if template.specs:
+            v.addWidget(self._ref_box("Specs", [f"{k}: {val}" for k, val in template.specs]))
+        if template.weak_points:
+            v.addWidget(self._ref_box("Known weak points", template.weak_points))
+
+        v.addWidget(QtWidgets.QLabel("Notes"))
+        self.e_notes = QtWidgets.QPlainTextEdit()
+        self.e_notes.setPlaceholderText("Findings, parts replaced, deviations from the plan...")
+        v.addWidget(self.e_notes)
+        v.addStretch(1)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll, 1)
+
+        self._caliber_label = caliber_label
+        bb = QtWidgets.QDialogButtonBox()
+        b_save = bb.addButton("Attach to a new service entry",
+                              QtWidgets.QDialogButtonBox.AcceptRole)
+        b_copy = bb.addButton("Copy to clipboard", QtWidgets.QDialogButtonBox.ActionRole)
+        bb.addButton(QtWidgets.QDialogButtonBox.Close)
+        b_save.clicked.connect(self.accept)
+        b_copy.clicked.connect(self._copy)
+        bb.rejected.connect(self.reject)
+        outer.addWidget(bb)
+
+    def _ref_box(self, title, lines):
+        gb = QtWidgets.QGroupBox(title)
+        gl = QtWidgets.QVBoxLayout(gb)
+        lbl = QtWidgets.QLabel("\n".join(f"- {ln}" for ln in lines))
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("color:#b6bfcc;")
+        gl.addWidget(lbl)
+        return gb
+
+    def _filled(self):
+        return {k: cb.isChecked() for k, cb in self._boxes.items()}
+
+    def markdown(self):
+        from . import service_templates as st
+        body = st.render_markdown(self.t, self._filled(), header=self._caliber_label
+                                  or self.t.title)
+        note = self.e_notes.toPlainText().strip()
+        if note:
+            body += f"\n## Notes\n\n{note}\n"
+        done = sum(1 for v in self._filled().values() if v)
+        body += f"\n_{done}/{len(self._boxes)} steps checked, " \
+                f"{datetime.now():%Y-%m-%d %H:%M}._\n"
+        return body
+
+    def _copy(self):
+        QtWidgets.QApplication.clipboard().setText(self.markdown())
+        self.parent().status.showMessage("Checklist copied to clipboard", 4000) \
+            if self.parent() and hasattr(self.parent(), "status") else None
+
+
 class WavScrubber(QtWidgets.QDialog):
     """
     Load a long recording and re-analyse any window of it.
@@ -2309,7 +2391,8 @@ alongside the application.</p>
         for label, slot in (("Add service", self._service_add),
                             ("Edit", self._service_edit),
                             ("Delete", self._service_delete),
-                            ("Open document", self._service_open_doc)):
+                            ("Open document", self._service_open_doc),
+                            ("Service checklist...", self._service_checklist)):
             b = QtWidgets.QPushButton(label)
             b.clicked.connect(slot)
             sb.addWidget(b)
@@ -5295,6 +5378,44 @@ alongside the application.</p>
         w.last_service = w.effective_last_service
         self.collection.save()
         self._refresh_watches(w.id)
+
+    def _service_checklist(self):
+        w = self._current_watch()
+        if not w:
+            QtWidgets.QMessageBox.information(self, "Service checklist",
+                                             "Select a watch first.")
+            return
+        from . import service_templates as stmpl
+        from .calibers import CALIBERS
+        c = CALIBERS.get(w.caliber_key)
+        tmpl = stmpl.for_caliber(w.caliber_key or "", getattr(c, "group", "") if c else "")
+        dlg = ServiceChecklistDialog(tmpl, caliber_label=(c.label if c else w.label), parent=self)
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
+            return
+        import tempfile
+        stamp = datetime.now().strftime("%Y%m%d_%H%M")
+        safe = "".join(ch if ch.isalnum() else "_" for ch in (c.key if c else w.id))[:40]
+        tmp = os.path.join(tempfile.gettempdir(), f"checklist_{safe}_{stamp}.md")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(dlg.markdown())
+        rec = coll.ServiceRecord(
+            when=datetime.now().strftime("%Y-%m-%d"), kind="Full service",
+            notes="Service checklist attached.")
+        try:
+            rec.documents.append(self.collection.store_document(w.id, tmp))
+        except OSError as e:
+            QtWidgets.QMessageBox.warning(self, "Service checklist", f"Could not save: {e}")
+            return
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        w.services.append(rec)
+        w.last_service = w.effective_last_service
+        self.collection.save()
+        self._refresh_watches(w.id)
+        self.status.showMessage("Checklist filed as a new service entry", 5000)
 
     def _current_service(self):
         w = self._current_watch()
