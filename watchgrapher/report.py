@@ -96,6 +96,89 @@ def trace_svg(m, nominal_bph, width_ms=20.0, w=820, h=300):
     return "".join(parts)
 
 
+CERT_CSS = CSS + """
+.cert{border:2px solid var(--ink);padding:28px 34px;margin-top:10px}
+.cert h1{font-size:20px;letter-spacing:.12em;text-transform:uppercase;text-align:center}
+.cert .std{text-align:center;color:var(--mut);letter-spacing:.08em;margin:2px 0 18px}
+.verdict{text-align:center;font-size:26px;font-weight:800;letter-spacing:.15em;
+         padding:10px;margin:12px 0;border:2px solid currentColor}
+.idg{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;margin:14px 0}
+.idg div:nth-child(odd){color:var(--mut)}
+.sig{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:34px}
+.sig div{border-top:1px solid var(--ink);padding-top:6px;color:var(--mut);font-size:12px}
+"""
+
+
+def build_certificate(path, *, caliber, readings, grade, watch_label="",
+                      serial="", technician="", notes="", owner=""):
+    """A single-page COSC/METAS-style timing certificate."""
+    e = html.escape
+    now = datetime.now().strftime("%d %B %Y")
+    passed = bool(grade and grade.get("passed"))
+    rows = (grade or {}).get("rows", [])
+    standard = (grade or {}).get("standard", "")
+    colour = "var(--good)" if passed else "var(--bad)"
+    verdict = "CONFORMS" if passed else "OUTSIDE SPECIFICATION"
+
+    p = ["<!doctype html><html><head><meta charset='utf-8'>",
+         f"<title>Timing certificate -- {e(watch_label or (caliber.label if caliber else 'watch'))}"
+         f"</title><style>{CERT_CSS}</style></head><body><div class='cert'>"]
+    p.append("<h1>Timing Certificate</h1>")
+    p.append(f"<p class='std'>Assessed against: {e(standard) or 'no standard selected'}</p>")
+
+    ident = [("Watch", watch_label or "--"),
+             ("Movement", caliber.label if caliber else "--"),
+             ("Beat rate", f"{caliber.bph} bph" if caliber and caliber.bph else "auto-detected"),
+             ("Lift angle", f"{caliber.lift_angle:g}°" if caliber else "--"),
+             ("Serial", serial or "--"), ("Owner", owner or "--"),
+             ("Date of test", now), ("Tested by", technician or "--")]
+    p.append("<div class='idg'>")
+    for k, v in ident:
+        p.append(f"<div>{e(k)}</div><div>{e(str(v))}</div>")
+    p.append("</div>")
+
+    p.append(f"<div class='verdict' style='color:{colour}'>{verdict}</div>")
+
+    if rows:
+        p.append("<table><tr><th>Criterion</th><th class='n'>Measured</th>"
+                 "<th class='n'>Limit</th><th>Result</th></tr>")
+        for r in rows:
+            rc = "var(--good)" if r.ok else "var(--bad)"
+            p.append(f"<tr><td>{e(r.name)}</td><td class='n'>{e(r.value)}</td>"
+                     f"<td class='n'>{e(r.limit)}</td>"
+                     f"<td style='color:{rc}'>{'pass' if r.ok else 'fail'}</td></tr>")
+        p.append("</table>")
+
+    if readings:
+        p.append("<h2>Positional measurements</h2><table><tr><th>Position</th><th>Wind</th>"
+                 "<th class='n'>Rate s/d</th><th class='n'>Amplitude</th>"
+                 "<th class='n'>Beat error ms</th></tr>")
+        rates = [r.rate for r in readings if r.rate == r.rate]
+        amps = [r.amplitude for r in readings if r.amplitude == r.amplitude]
+        for r in readings:
+            p.append(f"<tr><td>{e(r.position)}</td><td>{e(r.wind_state)}</td>"
+                     f"<td class='n'>{r.rate:+.1f}</td><td class='n'>{_fmt(r.amplitude, 0)}</td>"
+                     f"<td class='n'>{_fmt(r.beat_error, 2)}</td></tr>")
+        if len(rates) >= 2:
+            p.append(f"<tr><td colspan='2'><b>Mean rate / delta</b></td>"
+                     f"<td class='n'><b>{sum(rates)/len(rates):+.1f} / "
+                     f"{max(rates)-min(rates):.1f}</b></td>"
+                     f"<td class='n'><b>{f'{max(amps)-min(amps):.0f} drop' if len(amps)>=2 else '--'}</b>"
+                     f"</td><td></td></tr>")
+        p.append("</table>")
+
+    if notes:
+        p.append(f"<h2>Notes</h2><p>{e(notes)}</p>")
+    p.append("<p class='sub' style='margin-top:20px;font-size:11px'>Indicative "
+             "acoustic assessment from a single six-position run. Not a certified "
+             "laboratory test and not affiliated with COSC, METAS or any observatory.</p>")
+    p.append("<div class='sig'><div>Signature</div><div>Date</div></div>")
+    p.append("</div></body></html>")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("".join(p))
+    return path
+
+
 def build(path, caliber, readings, measurement=None, findings=None,
           fault_report=None, tuning=None, reserve_log=None,
           watch_label="", technician="", notes="", grade=None):

@@ -223,7 +223,11 @@ readouts and trace.
    **regulation assistant** -- current rate versus target, the direction and
    amount to move, and the regulator-specific instruction for the caliber --
    and grades the run against a standard (COSC-style, METAS-style,
-   manufacture-typical or serviceable/vintage).
+   manufacture-typical or serviceable/vintage). **Timing certificate...**
+   prints that grading as a single-page certificate -- identity block,
+   verdict, the criteria table and the six-position measurements, with a
+   signature line -- clearly marked as an indicative acoustic assessment, not
+   a certified laboratory test.
 7. For a hands-on adjustment, **Guided regulation...** walks it step by step:
    capture a baseline, fix beat error first with the instruction for that
    caliber's hardware, then close on the rate one measured move at a time --
