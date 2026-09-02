@@ -149,10 +149,13 @@ page just shows the live numbers and lets you save. A desktop-started run
 prompts on the desktop as usual. The page reconnects on its own if the Wi-Fi
 blips or WatchGrapher restarts.
 
-**Security.** The remote commands (start, stop, select watch, save) carry a
-token that is baked into the page the server hands out, so a random device that
-finds the URL cannot drive your session -- but anyone who can load the page on
-your LAN can. Treat it like any other device on your home network.
+**Security.** The server binds only to this computer's LAN address (never all
+interfaces, so it is not reachable over a VPN or a public-Wi-Fi link). Your
+watch list, the live readings and every remote command (start, stop, select
+watch, save) require a random per-session token that is embedded in the page
+the server hands out -- a device that merely hits the port gets nothing, though
+anyone who can load the page on your LAN can drive the session. Treat it like
+any other device on your home network.
 
 **What to expect.** A phone mic through this path is roughly as good as a decent
 USB condenser mic: solid for rate and beat error, marginal for amplitude unless

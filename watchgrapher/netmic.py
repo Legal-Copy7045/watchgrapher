@@ -16,8 +16,10 @@ and serves HTTPS when `cryptography` is available. The phone shows a one-time
 "not private" warning that you tap through. Without `cryptography` it falls
 back to HTTP, where phone browsers will refuse microphone access.
 
-Nothing here is exposed beyond the local network, and the server only ever
-receives audio -- it never plays anything back or runs code from the page.
+The server binds only to this machine's LAN address (never 0.0.0.0), and the
+watch list, state and command endpoints all require a random per-session token
+that is embedded in the page. It only ever receives audio -- it never plays
+anything back or runs code from the page.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
@@ -57,13 +60,22 @@ except Exception:
 _WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
+def _content_length(headers, cap: int) -> int:
+    """Parse Content-Length defensively and clamp it to `cap` bytes."""
+    try:
+        n = int(headers.get("Content-Length", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(n, cap))
+
+
 def _self_signed(ip: str):
     """Return (cert_pem_bytes, key_pem_bytes) for a throwaway HTTPS cert, or None."""
     if not HAVE_CRYPTO:
         return None
     import datetime as _dt
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "WatchGrapher pickup")])
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "WatchGrapher remote")])
     san = [x509.DNSName("localhost")]
     try:
         import ipaddress
@@ -141,10 +153,19 @@ class NetworkRecorder:
         self._certfile = None
         # Remote control: the app publishes JSON snapshots here and drains the
         # command queue on its GUI thread.
-        self.token = secrets.token_hex(4)
+        self.token = secrets.token_hex(16)
         self.state_json = "{}"
         self.watches_json = "[]"
         self.cmd_q: "queue.Queue" = queue.Queue(maxsize=64)
+
+    def _wipe_certfile(self):
+        if self._certfile:
+            try:
+                import os
+                os.remove(self._certfile)
+            except OSError:
+                pass
+            self._certfile = None
 
     def drain_commands(self):
         out = []
@@ -174,6 +195,13 @@ class NetworkRecorder:
             def log_message(self, *a):        # keep the console quiet
                 pass
 
+            def _authed(self):
+                tok = self.headers.get("X-WG-Token", "")
+                if not tok:
+                    q = urlparse(self.path).query
+                    tok = parse_qs(q).get("t", [""])[0]
+                return secrets.compare_digest(tok, rec.token)
+
             def _send(self, code, body=b"", ctype="text/plain"):
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
@@ -184,35 +212,42 @@ class NetworkRecorder:
                     self.wfile.write(body)
 
             def do_GET(self):
-                if self.path in ("/", "/index.html"):
+                path = urlparse(self.path).path
+                if path in ("/", "/index.html"):
                     self._send(200, PAGE.replace("__TOKEN__", rec.token).encode("utf-8"),
                                "text/html; charset=utf-8")
-                elif self.path == "/ws":
+                elif path == "/ws":
                     rec._serve_ws(self)
-                elif self.path == "/rtc-available":
+                elif path == "/rtc-available":
                     self._send(200, json.dumps({"aiortc": HAVE_AIORTC}).encode(),
                                "application/json")
-                elif self.path == "/api/state":
-                    self._send(200, rec.state_json.encode(), "application/json")
-                elif self.path == "/api/watches":
-                    self._send(200, rec.watches_json.encode(), "application/json")
+                elif path in ("/api/state", "/api/watches"):
+                    if not self._authed():
+                        self._send(403, b'{"ok":false,"err":"bad token"}', "application/json")
+                        return
+                    body = (rec.state_json if path == "/api/state"
+                            else rec.watches_json).encode()
+                    self._send(200, body, "application/json")
                 else:
                     self._send(404)
 
             def do_POST(self):
                 if self.path == "/rtc-offer":
-                    n = int(self.headers.get("Content-Length", 0))
-                    offer = json.loads(self.rfile.read(n) or b"{}")
+                    if not self._authed():
+                        self._send(403, b'{"ok":false,"err":"bad token"}', "application/json")
+                        return
+                    n = _content_length(self.headers, 65536)
                     try:
+                        offer = json.loads(self.rfile.read(n) or b"{}")
                         answer = rec._rtc_answer(offer)
                         self._send(200, json.dumps(answer).encode(), "application/json")
                     except Exception as e:
                         self._send(500, str(e).encode())
                 elif self.path == "/api/cmd":
-                    if self.headers.get("X-WG-Token", "") != rec.token:
+                    if not self._authed():
                         self._send(403, b'{"ok":false,"err":"bad token"}', "application/json")
                         return
-                    n = min(int(self.headers.get("Content-Length", 0) or 0), 4096)
+                    n = _content_length(self.headers, 4096)
                     try:
                         obj = json.loads(self.rfile.read(n) or b"{}")
                         rec.cmd_q.put_nowait(obj)
@@ -223,18 +258,21 @@ class NetworkRecorder:
                     self._send(404)
 
         ip = lan_ip()
+        # Bind only to the LAN address, not 0.0.0.0 -- the pickup has no business
+        # being reachable over a VPN or a public-Wi-Fi interface.
+        bind = ip
         # Prefer a stable port so the URL does not change between recordings.
         candidates = ([self._want_port + i for i in range(20)] if self._want_port
                       else []) + [0]
         self._srv = None
         for cand in candidates:
             try:
-                self._srv = _Server(("0.0.0.0", cand), Handler)
+                self._srv = _Server((bind, cand), Handler)
                 break
             except OSError:
                 continue
         if self._srv is None:
-            self._srv = _Server(("0.0.0.0", 0), Handler)
+            self._srv = _Server((bind, 0), Handler)
         self.port = self._srv.server_address[1]
 
         self.secure = False
@@ -246,6 +284,14 @@ class NetworkRecorder:
                 cf.write(cert_pem + key_pem)
                 cf.close()
                 self._certfile = cf.name
+                try:
+                    import os as _os
+                    _os.chmod(self._certfile, 0o600)     # private key -- owner only
+                except OSError:
+                    pass
+                # Belt and braces: drop the key file even if we exit uncleanly.
+                import atexit
+                atexit.register(self._wipe_certfile)
                 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
                 ctx.load_cert_chain(self._certfile)
                 self._srv.socket = ctx.wrap_socket(self._srv.socket, server_side=True)
@@ -315,13 +361,7 @@ class NetworkRecorder:
         self._rtc_thread = None
         self._rtc_pcs = set()
 
-        if self._certfile:
-            try:
-                import os
-                os.remove(self._certfile)
-            except OSError:
-                pass
-            self._certfile = None
+        self._wipe_certfile()
         self._last_rx = 0.0
         self.port = 0
         self.url = ""
@@ -415,8 +455,10 @@ class NetworkRecorder:
 
     # -- WebSocket (hand-rolled, receive-only for audio) -------------------------
     def _serve_ws(self, handler):
+        upgrade = handler.headers.get("Upgrade", "").lower()
+        version = handler.headers.get("Sec-WebSocket-Version", "")
         key = handler.headers.get("Sec-WebSocket-Key", "")
-        if not key:
+        if "websocket" not in upgrade or version != "13" or not key:
             handler._send(400)
             return
         accept = base64.b64encode(
@@ -432,11 +474,17 @@ class NetworkRecorder:
         except OSError:
             pass
         src_sr = float(self.samplerate)
+        last_data = time.time()
         try:
             while not self._closing.is_set():
                 frame = _ws_read_frame(conn, self._closing)
                 if frame is None:
-                    break
+                    break                   # client disconnected
+                if frame is _IDLE:
+                    if time.time() - last_data > 30.0:
+                        break               # silent client -- free the thread
+                    continue
+                last_data = time.time()
                 opcode, payload = frame
                 if opcode == 0x8:            # close
                     break
@@ -518,6 +566,9 @@ class NetworkRecorder:
 # minimal WebSocket frame codec
 # --------------------------------------------------------------------------
 
+_IDLE = object()          # recv timed out with nothing pending (not a disconnect)
+
+
 def _recv_exact(conn, n, stop=None):
     out = b""
     while len(out) < n:
@@ -526,7 +577,9 @@ def _recv_exact(conn, n, stop=None):
         except socket.timeout:
             if stop is not None and stop.is_set():
                 return None
-            continue
+            if not out:
+                return _IDLE          # between frames -- caller can idle-time-out
+            continue                  # mid-frame -- keep waiting for the rest
         except OSError:
             return None
         if not chunk:
@@ -537,8 +590,8 @@ def _recv_exact(conn, n, stop=None):
 
 def _ws_read_frame(conn, stop=None):
     hdr = _recv_exact(conn, 2, stop)
-    if hdr is None:
-        return None
+    if hdr is None or hdr is _IDLE:
+        return hdr
     b0, b1 = hdr[0], hdr[1]
     opcode = b0 & 0x0F
     masked = b1 & 0x80
@@ -671,6 +724,8 @@ const TOKEN="__TOKEN__";
 let ac,node,src,gainNode,dest,stream,ws,pc,wake,running=false,clips=0,retry=0,poll=null,
     runSeen=false;
 const $=id=>document.getElementById(id);
+const AUTH={headers:{'X-WG-Token':TOKEN}};
+const get=p=>fetch(p,AUTH);
 const status=$("status"),desk=$("desk"),bar=$("bar"),clip=$("clip"),prog=$("prog"),
       gainEl=$("gain"),gval=$("gval"),goBtn=$("go"),stopBtn=$("stop"),
       saveBtn=$("save"),watchEl=$("watch"),durEl=$("dur"),nosleep=$("nosleep"),
@@ -717,7 +772,7 @@ document.addEventListener('visibilitychange',()=>{
 
 async function loadWatches(sel){
   try{
-    const list=await (await fetch('/api/watches')).json();
+    const list=await (await get('/api/watches')).json();
     const keep=sel||watchEl.value;
     watchEl.innerHTML='<option value="">(no watch)</option>'+
       list.map(w=>'<option value="'+w.id+'">'+w.label.replace(/</g,'&lt;')+'</option>').join('');
@@ -729,7 +784,7 @@ watchEl.onchange=()=>cmd('select',{id:watchEl.value});
 
 function fmt(v,d){ return (v===null||v===undefined)?'--':Number(v).toFixed(d); }
 async function refresh(){
-  let s; try{ s=await (await fetch('/api/state')).json(); }catch(e){ return; }
+  let s; try{ s=await (await get('/api/state')).json(); }catch(e){ return; }
   if(!s.device_is_net)
     desk.textContent='Desktop input is not set to the phone pickup -- choose it there.';
   else if(s.listening)
@@ -857,7 +912,8 @@ async function startRtc(){
   await new Promise(res=>{ if(pc.iceGatheringState==='complete')res();
     else pc.onicegatheringstatechange=()=>{ if(pc.iceGatheringState==='complete')res(); }; });
   let r;
-  try{ r=await fetch('/rtc-offer',{method:'POST',headers:{'Content-Type':'application/json'},
+  try{ r=await fetch('/rtc-offer',{method:'POST',
+    headers:{'Content-Type':'application/json','X-WG-Token':TOKEN},
     body:JSON.stringify(pc.localDescription)}); }
   catch(e){ status.textContent='WebRTC could not reach WatchGrapher'; stop(); return; }
   if(!r.ok){ status.textContent='WebRTC failed: '+await r.text(); stop(); return; }
