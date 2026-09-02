@@ -386,10 +386,13 @@ class WatchEditor(QtWidgets.QDialog):
         hl.setContentsMargins(0, 0, 0, 0)
         hl.addWidget(bph)
         hl.addWidget(bclr)
+        self.e_tags = QtWidgets.QLineEdit(", ".join(self.watch.tags))
+        self.e_tags.setPlaceholderText("comma-separated, e.g. daily, safe queen, for sale")
         self.e_notes = QtWidgets.QPlainTextEdit(self.watch.notes)
         self.e_notes.setFixedHeight(90)
         f.addRow(self.lbl_photo)
         f.addRow(hb)
+        f.addRow("Tags", self.e_tags)
         f.addRow("Notes", self.e_notes)
 
         scroll.setWidget(inner)
@@ -559,6 +562,7 @@ class WatchEditor(QtWidgets.QDialog):
     def result_watch(self):
         w = self.watch
         w.nickname = self.e_nick.text().strip()
+        w.tags = [t.strip() for t in self.e_tags.text().split(",") if t.strip()]
         w.brand = self.cmb_brand.currentText().strip()
         w.model = self.cmb_model.currentText().strip()
         w.reference = self.cmb_ref.currentText().strip()
@@ -3529,6 +3533,22 @@ alongside the application.</p>
         cap.setStyleSheet("color:#4da3ff;font-weight:bold;letter-spacing:.06em;"
                           "font-size:12px;padding:2px 0 6px;")
         left.addWidget(cap)
+
+        self.lbl_reminders = QtWidgets.QLabel("")
+        self.lbl_reminders.setWordWrap(True)
+        self.lbl_reminders.setStyleSheet(
+            "background:#2a2416;border:1px solid #5a4a1f;border-radius:6px;"
+            "padding:7px;color:#ffcf7a;font-size:11px;")
+        self.lbl_reminders.setVisible(False)
+        left.addWidget(self.lbl_reminders)
+
+        frow = QtWidgets.QHBoxLayout()
+        frow.addWidget(QtWidgets.QLabel("Show"))
+        self.cmb_watch_filter = QtWidgets.QComboBox()
+        self.cmb_watch_filter.currentIndexChanged.connect(lambda *_: self._refresh_watches())
+        frow.addWidget(self.cmb_watch_filter, 1)
+        left.addLayout(frow)
+
         self.lst_watches = QtWidgets.QListWidget()
         self.lst_watches.setMinimumWidth(260)
         self.lst_watches.setMaximumWidth(330)
@@ -6726,15 +6746,23 @@ alongside the application.</p>
         return canvas
 
     def _refresh_watches(self, select_id=None):
+        self._refresh_reminders()
+        rem_ids = {r["watch_id"] for r in getattr(self, "_reminders", [])}
+        sel = self._rebuild_watch_filter()
+
         self.lst_watches.blockSignals(True)
         self.lst_watches.clear()
         self._watch_ids = []
         px = self.lst_watches.iconSize().height()
         for w in self.collection.sorted_watches():
+            if not self._watch_passes_filter(w, sel, rem_ids):
+                continue
             n = len(w.history)
             sub = (f"{n} run{'s' if n != 1 else ''}"
                    + (f", last {sorted(h.when for h in w.history)[-1][:10]}" if n else
                       " -- never measured"))
+            if w.tags:
+                sub += "  #" + " #".join(w.tags[:3])
             it = QtWidgets.QListWidgetItem(f"{w.label}\n{sub}")
             it.setIcon(QtGui.QIcon(self._list_thumb(
                 self.collection.photo_path(w), px, fallback=w)))
@@ -6750,6 +6778,42 @@ alongside the application.</p>
         if hasattr(self, "cmb_watch"):
             self._sync_watch_combo(keep)
         self._publish_phone_watches()
+
+    def _refresh_reminders(self):
+        if not hasattr(self, "lbl_reminders"):
+            return
+        self._reminders = coll.reminders(self.collection)
+        if not self._reminders:
+            self.lbl_reminders.setVisible(False)
+            return
+        warn = [r for r in self._reminders if r["severity"] == "warn"]
+        info = [r for r in self._reminders if r["severity"] == "info"]
+        lines = [f"&#9888; {r['text']}" for r in warn] + [r["text"] for r in info]
+        self.lbl_reminders.setText(
+            f"<b>{len(self._reminders)} reminder(s)</b><br>" + "<br>".join(lines[:8]))
+        self.lbl_reminders.setVisible(True)
+
+    def _rebuild_watch_filter(self):
+        cur = self.cmb_watch_filter.currentText() if hasattr(self, "cmb_watch_filter") else ""
+        if not hasattr(self, "cmb_watch_filter"):
+            return ""
+        tags = sorted({t for w in self.collection.watches.values() for t in w.tags})
+        items = ["All watches"] + list(coll.SMART_COLLECTIONS.keys()) + \
+                [f"tag: {t}" for t in tags]
+        self.cmb_watch_filter.blockSignals(True)
+        self.cmb_watch_filter.clear()
+        self.cmb_watch_filter.addItems(items)
+        i = self.cmb_watch_filter.findText(cur)
+        self.cmb_watch_filter.setCurrentIndex(max(0, i))
+        self.cmb_watch_filter.blockSignals(False)
+        return self.cmb_watch_filter.currentText()
+
+    def _watch_passes_filter(self, w, sel, rem_ids):
+        if not sel or sel == "All watches":
+            return True
+        if sel.startswith("tag: "):
+            return sel[5:] in w.tags
+        return coll.smart_match(w, sel, open_ids=rem_ids)
 
     def _current_watch(self):
         r = self.lst_watches.currentRow()
@@ -6845,6 +6909,7 @@ alongside the application.</p>
                     f"({w.purchase_condition})" if w.purchase_condition else "",
                     f"from {w.purchased_from}" if w.purchased_from else "") if x)),
                 ("Target rate", f"{w.target_rate} s/day" if w.target_rate else ""),
+                ("Tags", ", ".join(w.tags)),
                 ("Last service", w.last_service)]
         html = ["<div style='font-family:Segoe UI,sans-serif;color:#c8d0dc;font-size:12px'>",
                 f"<h3 style='margin:0 0 6px'>{w.label}</h3><table>"]
