@@ -563,11 +563,11 @@ of systematic error on every rate reading, and cheap interfaces are worse.
 Start listening on the real device (a watch does not need to be on the
 pickup), then press **Calibrate**: for the window you set, it fixes the true
 time against NTP every 25 s and least-squares-fits the sample count against
-it. Twenty minutes gets it to a few ppm. Switching tabs is fine, and a one-off
-stream stall that restarts the audio just re-anchors the measurement and carries
-on. Pressing Stop ends it; so does a stream that keeps dropping out, since a
-device that cannot hold a steady count for the whole window cannot be calibrated
-against it. The result is stored per device, dated,
+it. Twenty minutes gets it to a few ppm. Switching tabs is fine. If the
+stall-recovery watchdog rebuilds the audio stream partway through, calibration
+keeps going on the new stream: it fits each unbroken stretch on its own and
+combines them, so a restart costs a fix or two, not the run. Only pressing Stop
+ends it early. The result is stored per device, dated,
 and applied to the rate output only (amplitude and beat error are ratios
 within one capture and do not care). One good calibration lasts a year unless
 you move the setup or the room temperature swings with the season -- the Sync
