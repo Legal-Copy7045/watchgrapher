@@ -680,6 +680,81 @@ class ServiceEditor(QtWidgets.QDialog):
         return rec, list(self._new_docs), list(self._removed)
 
 
+class MicCalDialog(QtWidgets.QDialog):
+    """Play a sine sweep, capture it, plot where the pickup rolls off."""
+
+    done = QtCore.Signal(object, object, str)   # freqs, db, error
+
+    def __init__(self, samplerate, in_device, parent=None):
+        super().__init__(parent)
+        self.sr = int(samplerate)
+        self.in_device = in_device
+        self.curve = None
+        self.setWindowTitle("Microphone response calibration")
+        self.setMinimumSize(560, 460)
+        v = QtWidgets.QVBoxLayout(self)
+        v.addWidget(QtWidgets.QLabel(
+            "Plays a 4 s sine sweep (80 Hz - 16 kHz) out the default output and "
+            "measures what the pickup returns. This is the whole chain -- speaker, "
+            "room, mic -- so read it as 'where is my pickup deaf', not an absolute "
+            "calibration. Set the output volume to a comfortable, non-distorting level."))
+        self.p = pg.PlotWidget(title="Record-chain magnitude response")
+        self.p.setLabel("bottom", "frequency", units="Hz")
+        self.p.setLabel("left", "level", units="dB")
+        self.p.setLogMode(x=True, y=False)
+        self.p.showGrid(x=True, y=True, alpha=0.25)
+        self.c = self.p.plot(pen=pg.mkPen("#4da3ff", width=2))
+        v.addWidget(self.p, 1)
+        self.lbl = QtWidgets.QLabel("")
+        self.lbl.setWordWrap(True)
+        v.addWidget(self.lbl)
+        bb = QtWidgets.QDialogButtonBox()
+        self.b_run = bb.addButton("Run sweep", QtWidgets.QDialogButtonBox.ActionRole)
+        self.b_save = bb.addButton("Save to pickup profile", QtWidgets.QDialogButtonBox.AcceptRole)
+        bb.addButton(QtWidgets.QDialogButtonBox.Close)
+        self.b_save.setEnabled(False)
+        self.b_run.clicked.connect(self._run)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+        self.done.connect(self._show)
+
+    def _run(self):
+        self.b_run.setEnabled(False)
+        self.lbl.setText("Playing sweep...")
+        threading.Thread(target=self._worker, daemon=True).start()
+
+    def _worker(self):
+        try:
+            ref = audio._sweep_and_reference(4.0, self.sr, 80.0, 16000.0)
+            play = (ref * 0.5).reshape(-1, 1)
+            dev = None if self.in_device in (None, "SIM") else self.in_device
+            rec = audio.sd.playrec(play, samplerate=self.sr, channels=1,
+                                   device=(None, dev))
+            audio.sd.wait()
+            rec = np.asarray(rec).reshape(-1)
+            f, db = audio.mic_response_from_capture(rec, ref, self.sr)
+            self.done.emit(f, db, "")
+        except Exception as e:                       # pragma: no cover - hardware
+            self.done.emit(None, None, f"{type(e).__name__}: {e}")
+
+    def _show(self, f, db, err):
+        self.b_run.setEnabled(True)
+        if err or f is None or len(f) < 4:
+            self.lbl.setText(err or "Could not measure a response -- check the output "
+                             "is audible and the pickup is picking it up.")
+            return
+        self.c.setData(f, db)
+        self.curve = (list(f), list(db))
+        self.b_save.setEnabled(True)
+        lo = f[db > -3][0] if np.any(db > -3) else f[0]
+        hi_mask = db > -6
+        hi = f[hi_mask][-1] if np.any(hi_mask) else f[-1]
+        self.lbl.setText(
+            f"Roughly flat within 6 dB from {lo:.0f} Hz to {hi:.0f} Hz. Escapement "
+            f"energy sits around 2-12 kHz -- if the pickup is down more than 10 dB up "
+            f"there, tighten the filter band to where it still hears well.")
+
+
 class CrossCheckDialog(QtWidgets.QDialog):
     """Compare the acoustic reading against a hardware timegrapher's numbers."""
 
@@ -1851,6 +1926,13 @@ class MainWindow(QtWidgets.QMainWindow):
         vm.addAction(self.act_agc)
 
         tm = mb.addMenu("&Tools")
+        mic_act = QtGui.QAction("Microphone response calibration...", self)
+        mic_act.setToolTip(
+            "Play a sine sweep and measure where the pickup is deaf. Captures the "
+            "whole chain -- speaker, room, mic -- so it is advisory; mainly useful "
+            "for choosing the filter band.")
+        mic_act.triggered.connect(self._mic_response_cal)
+        tm.addAction(mic_act)
         xchk_act = QtGui.QAction("Cross-check against a hardware timegrapher...", self)
         xchk_act.setToolTip(
             "Enter what a Witschi / Weishi machine reads for the same watch and compare. "
@@ -1858,6 +1940,40 @@ class MainWindow(QtWidgets.QMainWindow):
             "sample-clock calibration (rate).")
         xchk_act.triggered.connect(self._cross_check)
         tm.addAction(xchk_act)
+
+    def _mic_response_cal(self):
+        if not audio.HAVE_SD:
+            QtWidgets.QMessageBox.warning(self, "Microphone response",
+                                          "Audio backend not available.")
+            return
+        key = self._pickup_key()
+        if not key:
+            QtWidgets.QMessageBox.information(
+                self, "Microphone response", "Select a real input device first.")
+            return
+        was_listening = self.recorder is not None
+        if was_listening:
+            if QtWidgets.QMessageBox.question(
+                    self, "Microphone response",
+                    "This needs exclusive use of the input. Stop listening and run "
+                    "the sweep?") != QtWidgets.QMessageBox.Yes:
+                return
+            self._suppress_finish = True
+            self._toggle_listen(False)
+            self._suppress_finish = False
+        dlg = MicCalDialog(int(self.cmb_sr.currentText()),
+                           self.cmb_dev.currentData(), parent=self)
+        if dlg.exec() == QtWidgets.QDialog.Accepted and dlg.curve is not None:
+            import json
+            self._pickup_profiles = self._load_profiles()
+            self._pickup_profiles.setdefault(key, {})["mic_response"] = [
+                [round(f, 1), round(d, 2)] for f, d in zip(*dlg.curve)]
+            try:
+                with open(self._profiles_path(), "w", encoding="utf-8") as fh:
+                    json.dump(self._pickup_profiles, fh, indent=2)
+                self.status.showMessage(f"Saved microphone response for '{key}'.", 5000)
+            except OSError as e:
+                QtWidgets.QMessageBox.warning(self, "Microphone response", str(e))
 
     def _set_agc(self, on):
         if self.recorder is not None:
@@ -3284,7 +3400,15 @@ alongside the application.</p>
                 spn.setValue(p[k])
                 spn.blockSignals(False)
         self._push_cfg()
-        self.status.showMessage(f"Loaded saved filter settings for '{key}'.", 4000)
+        msg = f"Loaded saved filter settings for '{key}'."
+        mr = p.get("mic_response")
+        if mr and len(mr) > 8:
+            arr = np.asarray(mr, dtype=float)
+            usable = arr[arr[:, 1] > -10.0]
+            if usable.size and usable[-1, 0] < float(self.spn_hi.value()) - 500:
+                msg += (f" Its measured response is down past {usable[-1, 0]:.0f} Hz -- "
+                        f"consider lowering the high band there.")
+        self.status.showMessage(msg, 6000)
 
     def _save_pickup_profile(self):
         import json

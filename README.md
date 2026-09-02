@@ -776,6 +776,14 @@ window and sub-noise threshold against the selected input device; picking that
 device again loads them. A piezo disc and an open-air microphone want very
 different bands, and this remembers each.
 
+**Microphone response calibration** (Tools menu) plays a 4-second sine sweep
+out the default output and measures what the pickup returns, showing where it
+rolls off. It captures the whole chain -- speaker, room, mic -- so it is
+advisory, not an absolute calibration; its use is choosing the filter band. If
+your pickup is 15 dB down by 8 kHz there is no point running the high band at
+12. The curve is stored in the pickup profile and, on load, nudges you to lower
+the high band if the response ends well below it.
+
 **Escapement animation** (View menu). A schematic lever escapement -- balance,
 pallet fork, escape wheel -- driven from the live amplitude, beat rate and
 unlocking interval, with a 1x to 1/50 speed slider and the unlock / impulse /
