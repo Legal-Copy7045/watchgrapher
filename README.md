@@ -555,8 +555,10 @@ service is the clearest read on whether it achieved anything.
 
 **Service log.** Each entry records the date, type (full service, regulation,
 repair, warranty...), who did it and where, cost and currency, warranty
-period, notes, and any number of attached documents -- a scanned invoice or
-service report, PDF or image.
+period, a water-resistance test (pass/fail, the rating held, the method and
+test pressure), notes, and any number of attached documents -- a scanned
+invoice or service report, PDF or image. The water-resistance result shows in
+the log line and the watch report.
 
 **Service checklist.** *Service checklist...* opens a working checklist for the
 watch's caliber -- phases in order (teardown, cleaning, inspection, lubrication
