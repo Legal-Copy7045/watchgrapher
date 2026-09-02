@@ -1,12 +1,14 @@
 """
 Phone (or any browser) as a remote pickup.
 
-Runs a small web server on the LAN. Open the URL it prints on a phone, tap
-Start, and the browser streams microphone audio back -- either as raw Int16
-PCM over a hand-rolled WebSocket (no dependencies, the default) or over
-WebRTC (needs `aiortc`, better on a marginal Wi-Fi link). Either way the
-audio lands in a ring buffer that presents the same surface as
-audio.Recorder, so the rest of the app treats it as just another input.
+Runs a small web server on the LAN, on a stable port so the URL does not
+change between recordings. Open the URL on a phone, tap Start, and the
+browser streams microphone audio back -- either as raw Int16 PCM over a
+hand-rolled WebSocket, or over WebRTC (`aiortc`), which is steadier on a
+marginal Wi-Fi link. The page routes the mic through a gain node with a
+slider, and the server adds its own makeup AGC on top, because a watch tick
+through a phone mic is a very quiet signal. Either way the audio lands in a
+ring buffer that presents the same surface as audio.Recorder.
 
 Browsers only expose `navigator.mediaDevices` in a "secure context" -- HTTPS
 or localhost -- so the server generates a throwaway self-signed certificate
@@ -120,9 +122,10 @@ class NetworkRecorder:
         self.overflows = 0
         self.clips = 0
         self.agc_enabled = True
-        self.gain = 1.0
+        self.gain = 1.0                # server-side makeup gain (auto)
+        self._agc_target = 0.4
         self.opened_note = ""
-        self._want_port = port
+        self._want_port = int(port)
         self._srv: Optional[ThreadingHTTPServer] = None
         self._srv_thread: Optional[threading.Thread] = None
         self.port = 0
@@ -135,6 +138,12 @@ class NetworkRecorder:
     # -- lifecycle --------------------------------------------------------------
     def start(self):
         rec = self
+
+        class _Server(ThreadingHTTPServer):
+            # Windows lets two sockets share a port with SO_REUSEADDR, which would
+            # hide a real conflict from the "try the next port" loop below.
+            allow_reuse_address = False
+            daemon_threads = True
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
@@ -175,7 +184,18 @@ class NetworkRecorder:
                     self._send(404)
 
         ip = lan_ip()
-        self._srv = ThreadingHTTPServer(("0.0.0.0", self._want_port), Handler)
+        # Prefer a stable port so the URL does not change between recordings.
+        candidates = ([self._want_port + i for i in range(20)] if self._want_port
+                      else []) + [0]
+        self._srv = None
+        for cand in candidates:
+            try:
+                self._srv = _Server(("0.0.0.0", cand), Handler)
+                break
+            except OSError:
+                continue
+        if self._srv is None:
+            self._srv = _Server(("0.0.0.0", 0), Handler)
         self.port = self._srv.server_address[1]
 
         self.secure = False
@@ -278,10 +298,27 @@ class NetworkRecorder:
             return
         self.connected = True
         self._last_rx = time.time()
+        raw_p = float(np.max(np.abs(data)))
+        if raw_p >= 0.999:
+            self.clips += 1
+
+        # A phone mic on a watch tick is a very quiet signal. The page boosts it
+        # first (its gain slider); this adds an automatic makeup gain toward a
+        # comfortable level for the DSP -- same idea as the USB Recorder's AGC.
+        if self.agc_enabled:
+            pg = float(np.max(np.abs(data))) or 1e-4
+            if pg >= 0.98:
+                self.gain = max(0.5, self.gain * 0.8)
+            else:
+                want = np.clip(self._agc_target / (pg * self.gain), 0.2, 5.0)
+                self.gain = float(np.clip(self.gain * (0.98 + 0.02 * want), 0.5, 40.0))
+            data = data * self.gain
+        else:
+            self.gain = 1.0
+        np.clip(data, -1.0, 1.0, out=data)
+
         p = float(np.max(np.abs(data)))
         self.peak = max(self.peak * 0.92, p)
-        if p >= 0.999:
-            self.clips += 1
         self.frames += data.size
         with self._lock:
             k = data.size
@@ -463,17 +500,18 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
 <title>WatchGrapher pickup</title>
 <style>
   body{font-family:-apple-system,Segoe UI,sans-serif;background:#12161c;color:#e8eef7;
-       margin:0;padding:24px;text-align:center}
+       margin:0;padding:22px;text-align:center}
   h1{font-size:18px;font-weight:600}
   button{font-size:18px;padding:16px 28px;border-radius:10px;border:0;margin:8px;
          background:#4da3ff;color:#08101c;font-weight:700}
   button.stop{background:#ff5d5d}
-  #meter{height:16px;background:#1a1f27;border-radius:8px;margin:18px auto;max-width:320px}
+  #meter{height:16px;background:#1a1f27;border-radius:8px;margin:16px auto;max-width:340px}
   #bar{height:100%;width:0;background:#57d38c;border-radius:8px}
-  .row{margin:14px 0}
+  #clip{color:#ff5d5d;font-size:13px;min-height:16px}
+  .row{margin:12px 0}
   label{font-size:15px}
   #status{color:#8a94a4;font-size:14px;min-height:20px}
-  select{font-size:15px;padding:6px}
+  input[type=range]{width:280px}
 </style></head><body>
 <h1>WatchGrapher pickup</h1>
 <p id="status">idle</p>
@@ -483,59 +521,88 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
   <label><input type="radio" name="mode" value="rtc" id="rtcopt"> WebRTC</label>
 </div>
 <div id="meter"><div id="bar"></div></div>
+<div id="clip"></div>
+<div class="row">
+  <label>Boost&nbsp; <span id="gval">6&times;</span><br>
+  <input type="range" id="gain" min="1" max="20" step="1" value="6"></label>
+</div>
+<div class="row">
+  <label><input type="checkbox" id="hwagc"> Let the phone auto-level (may pump)</label>
+</div>
 <button id="go">Start</button>
 <button id="stop" class="stop" disabled>Stop</button>
 <p id="hint" style="color:#5a6472;font-size:13px">
-Keep this screen on. Put the phone mic close to the movement.</p>
+Keep this screen on. Press the phone's mic port against the case back.<br>
+Turn Boost up until the meter sits high but the red CLIP line stays quiet.</p>
 <script>
-let ac, node, stream, ws, pc, running=false;
-const status=document.getElementById('status'), bar=document.getElementById('bar');
+let ac, node, src, gainNode, dest, stream, ws, pc, running=false, clips=0;
+const status=document.getElementById('status'), bar=document.getElementById('bar'),
+      clip=document.getElementById('clip'), gainEl=document.getElementById('gain'),
+      gval=document.getElementById('gval');
 fetch('/rtc-available').then(r=>r.json()).then(j=>{
-  if(!j.aiortc){document.getElementById('rtcopt').disabled=true;
-    document.getElementById('rtcopt').parentNode.style.opacity=.4;
-    document.getElementById('rtcopt').parentNode.title='Server was started without aiortc';}
+  if(!j.aiortc){const o=document.getElementById('rtcopt');o.disabled=true;
+    o.parentNode.style.opacity=.4;
+    o.parentNode.title='Start the app with aiortc installed for WebRTC';}
 });
+gainEl.oninput=()=>{ gval.innerHTML=gainEl.value+'&times;';
+  if(gainNode) gainNode.gain.value=parseFloat(gainEl.value); };
 function mode(){return document.querySelector('input[name=mode]:checked').value;}
+
 async function start(){
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
     status.innerHTML='This browser will not give microphone access unless the '+
       'page is loaded over <b>https</b> (or localhost). '+
       (location.protocol==='https:'
-        ? 'It is https here, so this browser is just too old -- try Chrome or Safari.'
-        : 'Reload this page using <b>https://'+location.host+'</b>. If that will not '+
-          'connect, the app needs the "cryptography" package installed to serve https.');
+        ? 'It is https here, so the browser is just too old -- try Chrome or Safari.'
+        : 'Reload using <b>https://'+location.host+'</b>. If that will not connect, '+
+          'the app needs the "cryptography" package to serve https.');
     return;
   }
+  const agc=document.getElementById('hwagc').checked;
   try{
     stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,
-      noiseSuppression:false,autoGainControl:false}});
-  }catch(e){status.textContent='mic denied: '+e+' -- check the browser did not block it.'; return;}
-  running=true;
+      noiseSuppression:false,autoGainControl:agc}});
+  }catch(e){status.textContent='mic denied: '+e+' -- check the browser did not block it.';return;}
+  running=true; clips=0;
   document.getElementById('go').disabled=true;
   document.getElementById('stop').disabled=false;
+  ac=new (window.AudioContext||window.webkitAudioContext)();
+  try{ await ac.resume(); }catch(e){}
+  src=ac.createMediaStreamSource(stream);
+  gainNode=ac.createGain(); gainNode.gain.value=parseFloat(gainEl.value);
+  src.connect(gainNode);
   if(mode()==='rtc'){ await startRtc(); } else { await startPcm(); }
 }
+
+function meter(pk){
+  bar.style.width=Math.min(100,pk*120)+'%';
+  if(pk>=0.99){ clips++; clip.textContent='CLIP -- turn Boost down'; }
+  else if(clips>0 && pk<0.6){ clips=Math.max(0,clips-1); if(clips===0) clip.textContent=''; }
+}
+
 async function startPcm(){
-  ac=new (window.AudioContext||window.webkitAudioContext)();
   ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
   ws.binaryType='arraybuffer';
-  ws.onopen=()=>{ ws.send(JSON.stringify({sr:ac.sampleRate})); status.textContent='streaming (PCM) @ '+Math.round(ac.sampleRate)+' Hz'; };
+  ws.onopen=()=>{ ws.send(JSON.stringify({sr:ac.sampleRate}));
+    status.textContent='streaming (PCM) @ '+Math.round(ac.sampleRate)+' Hz'; };
   ws.onclose=()=>{ if(running) stop(); };
-  const src=ac.createMediaStreamSource(stream);
   node=ac.createScriptProcessor(2048,1,1);
   node.onaudioprocess=e=>{
     const f=e.inputBuffer.getChannelData(0);
     let pk=0; const buf=new Int16Array(f.length);
     for(let i=0;i<f.length;i++){ const s=Math.max(-1,Math.min(1,f[i]));
       buf[i]=s<0?s*32768:s*32767; if(Math.abs(s)>pk)pk=Math.abs(s); }
-    bar.style.width=Math.min(100,pk*140)+'%';
+    meter(pk);
     if(ws.readyState===1) ws.send(buf.buffer);
   };
-  src.connect(node); node.connect(ac.destination);
+  gainNode.connect(node); node.connect(ac.destination);
 }
+
 async function startRtc(){
+  dest=ac.createMediaStreamDestination();
+  gainNode.connect(dest);
   pc=new RTCPeerConnection();
-  stream.getTracks().forEach(t=>pc.addTrack(t,stream));
+  dest.stream.getAudioTracks().forEach(t=>pc.addTrack(t,dest.stream));
   const offer=await pc.createOffer({offerToReceiveAudio:false});
   await pc.setLocalDescription(offer);
   await new Promise(res=>{ if(pc.iceGatheringState==='complete')res();
@@ -545,19 +612,20 @@ async function startRtc(){
   if(!r.ok){ status.textContent='WebRTC failed: '+await r.text(); stop(); return; }
   await pc.setRemoteDescription(await r.json());
   status.textContent='streaming (WebRTC)';
-  const mon=ac=new (window.AudioContext||window.webkitAudioContext)();
-  const s=mon.createMediaStreamSource(stream), a=mon.createAnalyser();
-  s.connect(a); const d=new Uint8Array(a.fftSize);
+  const a=ac.createAnalyser(); gainNode.connect(a);
+  const d=new Uint8Array(a.fftSize);
   (function tick(){ if(!running)return; a.getByteTimeDomainData(d);
     let pk=0; for(const v of d){ const x=Math.abs(v-128)/128; if(x>pk)pk=x; }
-    bar.style.width=Math.min(100,pk*160)+'%'; requestAnimationFrame(tick); })();
+    meter(pk); requestAnimationFrame(tick); })();
 }
+
 function stop(){
   running=false;
   document.getElementById('go').disabled=false;
   document.getElementById('stop').disabled=true;
-  status.textContent='stopped'; bar.style.width=0;
+  status.textContent='stopped'; bar.style.width=0; clip.textContent='';
   try{node&&node.disconnect();}catch(e){}
+  try{gainNode&&gainNode.disconnect();}catch(e){}
   try{ws&&ws.close();}catch(e){}
   try{pc&&pc.close();}catch(e){}
   try{stream&&stream.getTracks().forEach(t=>t.stop());}catch(e){}
