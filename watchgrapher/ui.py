@@ -2686,12 +2686,30 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _publish_phone_watches(self):
         nr = getattr(self, "_net_recorder", None)
-        if nr is not None:
-            import json
+        if nr is None:
+            return
+        import json
+        try:
+            nr.watches_json = json.dumps(self._phone_watch_payload())
+        except Exception:
+            pass
+        # Pre-render a small PNG for every watch that has a user photo, on this
+        # (GUI) thread, so the server just hands back bytes. Aspect ratio kept,
+        # letterboxed on white -- same as the desktop list.
+        thumbs = {}
+        for w in self.collection.sorted_watches(include_archived=True):
+            p = self.collection.photo_path(w)
+            if not p:
+                continue
             try:
-                nr.watches_json = json.dumps(self._phone_watch_payload())
+                pm = self._list_thumb(p, 120)
+                buf = QtCore.QBuffer()
+                buf.open(QtCore.QIODevice.WriteOnly)
+                pm.save(buf, "PNG")
+                thumbs[w.id] = bytes(buf.data())
             except Exception:
                 pass
+        nr.watch_thumbs = thumbs
 
     def _phone_state(self):
         def num(v):
@@ -6844,48 +6862,10 @@ alongside the application.</p>
                                           "\n\n".join(lines))
 
     def _reserve_headline(self):
-        """
-        The two figures a power-reserve run is really about:
-          power_reserve_h -- full wind to the watch running down (~135 deg)
-          practical_h     -- full wind to 200 deg, where timekeeping degrades
-        Read from the logged data where the run actually crossed each level,
-        else projected from the decay ('estimated'). Returns {} if too early.
-        """
-        from .analysis import reserve_crossings, reserve_forecast
-        if len(self._reserve) < 3:
-            return {}
-        a = np.array(self._reserve, dtype=float)
-        amps = a[:, 2][np.isfinite(a[:, 2])]
-        if amps.size < 2:
-            return {}
-        hrs = float(a[-1, 0] / 3600.0)
-        cross = reserve_crossings(self._reserve)
+        from .analysis import reserve_headline
         c = self._current_caliber()
         rated = getattr(c, "power_reserve_h", 0.0) if c else 0.0
-        fc = reserve_forecast(self._reserve, rated_hours=rated or None)
-        # smoothed current amplitude, not a possibly-spiky last sample
-        last = fc.amp_now if fc.amp_now == fc.amp_now else float(np.median(amps[-5:]))
-
-        prac = cross.get(200.0)
-        prac_est = False
-        if prac is None:
-            if last <= 200.0:
-                prac = hrs
-            elif fc.ready and fc.practical_hours == fc.practical_hours:
-                prac, prac_est = fc.practical_hours, True
-
-        stop = cross.get(135.0)
-        stop_est = False
-        if stop is None:
-            if last <= 135.0:
-                stop = hrs
-            elif fc.ready:
-                stop, stop_est = fc.full_hours, True
-
-        return {"power_reserve_h": stop, "practical_h": prac,
-                "estimated": bool(prac_est or stop_est),
-                "fc": fc, "last": last, "hrs": hrs, "rated": float(rated or 0.0),
-                "warning": fc.warning, "holding": (not fc.ready and stop is None)}
+        return reserve_headline(self._reserve, rated_hours=rated or None)
 
     def _reserve_headline_text(self, h=None):
         h = h or self._reserve_headline()

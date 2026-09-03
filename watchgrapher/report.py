@@ -574,15 +574,36 @@ def _reserve_section(watch):
            "<table><tr><th>Date</th><th class='n'>Power reserve</th>"
            "<th class='n'>Good time to</th><th class='n'>Run length</th>"
            "<th class='n'>Amplitude start &rarr; end</th><th>Isochronism</th></tr>"]
+    from .analysis import reserve_headline
+    from .calibers import CALIBERS
     for r in runs:
         amp = (f"{r.amp_first:.0f} &rarr; {r.amp_last:.0f}"
                if r.amp_first == r.amp_first else "--")
-        pr = getattr(r, "power_reserve_h", float("nan"))
-        prac = getattr(r, "practical_h", float("nan"))
-        if not (pr == pr) and r.hours_to_200 == r.hours_to_200:
-            prac = prac if prac == prac else r.hours_to_200
-        est = " est" if getattr(r, "pr_estimated", False) else ""
-        pr_txt = (f"~{pr:.0f} h{est}" if pr == pr else "--")
+        # Recompute from the raw samples so the plateau-aware method reaches
+        # historical runs too; fall back to the stored figures if no samples.
+        h = {}
+        if getattr(r, "samples", None):
+            c = CALIBERS.get(r.caliber_key)
+            rated = getattr(c, "power_reserve_h", 0.0) if c else 0.0
+            try:
+                h = reserve_headline([(s[0], s[1], s[2], s[3]) for s in r.samples],
+                                     rated_hours=rated or None)
+            except Exception:
+                h = {}
+        pr = h.get("power_reserve_h") if h else getattr(r, "power_reserve_h", float("nan"))
+        prac = h.get("practical_h") if h else getattr(r, "practical_h", float("nan"))
+        if pr is None:
+            pr = float("nan")
+        if prac is None:
+            prac = float("nan")
+        if not (prac == prac) and r.hours_to_200 == r.hours_to_200:
+            prac = r.hours_to_200
+        est = " est" if (h.get("estimated") if h else getattr(r, "pr_estimated", False)) else ""
+        if h and h.get("holding"):
+            rated = h.get("rated")
+            pr_txt = (f"holding, rated ~{rated:.0f} h" if rated else "holding")
+        else:
+            pr_txt = (f"~{pr:.0f} h{est}" if pr == pr else "--")
         prac_txt = (f"{prac:.0f} h" if prac == prac else "--")
         if r.iso_span == r.iso_span:
             mag = abs(r.iso_span)
@@ -971,10 +992,27 @@ def build_portfolio(path, collection, owner=""):
         rsv = sorted(getattr(w, "reserves", []), key=lambda r: r.when, reverse=True)
         if rsv:
             last = rsv[0]
-            prh = getattr(last, "power_reserve_h", float("nan"))
-            prtxt = (f"power reserve ~{prh:.0f} h"
-                     + (" (est)" if getattr(last, "pr_estimated", False) else "")
-                     if prh == prh else f"{_fmt(last.hours, 1)} h run")
+            _lh = {}
+            if getattr(last, "samples", None):
+                _lc = CALIBERS.get(last.caliber_key)
+                try:
+                    from .analysis import reserve_headline
+                    _lh = reserve_headline(
+                        [(s[0], s[1], s[2], s[3]) for s in last.samples],
+                        rated_hours=(getattr(_lc, "power_reserve_h", 0.0) or None) if _lc else None)
+                except Exception:
+                    _lh = {}
+            prh = (_lh.get("power_reserve_h") if _lh
+                   else getattr(last, "power_reserve_h", float("nan")))
+            prh = float("nan") if prh is None else prh
+            if _lh.get("holding"):
+                prtxt = "amplitude still holding"
+            elif prh == prh:
+                prtxt = ("power reserve ~%.0f h" % prh) + (
+                    " (est)" if (_lh.get("estimated") if _lh
+                                 else getattr(last, "pr_estimated", False)) else "")
+            else:
+                prtxt = f"{_fmt(last.hours, 1)} h run"
             p.append(f"<p><b>{len(rsv)} power-reserve run(s).</b> Most recent "
                      f"({last.when[:10]}): {prtxt}, amplitude "
                      f"{_fmt(last.amp_first, 0)}&ndash;{_fmt(last.amp_last, 0)} deg"
