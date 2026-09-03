@@ -262,13 +262,32 @@ class NetworkRecorder:
                     if not self._authed():
                         self._send(403, b'{"ok":false,"err":"bad token"}', "application/json")
                         return
-                    n = _content_length(self.headers, 4096)
+                    n = _content_length(self.headers, 8192)
                     try:
                         obj = json.loads(self.rfile.read(n) or b"{}")
                         rec.cmd_q.put_nowait(obj)
                     except (ValueError, queue.Full):
                         pass
                     self._send(200, b'{"ok":true}', "application/json")
+                elif self.path == "/api/lookup":
+                    if not self._authed():
+                        self._send(403, b'{"ok":false}', "application/json")
+                        return
+                    n = _content_length(self.headers, 2048)
+                    out = {}
+                    try:
+                        q = json.loads(self.rfile.read(n) or b"{}")
+                        from . import catalog
+                        e = catalog.lookup(str(q.get("reference", "")),
+                                           str(q.get("brand", "")))
+                        if e:
+                            out = {"brand": e.brand, "model": e.model,
+                                   "reference": e.reference, "nickname": e.nickname,
+                                   "caliber_key": e.caliber_key,
+                                   "caliber": (e.material or ""), "years": e.years}
+                    except Exception:
+                        pass
+                    self._send(200, json.dumps(out).encode(), "application/json")
                 else:
                     self._send(404)
 
@@ -655,109 +674,191 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
 <title>WatchGrapher remote</title>
 <style>
   :root{color-scheme:dark}
+  *{box-sizing:border-box}
   body{font-family:-apple-system,Segoe UI,sans-serif;background:#12161c;color:#e8eef7;
-       margin:0;padding:20px;text-align:center}
-  h1{font-size:17px;font-weight:600;margin:0 0 4px}
-  button{font-size:18px;padding:15px 26px;border-radius:10px;border:0;margin:6px;
+       margin:0;padding:0 16px 40px;text-align:center}
+  h1{font-size:16px;font-weight:600;margin:14px 0 2px}
+  button{font-size:17px;padding:13px 22px;border-radius:10px;border:0;margin:6px 4px;
          background:#4da3ff;color:#08101c;font-weight:700}
   button.stop{background:#ff5d5d;color:#fff}
   button:disabled{opacity:.4}
-  button.sec{background:#2a323e;color:#e8eef7;font-size:15px;padding:11px 18px}
-  select{font-size:16px;padding:9px;border-radius:8px;background:#1a1f27;color:#e8eef7;
-         border:1px solid #2a323e;max-width:92%}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;max-width:360px;margin:14px auto}
+  button.sec{background:#2a323e;color:#e8eef7;font-size:15px;padding:10px 16px;font-weight:600}
+  button.wide{display:block;width:100%;max-width:360px;margin:8px auto}
+  select,input[type=text],input[type=number],textarea{font-size:16px;padding:9px;
+    border-radius:8px;background:#1a1f27;color:#e8eef7;border:1px solid #2a323e;width:100%}
+  textarea{min-height:56px}
+  #nav{display:flex;gap:6px;max-width:360px;margin:6px auto 4px}
+  #nav button{flex:1;background:#1a1f27;color:#8a94a4;font-size:14px;padding:9px;font-weight:600}
+  #nav button.on{background:#2a323e;color:#e8eef7}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;max-width:360px;margin:12px auto}
   .tile{background:#1a1f27;border:1px solid #2a323e;border-radius:10px;padding:10px 6px}
   .tile .k{font-size:11px;color:#8a94a4;letter-spacing:.05em}
   .tile .v{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
-  #meter{height:14px;background:#1a1f27;border-radius:7px;margin:12px auto;max-width:340px}
-  #bar{height:100%;width:0;background:#57d38c;border-radius:7px}
+  .fld{max-width:360px;margin:8px auto;text-align:left}
+  .fld label{display:block;font-size:12px;color:#8a94a4;margin-bottom:3px}
+  .ck{display:block;max-width:360px;margin:10px auto;text-align:left;color:#c8d0dc;font-size:14px}
+  .card{max-width:360px;margin:10px auto;padding:12px;background:#1a1f27;
+        border:1px solid #2a323e;border-radius:12px;text-align:left}
+  #meter{height:12px;background:#1a1f27;border-radius:6px;margin:10px auto;max-width:340px}
+  #bar{height:100%;width:0;background:#57d38c;border-radius:6px}
   #clip{color:#ff5d5d;font-size:13px;min-height:16px}
   #status{color:#8a94a4;font-size:13px;min-height:18px}
-  #desk{color:#7fb2ff;font-size:13px;min-height:18px}
-  .row{margin:10px 0}
-  details{max-width:360px;margin:10px auto;text-align:left;color:#b6bfcc;font-size:14px}
+  #desk{color:#7fb2ff;font-size:13px;min-height:18px;margin:6px 0}
+  #prog{max-width:340px;margin:6px auto;color:#8a94a4;font-size:13px;min-height:16px}
+  .wrow{display:flex;justify-content:space-between;align-items:center;padding:9px 4px;
+        border-bottom:1px solid #232a34;font-size:14px}
+  .wrow small{color:#8a94a4}
+  .hint{max-width:360px;margin:2px auto 6px;font-size:12px;color:#7fd8a0;text-align:left}
+  details{max-width:360px;margin:14px auto;text-align:left;color:#b6bfcc;font-size:14px}
   summary{cursor:pointer;color:#8a94a4}
   input[type=range]{width:260px}
 </style></head><body>
 <h1>WatchGrapher remote</h1>
+<div id="nav">
+  <button data-v="measure" class="on">Measure</button>
+  <button data-v="watches">Watches</button>
+</div>
 <p id="desk">connecting...</p>
 
-<div class="row"><select id="watch"><option value="">(no watch)</option></select></div>
-<div class="row"><select id="dur">
-  <option value="0">Open-ended</option>
-  <option value="20">Timed 20 s</option>
-  <option value="30" selected>Timed 30 s</option>
-  <option value="60">Timed 60 s</option>
-  <option value="120">Timed 2 min</option>
-  <option value="300">Timed 5 min</option>
-</select></div>
+<!-- ===================== MEASURE ===================== -->
+<div id="v_measure">
 
-<div class="grid">
-  <div class="tile"><div class="k">RATE s/d</div><div class="v" id="t_rate">--</div></div>
-  <div class="tile"><div class="k">AMPLITUDE</div><div class="v" id="t_amp">--</div></div>
-  <div class="tile"><div class="k">BEAT ERROR ms</div><div class="v" id="t_be">--</div></div>
-  <div class="tile"><div class="k">BEAT RATE</div><div class="v" id="t_bph">--</div></div>
-</div>
-
-<div id="prog" style="max-width:340px;margin:6px auto;color:#8a94a4;font-size:13px;
-     min-height:16px"></div>
-
-<div id="resv" style="display:none;max-width:360px;margin:10px auto;padding:12px;
-     background:#141d16;border:1px solid #2c4030;border-radius:12px;text-align:left">
-  <div style="font-weight:700;color:#7fd8a0;margin-bottom:4px">Power reserve run</div>
-  <div id="resv_head" style="font-size:12px;color:#c8d0dc;font-variant-numeric:tabular-nums"></div>
-  <canvas id="resv_spark" width="320" height="88" style="width:100%;height:88px;
-     margin:8px 0 6px;background:#0f1512;border-radius:6px"></canvas>
-  <div id="resv_body" style="font-size:13px;color:#b6bfcc;line-height:1.55"></div>
-</div>
-
-<div id="meter"><div id="bar"></div></div>
-<div id="clip"></div>
-<p id="status">idle</p>
-<video id="nosleep" playsinline muted loop style="position:fixed;width:1px;height:1px;
-  opacity:0;pointer-events:none"></video>
-
-<button id="go">Start test</button>
-<button id="stop" class="stop" disabled>Stop</button>
-<div class="row"><button id="save" class="sec" disabled>Save run to watch</button></div>
-
-<div id="finished" style="display:none;max-width:360px;margin:12px auto;padding:14px;
-     background:#1a1f27;border:1px solid #2a323e;border-radius:12px">
-  <div style="font-weight:700;margin-bottom:6px">Run finished</div>
-  <pre id="fsum" style="white-space:pre-wrap;text-align:left;color:#c8d0dc;
-       font-family:inherit;font-size:14px;margin:0 0 10px"></pre>
-  <button id="fsave" class="sec">Save to watch</button>
-  <button id="fdiscard" class="sec">Discard</button>
-</div>
-
-<details>
-  <summary>Audio settings</summary>
-  <div class="row">
-    <label><input type="radio" name="mode" value="pcm" checked> PCM (WebSocket)</label>
-    &nbsp; <label><input type="radio" name="mode" value="rtc" id="rtcopt"> WebRTC</label>
+  <div id="newrun">
+    <div class="fld"><label>Watch</label><select id="nr_watch"></select></div>
+    <div class="fld"><label>Position</label><select id="nr_pos"></select></div>
+    <div class="fld"><label>Wind state</label><select id="nr_wind"></select></div>
+    <div class="fld"><label>Duration</label><select id="nr_dur">
+      <option value="0">Open-ended</option>
+      <option value="20">Timed 20 s</option>
+      <option value="30" selected>Timed 30 s</option>
+      <option value="60">Timed 60 s</option>
+      <option value="120">Timed 2 min</option>
+      <option value="300">Timed 5 min</option>
+    </select></div>
+    <label class="ck"><input type="checkbox" id="nr_pr"> Also log power reserve</label>
+    <div id="nr_pr_opts" style="display:none">
+      <div class="fld"><label>Sample every (seconds)</label>
+        <input type="number" id="nr_pr_int" value="300" min="10" max="3600"></div>
+      <div class="fld"><label>Target hours (0 = until stopped)</label>
+        <input type="number" id="nr_pr_tgt" value="48" min="0" max="120"></div>
+    </div>
+    <button id="nr_go" class="wide">Start run</button>
   </div>
-  <div class="row">Boost <span id="gval">6&times;</span><br>
-    <input type="range" id="gain" min="1" max="20" step="1" value="6"></div>
-  <div class="row"><label><input type="checkbox" id="hwagc">
-    Let the phone auto-level (may pump)</label></div>
-  <p style="color:#5a6472;font-size:13px">Press the phone's mic port against the case
-  back. Turn Boost up until the meter sits high but CLIP stays quiet.</p>
-</details>
+
+  <div id="micprompt" class="card" style="display:none">
+    <div style="font-weight:700;margin-bottom:8px">Which microphone for this run?</div>
+    <button id="mic_desk" class="sec wide">The desktop's own pickup</button>
+    <button id="mic_phone" class="sec wide">This phone's microphone</button>
+    <button id="mic_cancel" class="sec wide">Cancel</button>
+  </div>
+
+  <div id="monitor" style="display:none">
+    <div id="mon_head" class="card" style="font-size:13px;color:#c8d0dc"></div>
+    <div class="grid">
+      <div class="tile"><div class="k">RATE s/d</div><div class="v" id="t_rate">--</div></div>
+      <div class="tile"><div class="k">AMPLITUDE</div><div class="v" id="t_amp">--</div></div>
+      <div class="tile"><div class="k">BEAT ERROR ms</div><div class="v" id="t_be">--</div></div>
+      <div class="tile"><div class="k">BEAT RATE</div><div class="v" id="t_bph">--</div></div>
+    </div>
+    <div id="prog"></div>
+
+    <div id="resv" style="display:none" class="card">
+      <div style="font-weight:700;color:#7fd8a0;margin-bottom:4px">Power reserve run</div>
+      <div id="resv_head" style="font-size:12px;color:#c8d0dc;font-variant-numeric:tabular-nums"></div>
+      <canvas id="resv_spark" width="320" height="88" style="width:100%;height:88px;
+        margin:8px 0 6px;background:#0f1512;border-radius:6px"></canvas>
+      <div id="resv_body" style="font-size:13px;color:#b6bfcc;line-height:1.55"></div>
+    </div>
+
+    <div id="meter"><div id="bar"></div></div>
+    <div id="clip"></div>
+    <button id="mon_pr" class="sec wide" style="display:none">Start power reserve log</button>
+    <button id="stop" class="stop wide">Stop run</button>
+  </div>
+
+  <div id="finished" class="card" style="display:none">
+    <div style="font-weight:700;margin-bottom:6px">Run finished</div>
+    <pre id="fsum" style="white-space:pre-wrap;text-align:left;color:#c8d0dc;
+         font-family:inherit;font-size:14px;margin:0 0 10px"></pre>
+    <button id="fsave" class="sec">Save to watch</button>
+    <button id="fdiscard" class="sec">Discard</button>
+  </div>
+
+  <p id="status"></p>
+  <video id="nosleep" playsinline muted loop style="position:fixed;width:1px;height:1px;
+    opacity:0;pointer-events:none"></video>
+
+  <details id="audiocfg">
+    <summary>Audio settings (for phone-as-pickup)</summary>
+    <div class="fld">
+      <label><input type="radio" name="mode" value="pcm" checked> PCM (WebSocket)</label>
+      &nbsp; <label><input type="radio" name="mode" value="rtc" id="rtcopt"> WebRTC</label>
+    </div>
+    <div class="fld">Boost <span id="gval">6&times;</span><br>
+      <input type="range" id="gain" min="1" max="20" step="1" value="6"></div>
+    <label class="ck"><input type="checkbox" id="hwagc">
+      Let the phone auto-level (may pump)</label>
+    <p style="color:#5a6472;font-size:13px">Press the phone's mic port against the case
+    back. Turn Boost up until the meter sits high but CLIP stays quiet.</p>
+  </details>
+</div>
+
+<!-- ===================== WATCHES ===================== -->
+<div id="v_watches" style="display:none">
+  <div id="wlist" style="max-width:360px;margin:6px auto"></div>
+  <label class="ck"><input type="checkbox" id="w_arch"> show archived</label>
+  <button id="w_add" class="wide">+ Add watch</button>
+
+  <div id="w_form" class="card" style="display:none">
+    <div id="wf_title" style="font-weight:700;margin-bottom:6px">Add watch</div>
+    <div class="fld"><label>Brand</label><input type="text" id="wf_brand"></div>
+    <div class="fld"><label>Model</label><input type="text" id="wf_model"></div>
+    <div class="fld"><label>Reference</label>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="wf_ref" style="flex:1">
+        <button id="wf_lookup" class="sec" style="margin:0">look up</button>
+      </div></div>
+    <div id="wf_hint" class="hint"></div>
+    <div class="fld"><label>Nickname</label><input type="text" id="wf_nick"></div>
+    <div class="fld"><label>Tags (comma separated)</label><input type="text" id="wf_tags"></div>
+    <div class="fld"><label>Target rate (s/day)</label><input type="text" id="wf_target"></div>
+    <div class="fld"><label>Serial</label><input type="text" id="wf_serial"></div>
+    <div class="fld"><label>Notes</label><textarea id="wf_notes"></textarea></div>
+    <button id="wf_save">Save</button>
+    <button id="wf_arch" class="sec" style="display:none">Archive</button>
+    <button id="wf_cancel" class="sec">Cancel</button>
+  </div>
+</div>
 
 <script>
 const TOKEN="__TOKEN__";
-let ac,node,src,gainNode,dest,stream,ws,pc,wake,running=false,clips=0,retry=0,poll=null,
-    runSeen=false;
+let ac,node,src,gainNode,dest,stream,ws,pc,wake,streaming=false,clips=0,retry=0,poll=null;
+let micMode=null;          // 'phone' | 'desktop' while a phone-started run is active
+let phoneRun=false;        // this phone kicked off the current run
+let curView="measure", editing=null, WATCHES=[];
 const $=id=>document.getElementById(id);
 const AUTH={headers:{'X-WG-Token':TOKEN}};
 const get=p=>fetch(p,AUTH);
 const status=$("status"),desk=$("desk"),bar=$("bar"),clip=$("clip"),prog=$("prog"),
-      gainEl=$("gain"),gval=$("gval"),goBtn=$("go"),stopBtn=$("stop"),
-      saveBtn=$("save"),watchEl=$("watch"),durEl=$("dur"),nosleep=$("nosleep"),
+      gainEl=$("gain"),gval=$("gval"),nosleep=$("nosleep"),
       finished=$("finished"),fsum=$("fsum"),fsave=$("fsave"),fdiscard=$("fdiscard");
+const POSITIONS=["Dial up","Dial down","Crown down","Crown left","Crown right","Crown up"];
+const WINDS=["Full wind","6h","12h","24h","36h"];
 
-// keep the screen awake: Wake Lock where supported, plus a playing muted video
-// fed from a canvas stream (which holds the screen on iOS Safari too).
+
+// ------------------------------------------------------------------ helpers
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+function fmt(v,d){ return (v===null||v===undefined)?'--':Number(v).toFixed(d); }
+function mmss(x){ x=Math.max(0,Math.round(x)); return Math.floor(x/60)+':'+('0'+(x%60)).slice(-2); }
+function hm(h){ h=Math.max(0,h); const m=Math.round((h-Math.floor(h))*60);
+  return Math.floor(h)+'h '+('0'+m).slice(-2)+'m'; }
+function cmd(name,extra){
+  return fetch('/api/cmd',{method:'POST',
+    headers:{'Content-Type':'application/json','X-WG-Token':TOKEN},
+    body:JSON.stringify(Object.assign({cmd:name},extra||{}))}).catch(()=>{});
+}
+function show(id,on){ $(id).style.display = on ? '' : 'none'; }
+
 async function keepAwake(){
   try{ if('wakeLock' in navigator){ wake=await navigator.wakeLock.request('screen'); } }catch(e){}
   try{
@@ -774,44 +875,170 @@ function releaseAwake(){
     if(nosleep.srcObject){ nosleep.srcObject.getTracks().forEach(t=>t.stop());
       nosleep.srcObject=null; } }catch(e){}
 }
+document.addEventListener('visibilitychange',()=>{
+  if((streaming||poll) && document.visibilityState==='visible') keepAwake();
+});
+
+// ------------------------------------------------------------------ nav / views
+document.querySelectorAll('#nav button').forEach(b=>{
+  b.onclick=()=>{ curView=b.dataset.v;
+    document.querySelectorAll('#nav button').forEach(x=>x.classList.toggle('on',x===b));
+    show('v_measure', curView==='measure'); show('v_watches', curView==='watches');
+    if(curView==='watches') renderWatches();
+  };
+});
+
+// ------------------------------------------------------------------ new-run form
+(function(){
+  $("nr_pos").innerHTML=POSITIONS.map(p=>'<option>'+p+'</option>').join('');
+  $("nr_wind").innerHTML=WINDS.map(w=>'<option>'+w+'</option>').join('');
+})();
+$("nr_pr").onchange=()=>show('nr_pr_opts',$("nr_pr").checked);
+$("nr_go").onclick=()=>{ show('newrun',false); show('micprompt',true); };
+$("mic_cancel").onclick=()=>{ show('micprompt',false); show('newrun',true); };
+$("mic_desk").onclick=()=>beginRun('desktop');
+$("mic_phone").onclick=()=>beginRun('phone');
+
+function runOpts(){
+  const o={ watch_id:$("nr_watch").value, position:$("nr_pos").value,
+            wind:$("nr_wind").value, duration:parseInt($("nr_dur").value,10)||0 };
+  if($("nr_pr").checked){
+    o.power_reserve=true;
+    o.pr_interval=parseInt($("nr_pr_int").value,10)||300;
+    o.pr_target=parseFloat($("nr_pr_tgt").value)||0;
+  }
+  return o;
+}
+async function beginRun(mic){
+  if(mic==='desktop'){
+    try{ const s=await (await get('/api/state')).json();
+      if(s.device_is_net && !confirm("The desktop's input is set to the phone pickup, "+
+        "so its own microphone will not be used. Start anyway?")){
+        show('micprompt',true); return; }
+    }catch(e){}
+  }
+  show('micprompt',false);
+  const o=runOpts(); o.mic=mic; phoneRun=true; micMode=mic;
+  finished.style.display='none'; status.textContent='starting...';
+  if(mic==='phone'){ const ok=await startMic(); if(!ok){ phoneRun=false; micMode=null;
+    show('newrun',true); return; } }
+  await cmd('start',o);
+  if(!poll) poll=setInterval(refresh,700);
+  keepAwake(); refresh();
+}
+$("mon_pr").onclick=async()=>{
+  $("mon_pr").disabled=true;
+  await cmd('reserve_start',{pr_interval:300,pr_target:0});
+  setTimeout(()=>{ $("mon_pr").disabled=false; refresh(); },500);
+};
+$("stop").onclick=stopRun;
+async function stopRun(){
+  await cmd('stop');
+  stopMic(); releaseAwake();
+  if(poll){ clearInterval(poll); poll=null; }
+  setTimeout(refresh,300);
+}
+fsave.onclick=async()=>{ fsave.disabled=true; await cmd('save_pending'); setTimeout(refresh,400); };
+fdiscard.onclick=async()=>{ await cmd('discard'); phoneRun=false; setTimeout(refresh,400); };
+
+// ------------------------------------------------------------------ phone mic
 fetch('/rtc-available').then(r=>r.json()).then(j=>{
   if(!j.aiortc){const o=$("rtcopt");o.disabled=true;o.parentNode.style.opacity=.4;
     o.parentNode.title='Start the app with aiortc installed for WebRTC';}
-});
+}).catch(()=>{});
 gainEl.oninput=()=>{ gval.innerHTML=gainEl.value+'&times;';
   if(gainNode) gainNode.gain.value=parseFloat(gainEl.value); };
-function mode(){return document.querySelector('input[name=mode]:checked').value;}
-function cmd(name,extra){
-  return fetch('/api/cmd',{method:'POST',
-    headers:{'Content-Type':'application/json','X-WG-Token':TOKEN},
-    body:JSON.stringify(Object.assign({cmd:name},extra||{}))}).catch(()=>{});
-}
+function amode(){return document.querySelector('input[name=mode]:checked').value;}
 function meter(pk){
   bar.style.width=Math.min(100,pk*120)+'%';
   if(pk>=0.99){ clips++; clip.textContent='CLIP -- turn Boost down'; }
   else if(clips>0 && pk<0.6){ clips=Math.max(0,clips-1); if(clips===0) clip.textContent=''; }
 }
-document.addEventListener('visibilitychange',()=>{
-  if(running && document.visibilityState==='visible') keepAwake();
-});
-
-async function loadWatches(sel){
+async function startMic(){
+  stopMic();
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    status.innerHTML='This browser needs the page over <b>https</b> for mic access. '+
+      (location.protocol==='https:'?'Try Chrome or Safari.':
+       'Reload using <b>https://'+location.host+'</b>.');
+    return false;
+  }
   try{
-    const list=await (await get('/api/watches')).json();
-    const keep=sel||watchEl.value;
-    watchEl.innerHTML='<option value="">(no watch)</option>'+
-      list.map(w=>'<option value="'+w.id+'">'+w.label.replace(/</g,'&lt;')+'</option>').join('');
-    if(keep) watchEl.value=keep;
-  }catch(e){}
+    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,
+      noiseSuppression:false,autoGainControl:$("hwagc").checked}});
+  }catch(e){ status.textContent='mic denied: '+e; return false; }
+  streaming=true; clips=0; retry=0;
+  ac=new (window.AudioContext||window.webkitAudioContext)();
+  try{ await ac.resume(); }catch(e){}
+  src=ac.createMediaStreamSource(stream);
+  gainNode=ac.createGain(); gainNode.gain.value=parseFloat(gainEl.value);
+  src.connect(gainNode);
+  if(amode()==='rtc'){ await startRtc(); } else { startPcm(); }
+  return true;
 }
-loadWatches();
-watchEl.onchange=()=>cmd('select',{id:watchEl.value});
+function startPcm(){
+  node=ac.createScriptProcessor(2048,1,1);
+  node.onaudioprocess=e=>{
+    const f=e.inputBuffer.getChannelData(0);
+    let pk=0; const buf=new Int16Array(f.length);
+    for(let i=0;i<f.length;i++){ const v=Math.max(-1,Math.min(1,f[i]));
+      buf[i]=v<0?v*32768:v*32767; if(Math.abs(v)>pk)pk=Math.abs(v); }
+    meter(pk);
+    if(ws && ws.readyState===1) ws.send(buf.buffer);
+  };
+  gainNode.connect(node); node.connect(ac.destination);
+  connectWs();
+}
+function connectWs(){
+  if(!streaming) return;
+  try{ ws && ws.close(); }catch(e){}
+  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
+  ws.binaryType='arraybuffer';
+  ws.onopen=()=>{ retry=0; ws.send(JSON.stringify({sr:ac.sampleRate}));
+    status.textContent='streaming from this phone (PCM)'; };
+  ws.onclose=ws.onerror=()=>{
+    if(!streaming) return;
+    retry++;
+    if(retry>20){ status.textContent='lost the connection'; return; }
+    status.textContent='reconnecting... ('+retry+')';
+    setTimeout(connectWs, Math.min(1000*retry,5000));
+  };
+}
+async function startRtc(){
+  dest=ac.createMediaStreamDestination();
+  gainNode.connect(dest);
+  pc=new RTCPeerConnection();
+  dest.stream.getAudioTracks().forEach(t=>pc.addTrack(t,dest.stream));
+  const offer=await pc.createOffer({offerToReceiveAudio:false});
+  await pc.setLocalDescription(offer);
+  await new Promise(res=>{ if(pc.iceGatheringState==='complete')res();
+    else pc.onicegatheringstatechange=()=>{ if(pc.iceGatheringState==='complete')res(); }; });
+  let r;
+  try{ r=await fetch('/rtc-offer',{method:'POST',
+    headers:{'Content-Type':'application/json','X-WG-Token':TOKEN},
+    body:JSON.stringify(pc.localDescription)}); }
+  catch(e){ status.textContent='WebRTC could not reach WatchGrapher'; return; }
+  if(!r.ok){ status.textContent='WebRTC failed'; return; }
+  await pc.setRemoteDescription(await r.json());
+  status.textContent='streaming from this phone (WebRTC)';
+  const a=ac.createAnalyser(); gainNode.connect(a);
+  const d=new Uint8Array(a.fftSize);
+  (function tick(){ if(!streaming)return; a.getByteTimeDomainData(d);
+    let pk=0; for(const v of d){ const x=Math.abs(v-128)/128; if(x>pk)pk=x; }
+    meter(pk); requestAnimationFrame(tick); })();
+}
+function stopMic(){
+  streaming=false;
+  try{node&&node.disconnect();node=null;}catch(e){}
+  try{gainNode&&gainNode.disconnect();gainNode=null;}catch(e){}
+  try{src&&src.disconnect();src=null;}catch(e){}
+  try{ws&&(ws.onclose=ws.onerror=null,ws.close());ws=null;}catch(e){}
+  try{pc&&(pc.close());pc=null;}catch(e){}
+  try{stream&&stream.getTracks().forEach(t=>t.stop());stream=null;}catch(e){}
+  try{ac&&ac.close();ac=null;}catch(e){}
+  bar.style.width=0; clip.textContent='';
+}
 
-function fmt(v,d){ return (v===null||v===undefined)?'--':Number(v).toFixed(d); }
-function mmss(x){ x=Math.max(0,Math.round(x)); return Math.floor(x/60)+':'+('0'+(x%60)).slice(-2); }
-function hm(h){ h=Math.max(0,h); const m=Math.round((h-Math.floor(h))*60);
-  return Math.floor(h)+'h '+('0'+m).slice(-2)+'m'; }
-
+// ------------------------------------------------------------------ reserve card
 function drawSpark(r){
   const c=$("resv_spark"), ctx=c.getContext('2d'); const W=c.width, H=c.height;
   ctx.clearRect(0,0,W,H);
@@ -835,9 +1062,8 @@ function drawSpark(r){
     ctx.fillStyle='#7fd8a0'; ctx.beginPath(); ctx.arc(X(r.forecast_h),ey,3,0,7); ctx.fill();
   }
 }
-
 function showReserve(r){
-  $("resv").style.display='block';
+  show('resv',true);
   const tgt = r.target_h>0 ? (' / '+r.target_h.toFixed(0)+'h target') : ' (until stopped)';
   $("resv_head").textContent =
     hm(r.hours||0)+' elapsed'+tgt+'   |   '+(r.samples||0)+' samples'+
@@ -855,183 +1081,130 @@ function showReserve(r){
   drawSpark(r);
 }
 
+// ------------------------------------------------------------------ watches view
+async function loadWatches(){
+  try{ WATCHES=await (await get('/api/watches')).json(); }catch(e){ WATCHES=[]; }
+  const sel=$("nr_watch"), keep=sel.value;
+  const active=WATCHES.filter(w=>!w.archived);
+  sel.innerHTML='<option value="">(no watch)</option>'+
+    active.map(w=>'<option value="'+w.id+'">'+esc(w.label)+'</option>').join('');
+  if(keep) sel.value=keep;
+  if(curView==='watches') renderWatches();
+}
+function renderWatches(){
+  const showA=$("w_arch").checked;
+  const rows=WATCHES.filter(w=>showA||!w.archived).map(w=>
+    '<div class="wrow" data-id="'+w.id+'"><div>'+esc(w.label)+
+    (w.archived?' <small>[archived]</small>':'')+
+    '<br><small>'+w.runs+' run'+(w.runs===1?'':'s')+
+    (w.tags.length?'  #'+w.tags.map(esc).join(' #'):'')+'</small></div>'+
+    '<div style="color:#8a94a4">edit &rsaquo;</div></div>').join('');
+  $("wlist").innerHTML = rows || '<p style="color:#8a94a4">No watches yet.</p>';
+  $("wlist").querySelectorAll('.wrow').forEach(r=>{
+    r.onclick=()=>openwatch(WATCHES.find(w=>w.id===r.dataset.id));
+  });
+}
+$("w_arch").onchange=renderWatches;
+$("w_add").onclick=()=>openwatch(null);
+$("wf_cancel").onclick=()=>{ show('w_form',false); editing=null; };
+$("wf_lookup").onclick=async()=>{
+  const ref=$("wf_ref").value.trim(); if(!ref) return;
+  $("wf_hint").textContent='looking up...';
+  try{
+    const r=await (await fetch('/api/lookup',{method:'POST',
+      headers:{'Content-Type':'application/json','X-WG-Token':TOKEN},
+      body:JSON.stringify({reference:ref,brand:$("wf_brand").value})})).json();
+    if(r.caliber_key||r.model){
+      if(r.brand && !$("wf_brand").value) $("wf_brand").value=r.brand;
+      if(r.model && !$("wf_model").value) $("wf_model").value=r.model;
+      if(r.nickname && !$("wf_nick").value) $("wf_nick").value=r.nickname;
+      editing = editing||{}; editing._cal=r.caliber_key||'';
+      $("wf_hint").textContent = (r.caliber_key?('movement: '+r.caliber_key):'')+
+        (r.caliber?('  '+r.caliber):'')+(r.years?('  ('+r.years+')'):'');
+    } else { $("wf_hint").textContent='not a reference I recognise -- fill it in by hand'; }
+  }catch(e){ $("wf_hint").textContent='lookup failed'; }
+};
+function openwatch(w){
+  editing = w ? Object.assign({},w) : {_new:true};
+  $("wf_title").textContent = w ? ('Edit '+w.label) : 'Add watch';
+  $("wf_brand").value=w?w.brand:''; $("wf_model").value=w?w.model:'';
+  $("wf_ref").value=w?w.reference:''; $("wf_nick").value=w?w.nickname:'';
+  $("wf_tags").value=w?w.tags.join(', '):''; $("wf_target").value=w?w.target_rate:'';
+  $("wf_serial").value=w?w.serial:''; $("wf_notes").value=w?w.notes:'';
+  $("wf_hint").textContent = w&&w.caliber_label ? ('movement: '+w.caliber_label) : '';
+  const ab=$("wf_arch");
+  ab.style.display = w ? '' : 'none';
+  ab.textContent = (w&&w.archived) ? 'Un-archive' : 'Archive';
+  show('w_form',true);
+  $("w_form").scrollIntoView({behavior:'smooth'});
+}
+$("wf_save").onclick=async()=>{
+  const o={ brand:$("wf_brand").value, model:$("wf_model").value,
+    reference:$("wf_ref").value, nickname:$("wf_nick").value, tags:$("wf_tags").value,
+    target_rate:$("wf_target").value, serial:$("wf_serial").value, notes:$("wf_notes").value };
+  if(editing && editing._cal) o.caliber_key=editing._cal;
+  if(editing && editing.id) o.id=editing.id;
+  await cmd('watch_save',o);
+  show('w_form',false); editing=null;
+  setTimeout(loadWatches,500);
+};
+$("wf_arch").onclick=async()=>{
+  if(!editing||!editing.id) return;
+  await cmd('watch_archive',{id:editing.id, archived:!editing.archived});
+  show('w_form',false); editing=null;
+  setTimeout(loadWatches,500);
+};
+
+// ------------------------------------------------------------------ main poll
 async function refresh(){
   let s; try{ s=await (await get('/api/state')).json(); }catch(e){ return; }
-  const monitoring = s.listening && !running;
-  if(!s.device_is_net)
-    desk.textContent='Desktop input is not set to the phone pickup -- choose it there.';
-  else if(monitoring)
-    desk.textContent='monitoring the desktop'+(s.watch?' -- '+s.watch:'');
-  else if(s.listening)
-    desk.textContent='desktop listening'+(s.watch?' -- '+s.watch:'');
-  else
-    desk.textContent='desktop idle'+(s.watch?' -- watch: '+s.watch:'');
-  $("t_rate").textContent=(s.rate>0?'+':'')+fmt(s.rate,1);
-  $("t_amp").textContent=fmt(s.amplitude,0);
-  $("t_be").textContent=fmt(s.beat_error,2);
-  $("t_bph").textContent=s.bph||'--';
-  saveBtn.disabled=!(running && s.have_reading && watchEl.value);
-  if(s.last_save) status.textContent=s.last_save;
 
-  if(s.reserve){ showReserve(s.reserve); } else { $("resv").style.display='none'; }
+  const running = s.mode==='measuring' || s.mode==='reserve';
+  if(running && !phoneRun) desk.textContent='monitoring the desktop'+(s.watch?' -- '+s.watch:'');
+  else if(running) desk.textContent='run in progress'+(s.watch?' -- '+s.watch:'');
+  else if(s.mode==='finished') desk.textContent='run finished';
+  else desk.textContent='desktop idle';
 
-  // progress / finished handling for the phone side
-  if(running && s.listening){
-    runSeen=true;
+  show('newrun', s.mode==='idle' && $("micprompt").style.display==='none');
+  show('monitor', running);
+  show('finished', s.mode==='finished');
+
+  if(running){
+    $("t_rate").textContent=(s.rate>0?'+':'')+fmt(s.rate,1);
+    $("t_amp").textContent=fmt(s.amplitude,0);
+    $("t_be").textContent=fmt(s.beat_error,2);
+    $("t_bph").textContent=s.bph||'--';
+    let kind = s.reserve ? 'power reserve' :
+      (s.run_len>0 ? 'timed '+mmss(s.run_len) : 'open-ended');
+    $("mon_head").innerHTML='<b>'+esc(s.watch||'no watch attributed')+'</b>'+
+      (s.position?('<br>'+esc(s.position)+' &middot; '+esc(s.wind)):'')+
+      '<br>'+kind+(phoneRun&&micMode==='phone'?' &middot; phone mic':'')+
+      (phoneRun?'':' &middot; monitoring');
+    show('mon_pr', !s.reserve);
+    if(s.reserve) showReserve(s.reserve); else show('resv',false);
+    show('meter', streaming);
     if(s.settling) prog.textContent='settling before the timed run...';
-    else if(s.run_len>0){
-      const e=s.run_elapsed||0;
-      prog.textContent='timed run  '+mmss(e)+' / '+mmss(s.run_len);
-      bar.style.width='';   // meter still shows audio level; progress is text
-    } else prog.textContent='open-ended -- tap Stop when steady  ('+mmss(s.elapsed||0)+')';
-  } else if(monitoring && !s.reserve){
-    if(s.settling) prog.textContent='desktop: settling before a timed run...';
-    else if(s.run_len>0) prog.textContent='desktop timed run  '+mmss(s.run_elapsed||0)+' / '+mmss(s.run_len);
-    else prog.textContent='desktop open-ended run  ('+mmss(s.elapsed||0)+')';
-  } else if(running && runSeen && !s.pending){
-    prog.textContent='';    // run ended on the desktop; wait for the summary
-  } else if(!running && !s.listening){
+    else if(s.run_len>0) prog.textContent='timed run  '+mmss(s.run_elapsed||0)+' / '+mmss(s.run_len);
+    else prog.textContent='open-ended  ('+mmss(s.elapsed||0)+')';
+  } else {
     prog.textContent='';
   }
-  if(running && runSeen && !s.listening){
-    // the desktop run has ended (timed out or was stopped) -- tidy up locally
-    finishLocally();
-  }
 
-  if(s.pending){
-    finished.style.display='block';
+  if(s.mode==='finished' && s.pending){
     fsum.textContent=s.pending.summary||'';
-    fsave.disabled=!(s.pending.have && watchEl.value);
+    fsave.disabled=!(s.pending.have && s.watch_id);
     fsave.style.opacity=fsave.disabled?.4:1;
-  } else {
-    finished.style.display='none';
+  }
+  if(s.last_save) status.textContent=s.last_save;
+
+  if(phoneRun && running===false && s.mode!=='finished'){
+    stopMic(); releaseAwake();
+    if(poll){ clearInterval(poll); poll=null; }
+    if(s.mode==='idle'){ phoneRun=false; micMode=null; }
   }
 }
-fsave.onclick=async()=>{ fsave.disabled=true; await cmd('save_pending'); setTimeout(refresh,400); };
-fdiscard.onclick=async()=>{ await cmd('discard'); finished.style.display='none';
-  setTimeout(refresh,400); };
 
-async function start(){
-  stopStreams();
-  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
-    status.innerHTML='This browser needs the page over <b>https</b> for mic access. '+
-      (location.protocol==='https:'?'Try Chrome or Safari.':
-       'Reload using <b>https://'+location.host+'</b>.');
-    return;
-  }
-  const agc=$("hwagc").checked;
-  try{
-    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,
-      noiseSuppression:false,autoGainControl:agc}});
-  }catch(e){status.textContent='mic denied: '+e;return;}
-  running=true; clips=0; retry=0; runSeen=false;
-  goBtn.disabled=true; stopBtn.disabled=false;
-  finished.style.display='none'; status.textContent='starting...';
-  keepAwake();
-  ac=new (window.AudioContext||window.webkitAudioContext)();
-  try{ await ac.resume(); }catch(e){}
-  src=ac.createMediaStreamSource(stream);
-  gainNode=ac.createGain(); gainNode.gain.value=parseFloat(gainEl.value);
-  src.connect(gainNode);
-  if(mode()==='rtc'){ await startRtc(); } else { startPcm(); }
-  await cmd('select',{id:watchEl.value});
-  await cmd('start',{duration:parseInt(durEl.value,10)||0});
-  if(!poll) poll=setInterval(refresh,700);
-  refresh();
-}
-
-// the desktop run has ended; stop the local mic but keep polling for the summary
-function finishLocally(){
-  if(!running) return;
-  running=false;
-  goBtn.disabled=false; stopBtn.disabled=true;
-  bar.style.width=0; clip.textContent=''; prog.textContent='';
-  status.textContent='run finished';
-  releaseAwake();
-  stopStreams();
-  if(poll){ clearInterval(poll); poll=null; }
-}
-
-function startPcm(){
-  node=ac.createScriptProcessor(2048,1,1);
-  node.onaudioprocess=e=>{
-    const f=e.inputBuffer.getChannelData(0);
-    let pk=0; const buf=new Int16Array(f.length);
-    for(let i=0;i<f.length;i++){ const s=Math.max(-1,Math.min(1,f[i]));
-      buf[i]=s<0?s*32768:s*32767; if(Math.abs(s)>pk)pk=Math.abs(s); }
-    meter(pk);
-    if(ws && ws.readyState===1) ws.send(buf.buffer);
-  };
-  gainNode.connect(node); node.connect(ac.destination);
-  connectWs();
-}
-function connectWs(){
-  if(!running) return;
-  try{ ws && ws.close(); }catch(e){}
-  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
-  ws.binaryType='arraybuffer';
-  ws.onopen=()=>{ retry=0; ws.send(JSON.stringify({sr:ac.sampleRate}));
-    status.textContent='streaming (PCM)'; };
-  ws.onclose=ws.onerror=()=>{
-    if(!running) return;
-    retry++;
-    if(retry>20){ status.textContent='lost the connection -- tap Start again'; stop(); return; }
-    status.textContent='reconnecting... ('+retry+')';
-    setTimeout(connectWs, Math.min(1000*retry,5000));
-  };
-}
-async function startRtc(){
-  dest=ac.createMediaStreamDestination();
-  gainNode.connect(dest);
-  pc=new RTCPeerConnection();
-  dest.stream.getAudioTracks().forEach(t=>pc.addTrack(t,dest.stream));
-  pc.onconnectionstatechange=()=>{
-    if(running && (pc.connectionState==='failed'||pc.connectionState==='disconnected')){
-      status.textContent='WebRTC connection lost -- tap Start again'; stop(); }
-  };
-  const offer=await pc.createOffer({offerToReceiveAudio:false});
-  await pc.setLocalDescription(offer);
-  await new Promise(res=>{ if(pc.iceGatheringState==='complete')res();
-    else pc.onicegatheringstatechange=()=>{ if(pc.iceGatheringState==='complete')res(); }; });
-  let r;
-  try{ r=await fetch('/rtc-offer',{method:'POST',
-    headers:{'Content-Type':'application/json','X-WG-Token':TOKEN},
-    body:JSON.stringify(pc.localDescription)}); }
-  catch(e){ status.textContent='WebRTC could not reach WatchGrapher'; stop(); return; }
-  if(!r.ok){ status.textContent='WebRTC failed: '+await r.text(); stop(); return; }
-  await pc.setRemoteDescription(await r.json());
-  status.textContent='streaming (WebRTC)';
-  const a=ac.createAnalyser(); gainNode.connect(a);
-  const d=new Uint8Array(a.fftSize);
-  (function tick(){ if(!running)return; a.getByteTimeDomainData(d);
-    let pk=0; for(const v of d){ const x=Math.abs(v-128)/128; if(x>pk)pk=x; }
-    meter(pk); requestAnimationFrame(tick); })();
-}
-
-function stopStreams(){
-  try{node&&node.disconnect();node=null;}catch(e){}
-  try{gainNode&&gainNode.disconnect();gainNode=null;}catch(e){}
-  try{src&&src.disconnect();src=null;}catch(e){}
-  try{ws&&(ws.onclose=ws.onerror=null,ws.close());ws=null;}catch(e){}
-  try{pc&&(pc.onconnectionstatechange=null,pc.close());pc=null;}catch(e){}
-  try{stream&&stream.getTracks().forEach(t=>t.stop());stream=null;}catch(e){}
-  try{ac&&ac.close();ac=null;}catch(e){}
-}
-async function stop(){
-  running=false;
-  goBtn.disabled=false; stopBtn.disabled=true; saveBtn.disabled=true;
-  bar.style.width=0; clip.textContent=''; prog.textContent='';
-  if(status.textContent.indexOf('lost')<0 && status.textContent.indexOf('failed')<0)
-    status.textContent='stopped';
-  releaseAwake();
-  stopStreams();
-  await cmd('stop');
-  if(poll){ clearInterval(poll); poll=null; }
-  setTimeout(refresh,300);
-}
-saveBtn.onclick=async()=>{ saveBtn.disabled=true; await cmd('save'); setTimeout(refresh,400); };
-goBtn.onclick=start;
-stopBtn.onclick=stop;
-setInterval(()=>{ if(!poll) refresh(); }, 2000);
+loadWatches();
 refresh();
+setInterval(()=>{ if(!poll) refresh(); }, 2000);
 </script></body></html>"""

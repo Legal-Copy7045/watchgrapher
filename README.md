@@ -95,12 +95,15 @@ tells you what to adjust for the caliber you're working on.
 - HTTPS with a runtime self-signed certificate
 - Fixed port, persistent server, auto-reconnect, screen-wake-lock while running
 - Server-side makeup AGC + a boost slider on the page
-- Remote control: pick a stored watch, set the duration, start/stop and get the
-  save/discard prompt all on the phone
-- Live monitor: watch a desktop-initiated run from the phone -- rate, amplitude,
-  beat error, and for a power-reserve run the elapsed/target hours, amplitude
-  and rate decay, deg/hour, isochronism spread, next-sample countdown, a decay
-  sparkline and the projected full-reserve time
+- Remote control: from the phone, choose watch / position / wind / duration,
+  start or stop a run (asking which mic each time), start a power-reserve log,
+  and get the save/discard prompt -- all on the phone
+- Live monitor: any desktop run shows on the phone automatically -- the watch,
+  the four numbers, and for a power-reserve run the elapsed/target hours,
+  amplitude and rate decay, deg/hour, isochronism spread, next-sample countdown,
+  a decay sparkline and the projected full-reserve time
+- Watch management from the phone: add / edit (with catalogue reference lookup)
+  / archive; bench-level fields stay on the desktop
 - Dedicated Phone Portal tab with QR code; optional autostart
 - Bound to the LAN address only; watch list and commands token-gated
 
@@ -238,59 +241,56 @@ Then, on the phone:
 2. The phone warns the certificate is not trusted. This is expected for a
    local self-signed cert -- tap **Advanced** / **Show details** and
    **proceed** / **visit this website**.
-3. The page shows the desktop's status, a **watch dropdown** filled from your
-   collection, and four live readout tiles. Under **Audio settings** are the
-   PCM/WebRTC transport, the **Boost** slider and the phone-auto-level toggle.
-4. Pick the watch you are testing and the **duration** -- open-ended, or a
-   timed run of 20 s to 5 minutes. The phone sets it; the desktop's own
-   duration is ignored for phone-started runs.
-5. Hold the phone with its **microphone port pressed against the watch case**
-   -- the bottom edge on most phones. Contact matters as much as it does for a
-   piezo.
-6. Tap **Start test**. Allow microphone access when asked. The phone starts
-   streaming and tells the desktop to begin listening on the chosen watch; the
-   tiles fill in within a second or two. A timed run shows a `1:12 / 2:00`
-   progress line and ends itself; the *Run finished* panel then appears.
-7. Set **Boost** so the meter sits high but the red **CLIP** line stays quiet.
-   The desktop applies its own auto-gain on top (subject to *View ->
-   Auto-gain*). Leave **"Let the phone auto-level"** off unless the signal is
-   hopeless -- it pumps and distorts amplitude.
-8. Tap **Stop** when the numbers are steady. Because the run was started from
-   the phone, the "what now" choice appears **on the phone**, not the desktop:
-   a *Run finished* panel with the summary and **Save to watch** / **Discard**.
-   Save files the reading into the chosen watch's history; Discard keeps
-   nothing. (Mid-run, the **Save run to watch** button files a reading without
-   stopping.)
-9. The server and the phone's connection stay up between runs, so the next
-   test is just Start test again. A device-selected server stops when you
-   switch input devices; a Tools-menu one stays until you turn it off.
+The page has two tabs: **Measure** and **Watches**. It follows the desktop's
+state automatically -- if a run is already going it opens as a monitor, if the
+desktop is idle it shows the new-run form.
 
-The page holds the screen awake while a test is running -- a screen Wake Lock
-where the browser supports it, plus a hidden looping video as a fallback, which
-covers iOS Safari. If the phone still sleeps, set a longer auto-lock.
+**Starting a run from the phone.**
 
-You can also drive it the other way: press Start on the desktop and the phone
-page just shows the live numbers and lets you save. A desktop-started run
-prompts on the desktop as usual. The page reconnects on its own if the Wi-Fi
-blips or WatchGrapher restarts.
+1. On **Measure**, pick the **watch**, **position**, **wind state** and
+   **duration** (open-ended, or timed 20 s to 5 min). Tick **Also log power
+   reserve** to run a reserve log alongside, with its own sample interval and
+   target hours.
+2. Tap **Start run**. It asks which microphone:
+   - **The desktop's own pickup** -- the phone stays a pure remote; the desktop
+     records on whatever input it is set to (USB mic, contact pickup).
+   - **This phone's microphone** -- the phone streams its mic; hold the mic port
+     against the case back. **Audio settings** (PCM/WebRTC, Boost, auto-level)
+     apply to this mode only.
+3. The tiles fill in. A timed run shows a `1:12 / 2:00` line and ends itself;
+   for an open-ended run tap **Stop run**. Because the phone started it, the
+   *Run finished* panel with **Save to watch** / **Discard** appears on the
+   phone.
+4. Mid-run you can also tap **Start power reserve log** from the monitor.
 
-**Monitoring a long run.** Open the page on your phone while a run is going on
-the desktop -- whatever the pickup -- and it becomes a read-only monitor: the
-four numbers update, and a **power reserve run** gets its own card with elapsed
+**Monitoring.** Whenever the desktop has a run going -- started anywhere, on any
+pickup -- the Measure tab shows it: the watch, position and wind, the four
+tiles, the progress line, and for a **power reserve run** a card with elapsed
 and target hours, amplitude and rate start-to-now, degrees per hour, the
-isochronism spread so far, the countdown to the next sample, a small amplitude
-decay sparkline, and the projected full-reserve time (with its range), so you
-can check on a 48-hour run from another room. The card appears automatically
-whenever the desktop has a power-reserve log active and disappears when it
-ends; no button to press.
+isochronism spread so far, the next-sample countdown, an amplitude-decay
+sparkline and the projected full-reserve time. So you can check a 48-hour run
+from another room. Nothing to switch on.
+
+**Managing watches.** The **Watches** tab lists your collection. Tap one to edit
+brand, model, reference (with a **look up** that resolves the movement from the
+catalogue), nickname, tags, target rate, serial and notes; **+ Add watch**
+creates one. Deleting is desktop-only -- the phone offers **Archive** instead,
+which hides a watch without losing its history (**show archived** brings them
+back). The bench-level fields (case detail, provenance, service interval) stay
+on the desktop.
+
+The page holds the screen awake while a run is on -- a screen Wake Lock where
+supported, plus a hidden looping video for iOS Safari. It reconnects on its own
+if the Wi-Fi blips or WatchGrapher restarts.
 
 **Security.** The server binds only to this computer's LAN address (never all
 interfaces, so it is not reachable over a VPN or a public-Wi-Fi link). Your
-watch list, the live readings and every remote command (start, stop, select
-watch, save) require a random per-session token that is embedded in the page
-the server hands out -- a device that merely hits the port gets nothing, though
-anyone who can load the page on your LAN can drive the session. Treat it like
-any other device on your home network.
+watch list, the live readings and every remote command (start/stop a run, log
+power reserve, add/edit/archive a watch, save a result) require a random
+per-session token that is embedded in the page the server hands out -- a device
+that merely hits the port gets nothing, though anyone who can load the page on
+your LAN can drive the session. Treat it like any other device on your home
+network.
 
 **What to expect.** A phone mic through this path is roughly as good as a decent
 USB condenser mic: solid for rate and beat error, marginal for amplitude unless

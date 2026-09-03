@@ -2658,7 +2658,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ---------------------------------------------------- phone remote control
     def _phone_watch_payload(self):
-        return [{"id": w.id, "label": w.label} for w in self.collection.sorted_watches()]
+        from .calibers import CALIBERS
+        out = []
+        for w in self.collection.sorted_watches(include_archived=True):
+            c = CALIBERS.get(w.caliber_key)
+            last = max((h.when for h in w.history), default="")
+            out.append({
+                "id": w.id, "label": w.label, "brand": w.brand, "model": w.model,
+                "reference": w.reference, "nickname": w.nickname,
+                "caliber_key": w.caliber_key,
+                "caliber_label": (f"{c.brand} {c.name}" if c else ""),
+                "serial": w.serial, "tags": list(w.tags),
+                "target_rate": w.target_rate, "notes": w.notes,
+                "archived": bool(getattr(w, "archived", False)),
+                "runs": len(w.history), "last_run": last[:10]})
+        return out
 
     def _publish_phone_watches(self):
         nr = getattr(self, "_net_recorder", None)
@@ -2674,21 +2688,30 @@ class MainWindow(QtWidgets.QMainWindow):
             return None if v is None or v != v else round(float(v), 3)
         m = self.last
         good = m is not None and m.ok
-        wlabel = ""
-        if hasattr(self, "cmb_watch") and self.cmb_watch.currentData():
-            wlabel = self.cmb_watch.currentText()
+        wid = self.cmb_watch.currentData() if hasattr(self, "cmb_watch") else None
         run_active = self._run_t0 is not None
+        listening = self.recorder is not None
+        reserve_on = (getattr(self, "btn_res", None) and self.btn_res.isChecked()
+                      and self._res_t0 is not None)
+        pending = getattr(self, "_phone_pending", None)
+        mode = ("finished" if pending else
+                ("reserve" if (listening and reserve_on) else
+                 ("measuring" if listening else "idle")))
         st = {
             "device_is_net": self.cmb_dev.currentData() == "NET",
-            "listening": self.recorder is not None,
-            "watch": wlabel,
+            "listening": listening,
+            "mode": mode,
+            "watch_id": wid or "",
+            "watch": self.cmb_watch.currentText() if wid else "",
+            "position": self.cmb_pos.currentText() if hasattr(self, "cmb_pos") else "",
+            "wind": self.cmb_wind.currentText() if hasattr(self, "cmb_wind") else "",
             "elapsed": round(time.time() - self._listen_t0, 1) if self._listen_t0 else 0.0,
             "settling": bool(getattr(self, "_settle_pending", False)),
             "run_len": float(self._run_len) if run_active else 0.0,
             "run_elapsed": round(time.time() - self._run_t0, 1) if run_active else 0.0,
             "have_reading": bool(good and m.rate == m.rate),
             "last_save": getattr(self, "_phone_last_save", ""),
-            "pending": getattr(self, "_phone_pending", None),
+            "pending": pending,
         }
         if good:
             st["rate"] = num(m.rate)
@@ -2709,32 +2732,19 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _handle_phone_cmd(self, cmd):
         c = (cmd or {}).get("cmd")
-        if c == "select":
+        if c in ("select", "set_watch"):
             i = self.cmb_watch.findData(cmd.get("id") or None)
             if i >= 0:
                 self.cmb_watch.setCurrentIndex(i)
         elif c == "start":
-            self._phone_last_save = ""
-            self._phone_pending = None
-            self._phone_pending_m = None
-            if self.recorder is not None:
-                return
-            if self.cmb_dev.currentData() != "NET":
-                # The phone drove this, so make the phone the pickup.
-                j = self.cmb_dev.findData("NET")
-                if j >= 0:
-                    self.cmb_dev.setCurrentIndex(j)
-            if self.cmb_dev.currentData() == "NET":
-                dur = cmd.get("duration")
-                if isinstance(dur, (int, float)) and 0 <= dur <= 7200:
-                    self.spn_runlen.blockSignals(True)
-                    self.spn_runlen.setValue(int(dur))
-                    self.spn_runlen.blockSignals(False)
-                self._phone_starting = True
-                self.btn_go.setChecked(True)
+            self._phone_cmd_start(cmd)
         elif c == "stop":
             if self.recorder is not None:
                 self.btn_go.setChecked(False)
+        elif c == "reserve_start":
+            self._phone_cmd_reserve(cmd, True)
+        elif c == "reserve_stop":
+            self._phone_cmd_reserve(cmd, False)
         elif c == "save":
             self._phone_save()
         elif c == "save_pending":
@@ -2744,6 +2754,101 @@ class MainWindow(QtWidgets.QMainWindow):
             self._phone_pending_m = None
             self._phone_run = False
             self._phone_last_save = "discarded"
+        elif c == "watch_save":
+            self._phone_watch_save(cmd)
+        elif c == "watch_archive":
+            w = self.collection.watches.get(cmd.get("id"))
+            if w:
+                w.archived = bool(cmd.get("archived", True))
+                self.collection.save()
+                self._refresh_watches(None if w.archived else w.id)
+
+    def _phone_cmd_start(self, cmd):
+        if self.recorder is not None:
+            return
+        self._phone_last_save = ""
+        self._phone_pending = None
+        self._phone_pending_m = None
+
+        wid = cmd.get("watch_id")
+        if wid:
+            j = self.cmb_watch.findData(wid)
+            if j >= 0:
+                self.cmb_watch.setCurrentIndex(j)
+        pos = cmd.get("position")
+        if pos and self.cmb_pos.findText(pos) >= 0:
+            self.cmb_pos.setCurrentText(pos)
+        wind = cmd.get("wind")
+        if wind and self.cmb_wind.findText(wind) >= 0:
+            self.cmb_wind.setCurrentText(wind)
+        dur = cmd.get("duration")
+        if isinstance(dur, (int, float)) and 0 <= dur <= 7200:
+            self.spn_runlen.blockSignals(True)
+            self.spn_runlen.setValue(int(dur))
+            self.spn_runlen.blockSignals(False)
+
+        if cmd.get("mic") == "phone" and self.cmb_dev.currentData() != "NET":
+            k = self.cmb_dev.findData("NET")
+            if k >= 0:
+                self.cmb_dev.setCurrentIndex(k)
+        # mic == "desktop": leave the device as the operator set it.
+
+        self._phone_starting = True
+        self.btn_go.setChecked(True)
+
+        if cmd.get("power_reserve") and self.recorder is not None:
+            self._phone_cmd_reserve(cmd, True)
+
+    def _phone_cmd_reserve(self, cmd, on):
+        if not hasattr(self, "btn_res"):
+            return
+        if on:
+            if self.recorder is None or self.btn_res.isChecked():
+                return
+            iv = cmd.get("pr_interval")
+            tg = cmd.get("pr_target")
+            if isinstance(iv, (int, float)) and 10 <= iv <= 3600:
+                self.spn_res_int.setValue(int(iv))
+            if isinstance(tg, (int, float)) and 0 <= tg <= 120:
+                self.spn_res_hours.setValue(float(tg))
+            self.btn_res.setChecked(True)
+            wid = cmd.get("watch_id") or self.cmb_watch.currentData()
+            if wid and wid in self.collection.watches:
+                self._res_watch_id = wid
+        else:
+            if self.btn_res.isChecked():
+                self.btn_res.setChecked(False)
+
+    def _phone_watch_save(self, cmd):
+        fields = ("brand", "model", "reference", "nickname", "serial",
+                  "target_rate", "notes", "caliber_key")
+        data = {k: str(cmd.get(k, "") or "").strip() for k in fields}
+        data["tags"] = [t.strip() for t in
+                        str(cmd.get("tags", "") or "").split(",") if t.strip()]
+        if not data["caliber_key"] and (data["reference"] or data["model"]):
+            try:
+                hit = (catdb.lookup(data["reference"], data["brand"])
+                       or (catdb.search(f"{data['brand']} {data['model']}") or [None])[0])
+                if hit and getattr(hit, "caliber_key", ""):
+                    data["caliber_key"] = hit.caliber_key
+            except Exception:
+                pass
+        wid = cmd.get("id")
+        w = self.collection.watches.get(wid) if wid else None
+        if w:
+            for k, v in data.items():
+                setattr(w, k, v)
+            self.collection.save()
+            self._refresh_watches(w.id)
+            self._phone_last_save = f"updated {w.label}"
+        else:
+            if not (data["brand"] or data["model"]):
+                self._phone_last_save = "a watch needs at least a brand or model"
+                return
+            w = coll.Watch(**data)
+            self.collection.add(w)
+            self._refresh_watches(w.id)
+            self._phone_last_save = f"added {w.label}"
 
     def _phone_finish(self, summary, m, ok=True):
         """A phone-started run ended -- stash the outcome for the phone to decide."""
