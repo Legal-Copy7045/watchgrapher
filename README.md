@@ -1109,7 +1109,8 @@ amplitude falls), the beat-error-versus-amplitude slope, and a projected
 runway to 220 and 200 degrees from the end-of-run decay. The fits reject gross
 outliers -- a sample where the pickup caught a knock or a truncated capture --
 rather than let one bad point tilt the result; discarded points are drawn
-dimmed with an x and the panel says how many were set aside.
+dimmed with an x and the panel says how many were set aside. Hovering a point
+shows its amplitude, rate and how far into the run it was taken.
 
 **Non-linear (quadratic) isochronism fit** is a checkbox under the plot. Real
 isochronism error is rarely a straight line -- it curves, often with a

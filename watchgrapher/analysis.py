@@ -526,6 +526,8 @@ class ReserveStats:
     iso_n_out: int = 0                     # rate-vs-amplitude points rejected as outliers
     iso_in: tuple = ()                     # (amp[], rate[]) points kept for the fit
     iso_out: tuple = ()                    # (amp[], rate[]) points discarded
+    iso_in_h: tuple = ()                   # elapsed hours for the kept points
+    iso_out_h: tuple = ()                  # elapsed hours for the discarded points
     verdict: list = field(default_factory=list)
 
 
@@ -640,6 +642,9 @@ def reserve_analytics(samples, iso_model: str = "linear") -> ReserveStats:
         st.iso_n_out = int((~keep).sum())
         st.iso_in = (ai[keep].tolist(), ri[keep].tolist())
         st.iso_out = (ai[~keep].tolist(), ri[~keep].tolist())
+        thi = t_h[mi]
+        st.iso_in_h = thi[keep].tolist()
+        st.iso_out_h = thi[~keep].tolist()
         st.iso_coef = tuple(float(c) for c in coef)
         span_lo, span_hi = float(ai[keep].min()), float(ai[keep].max())
         mid = 0.5 * (span_lo + span_hi)
