@@ -294,7 +294,9 @@ not pop a blocking dialog, so a run that finishes on its own while you are away
 never freezes the monitor. After it stops the desktop is idle and the New run
 form is right there to start the next one.
 
-**Managing watches.** The **Watches** tab lists your collection. Tap one to edit
+**Managing watches.** The **Watches** tab lists your collection, each row with a
+thumbnail -- your uploaded photo (aspect ratio kept, letterboxed) if there is
+one, otherwise the generated schematic. Tap one to edit
 brand, model, reference (with a **look up** that resolves the movement from the
 catalogue), nickname, tags, target rate, serial and notes; **+ Add watch**
 creates one. Deleting is desktop-only -- the phone offers **Archive** instead,
@@ -1069,6 +1071,9 @@ Throughout the run, and in the summary at the end, it gives two figures:
 - **Good time to** -- full wind to amplitude 200 degrees, below which rate and
   positional stability degrade. This, not the moment the watch stops, is the
   practical end of the useful reserve.
+
+These are recomputed from the raw samples every time a run is shown, so a
+historical run picks up the current method without being re-run.
 
 Each is read from where the run actually crossed that level. If the run was
 stopped before reaching it, the figure is **projected** from the decay -- but
