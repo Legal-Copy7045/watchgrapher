@@ -933,9 +933,11 @@ $("mon_pr").onclick=async()=>{
 };
 $("stop").onclick=stopRun;
 async function stopRun(){
+  if(!phoneRun && !confirm("Stop the run currently going on the desktop?")) return;
+  phoneRun=true;   // take ownership so the outcome comes to the phone
   await cmd('stop');
   stopMic(); releaseAwake();
-  if(poll){ clearInterval(poll); poll=null; }
+  if(!poll) poll=setInterval(refresh,700);
   setTimeout(refresh,300);
 }
 fsave.onclick=async()=>{ fsave.disabled=true; await cmd('save_pending'); setTimeout(refresh,400); };
@@ -1192,8 +1194,11 @@ async function refresh(){
 
   if(s.mode==='finished' && s.pending){
     fsum.textContent=s.pending.summary||'';
+    const dismiss=!!s.pending.dismiss;
+    show('fsave', !dismiss);
     fsave.disabled=!(s.pending.have && s.watch_id);
     fsave.style.opacity=fsave.disabled?.4:1;
+    fdiscard.textContent = dismiss ? 'Dismiss' : 'Discard';
   }
   if(s.last_save) status.textContent=s.last_save;
 

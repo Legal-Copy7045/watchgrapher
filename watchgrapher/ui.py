@@ -2740,6 +2740,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self._phone_cmd_start(cmd)
         elif c == "stop":
             if self.recorder is not None:
+                # Whoever stopped it from the phone gets the outcome -- routing it
+                # to a desktop modal would freeze the phone (the modal blocks the
+                # GUI thread that drains these commands).
+                self._phone_run = True
                 self.btn_go.setChecked(False)
         elif c == "reserve_start":
             self._phone_cmd_reserve(cmd, True)
@@ -2750,10 +2754,11 @@ class MainWindow(QtWidgets.QMainWindow):
         elif c == "save_pending":
             self._phone_save_pending()
         elif c == "discard":
+            dismiss = bool((self._phone_pending or {}).get("dismiss"))
             self._phone_pending = None
             self._phone_pending_m = None
             self._phone_run = False
-            self._phone_last_save = "discarded"
+            self._phone_last_save = "" if dismiss else "discarded"
         elif c == "watch_save":
             self._phone_watch_save(cmd)
         elif c == "watch_archive":
@@ -5972,6 +5977,8 @@ alongside the application.</p>
         m = self.last
         have_reading = m is not None and m.ok and m.rate == m.rate
         if getattr(self, "_phone_run", False):
+            if self._phone_pending is not None:
+                return               # a reserve run already set the outcome panel
             if not have_reading and not self.readings:
                 self._phone_finish("Run finished -- no steady reading was captured.",
                                    None, ok=False)
@@ -6789,10 +6796,17 @@ alongside the application.</p>
         saved_to = self._save_reserve_to_watch(st, stopped_early)
         if saved_to:
             lines.append(f"Filed to {saved_to}'s history.")
-        lines.append("\nExport CSV keeps the raw samples; the Isochronism panel below "
-                     "keeps the rate-vs-amplitude plot.")
         self.lbl_res.setText(lines[0])
         self._update_iso()
+        if getattr(self, "_phone_run", False):
+            # Driven from the phone -- do not pop a modal that would freeze the
+            # phone. The run is already filed; the phone just shows the summary.
+            self._phone_pending = {"summary": "\n\n".join(lines), "have": False,
+                                   "dismiss": True}
+            self._phone_pending_m = None
+            return
+        lines.append("\nExport CSV keeps the raw samples; the Isochronism panel below "
+                     "keeps the rate-vs-amplitude plot.")
         QtWidgets.QApplication.beep()
         QtWidgets.QMessageBox.information(self, "Power reserve run finished",
                                           "\n\n".join(lines))
