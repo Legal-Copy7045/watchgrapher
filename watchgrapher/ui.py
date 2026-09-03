@@ -6729,6 +6729,18 @@ alongside the application.</p>
                 self._reserve_finished(stopped_early=True)
             self._phone_reserve = None
 
+    @staticmethod
+    def _reserve_amp(m):
+        """The amplitude to log for a reserve sample -- NaN when the reading is
+        not trustworthy, so a mis-resolved beat cannot poison the decay curve.
+        A long unattended run cannot rely on the opt-in weak-signal hold."""
+        if m is None or not m.ok or m.amplitude != m.amplitude:
+            return float("nan")
+        if (m.quality < 0.6 or m.extra_peaks > 1.2
+                or (m.nominal_bph and m.detected_bph != m.nominal_bph)):
+            return float("nan")
+        return float(m.amplitude)
+
     def _log_reserve(self, m):
         if not self.btn_res.isChecked() or self._res_t0 is None:
             return
@@ -6738,7 +6750,7 @@ alongside the application.</p>
         # End on the target even between scheduled samples, so a 48 h run does
         # not overshoot by one interval; but only on a trustworthy final point.
         if target_h and el >= target_h * 3600.0 and m is not None:
-            self._reserve.append((el, m.rate, m.amplitude, m.beat_error))
+            self._reserve.append((el, m.rate, self._reserve_amp(m), m.beat_error))
             self._redraw_reserve()
             self._reserve_finished(stopped_early=False)
             self.btn_res.setChecked(False)
@@ -6755,7 +6767,7 @@ alongside the application.</p>
         # Check the target here as well as at sample time, or a 48 hour run
         # with a 5 minute interval could overshoot by five minutes.
         self._res_next = el + float(self.spn_res_int.value())
-        self._reserve.append((el, m.rate, m.amplitude, m.beat_error))
+        self._reserve.append((el, m.rate, self._reserve_amp(m), m.beat_error))
         self._redraw_reserve()
         if target_h and el >= target_h * 3600.0:
             self._reserve_finished(stopped_early=False)
@@ -6803,11 +6815,15 @@ alongside the application.</p>
             iso_model="quadratic" if self.chk_iso_nl.isChecked() else "linear")
         lines.extend(st.verdict)
 
-        if head and head["estimated"] and head.get("fc") and head["fc"].ready:
-            fc = head["fc"]
+        fc = head.get("fc") if head else None
+        if head and head["estimated"] and fc and fc.ready:
             lines.append(f"The run-down figure is projected from the decay so far "
                          f"(range {fc.low:.0f}-{fc.high:.0f} h, {fc.method} fit). "
                          f"Let a run reach ~135 deg for a measured number.")
+        if fc and fc.warning:
+            lines.append(fc.warning)
+        elif fc and not fc.ready and fc.note:
+            lines.append(fc.note)
 
         saved_to = self._save_reserve_to_watch(st, stopped_early, head)
         if saved_to:
@@ -6843,9 +6859,12 @@ alongside the application.</p>
         if amps.size < 2:
             return {}
         hrs = float(a[-1, 0] / 3600.0)
-        last = float(amps[-1])
         cross = reserve_crossings(self._reserve)
-        fc = reserve_forecast(self._reserve)
+        c = self._current_caliber()
+        rated = getattr(c, "power_reserve_h", 0.0) if c else 0.0
+        fc = reserve_forecast(self._reserve, rated_hours=rated or None)
+        # smoothed current amplitude, not a possibly-spiky last sample
+        last = fc.amp_now if fc.amp_now == fc.amp_now else float(np.median(amps[-5:]))
 
         prac = cross.get(200.0)
         prac_est = False
@@ -6865,21 +6884,33 @@ alongside the application.</p>
 
         return {"power_reserve_h": stop, "practical_h": prac,
                 "estimated": bool(prac_est or stop_est),
-                "fc": fc, "last": last, "hrs": hrs}
+                "fc": fc, "last": last, "hrs": hrs, "rated": float(rated or 0.0),
+                "warning": fc.warning, "holding": (not fc.ready and stop is None)}
 
     def _reserve_headline_text(self, h=None):
         h = h or self._reserve_headline()
         if not h:
             return ""
-        est = " (estimated)" if h["estimated"] else ""
         pr = h.get("power_reserve_h")
+        p2 = h.get("practical_h")
+        if (pr is None or pr != pr) and (p2 is None or p2 != p2):
+            # nothing measured or projected yet
+            if h.get("rated"):
+                return (f"Amplitude holding near {h['last']:.0f} deg after "
+                        f"{h['hrs']:.0f} h -- rated ~{h['rated']:.0f} h; too early "
+                        f"to project")
+            return (f"Amplitude near {h['last']:.0f} deg after {h['hrs']:.0f} h -- "
+                    f"still on the plateau, too early to project")
+        est = " (estimated)" if h["estimated"] else ""
         parts = []
         if pr == pr and pr is not None:
             parts.append(f"Power reserve ~{pr:.1f} h{est}")
-        p2 = h.get("practical_h")
         if p2 == p2 and p2 is not None:
             parts.append(f"keeps good time to ~{p2:.1f} h (200 deg)")
-        return "  --  ".join(parts)
+        txt = "  --  ".join(parts)
+        if h.get("warning"):
+            txt += "   [!] projection may be unreliable -- noisy amplitude signal"
+        return txt
 
     def _save_reserve_to_watch(self, st, stopped_early, head=None):
         wid = getattr(self, "_res_watch_id", None)
@@ -6930,14 +6961,14 @@ alongside the application.</p>
         if ok.sum() >= 2:
             drop = f", amplitude {amp[ok][0]:.0f} -> {amp[ok][-1]:.0f} deg"
 
-        fc = reserve_forecast(self._reserve)
-        if fc.ready:
+        head = self._reserve_headline()
+        fc = (head or {}).get("fc")
+        if fc is not None and fc.ready:
             self.c_res_proj.setData(fc.curve_h, fc.curve_deg)
             self._reserve_fc = fc
         else:
             self.c_res_proj.setData([], [])
             self._reserve_fc = None
-        head = self._reserve_headline()
         headtxt = self._reserve_headline_text(head)
         self.lbl_res.setText(
             f"{len(self._reserve)} samples over {hrs[-1]:.2f} h{drop}"
@@ -6987,6 +7018,12 @@ alongside the application.</p>
             if p2 == p2 and p2 is not None:
                 blk["practical_h"] = round(float(p2), 1)
             blk["pr_estimated"] = bool(head.get("estimated", False))
+            if head.get("rated"):
+                blk["rated_h"] = round(float(head["rated"]))
+            if head.get("holding"):
+                blk["holding"] = True
+            if head.get("warning"):
+                blk["pr_warning"] = True
         self._phone_reserve = blk
 
     def _update_iso(self):

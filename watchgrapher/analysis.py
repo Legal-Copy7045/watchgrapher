@@ -712,45 +712,73 @@ class ReserveForecast:
     curve_h: "np.ndarray" = field(default_factory=lambda: np.array([]))
     curve_deg: "np.ndarray" = field(default_factory=lambda: np.array([]))
     note: str = ""
+    warning: str = ""                      # projection looks unreliable
+    rated_hours: float = float("nan")      # caliber's published reserve, if known
+    amp_now: float = float("nan")          # smoothed current amplitude
+    drop_per_h: float = float("nan")       # robust deg/hour over the run so far
+    noise: float = float("nan")            # amplitude scatter about the trend
+
+
+def _amp_windows(t, amp, minutes=30.0):
+    """Median amplitude in `minutes`-wide time windows -- kills the spikes a
+    marginal pickup adds before anything is fitted to the decay."""
+    if t.size == 0:
+        return np.array([]), np.array([])
+    w = minutes / 60.0
+    edges = np.arange(t[0], t[-1] + w, w)
+    bt, ba = [], []
+    for i in range(edges.size - 1):
+        sel = (t >= edges[i]) & (t < edges[i + 1] + (1e-9 if i == edges.size - 2 else 0))
+        if sel.sum() >= 1:
+            bt.append(float(np.mean(t[sel])))
+            ba.append(float(np.median(amp[sel])))
+    return np.asarray(bt), np.asarray(ba)
 
 
 def reserve_crossings(samples, levels=(220.0, 200.0, 135.0)):
     """
-    Elapsed hours at which the logged amplitude actually crossed each level,
-    by linear interpolation between the bracketing samples. Only levels the
-    run genuinely passed through are returned. {level: hours}.
+    Elapsed hours at which the amplitude *trend* crossed each level -- the
+    smoothed (half-hour median) series must be at or below the level and stay
+    there, so a single spike from a marginal pickup is not mistaken for the
+    watch winding down. {level: hours}, only for levels genuinely passed.
     """
     a = np.asarray(list(samples), dtype=float)
     out = {}
-    if a.ndim != 2 or a.shape[0] < 2:
+    if a.ndim != 2 or a.shape[0] < 4:
         return out
     t = a[:, 0] / 3600.0
     amp = a[:, 2]
     ok = np.isfinite(t) & np.isfinite(amp)
-    t, amp = t[ok], amp[ok]
+    bt, ba = _amp_windows(t[ok], amp[ok], 30.0)
+    if bt.size < 3:
+        return out
     for lv in levels:
-        for i in range(1, t.size):
-            if amp[i - 1] >= lv >= amp[i] and amp[i - 1] != amp[i]:
-                frac = (amp[i - 1] - lv) / (amp[i - 1] - amp[i])
-                out[lv] = float(t[i - 1] + frac * (t[i] - t[i - 1]))
+        for i in range(1, bt.size):
+            if ba[i - 1] >= lv >= ba[i] and np.median(ba[i:]) <= lv + 3.0:
+                frac = ((ba[i - 1] - lv) / (ba[i - 1] - ba[i])
+                        if ba[i - 1] != ba[i] else 0.0)
+                out[lv] = float(bt[i - 1] + frac * (bt[i] - bt[i - 1]))
                 break
     return out
 
 
 def reserve_forecast(samples, stop_deg: float = 135.0, practical_deg: float = 200.0,
-                     min_points: int = 6, min_hours: float = 1.0) -> ReserveForecast:
+                     rated_hours: float = None,
+                     min_points: int = 6, min_hours: float = 3.0) -> ReserveForecast:
     """
-    From a power-reserve run in progress, project the runtime: when amplitude
-    reaches `stop_deg` (the watch running down) and when it reaches
-    `practical_deg` (200 deg, below which timekeeping degrades).
+    From a power-reserve run in progress, project when amplitude reaches
+    `stop_deg` (the watch running down) and `practical_deg` (200 deg).
 
-    Fits a robust quadratic to amplitude vs elapsed hours (the decay
-    accelerates as torque falls, so a straight line under-reads the runtime
-    early on). Falls back to a straight line through the last 40% of the run
-    if the quadratic curls the wrong way. Re-run it as samples arrive: more
-    data, and especially data further down the decay, tightens the estimate.
+    Mainspring torque holds a near-flat plateau for most of the reserve and
+    only steepens near the end, so this refuses to project until amplitude has
+    genuinely fallen -- more than measurement noise, and more than ~15 deg. It
+    smooths the amplitude into half-hour medians first (a marginal pickup adds
+    a lot of spike), fits a robust quadratic, and cross-checks against the
+    caliber's rated reserve when one is known.
     """
     fc = ReserveForecast(stop_deg=float(stop_deg), practical_deg=float(practical_deg))
+    if rated_hours and rated_hours == rated_hours and rated_hours > 0:
+        fc.rated_hours = float(rated_hours)
     a = np.asarray(list(samples), dtype=float)
     if a.ndim != 2 or a.shape[0] < min_points:
         return fc
@@ -758,10 +786,41 @@ def reserve_forecast(samples, stop_deg: float = 135.0, practical_deg: float = 20
     amp = a[:, 2]
     ok = np.isfinite(t) & np.isfinite(amp)
     t, amp = t[ok], amp[ok]
-    if t.size < min_points or float(t[-1] - t[0]) < min_hours:
+    span = float(t[-1] - t[0]) if t.size else 0.0
+    if t.size < min_points or span < min_hours:
+        fc.note = "keep the run going -- a projection needs at least a few hours."
         return fc
-    if float(amp[0] - amp.min()) < 3.0:
-        fc.note = "amplitude has not fallen enough yet to project a runtime."
+
+    bt, ba = _amp_windows(t, amp, 30.0)
+    if bt.size < 4:
+        bt, ba = t, amp
+    n = bt.size
+    third = max(2, n // 3)
+    first_med = float(np.median(ba[:third]))
+    last_med = float(np.median(ba[-third:]))
+    decline = first_med - last_med
+    sl, ic = _polyfit(bt, ba, 1)
+    noise = float(np.std(ba - (sl * bt + ic)))
+    fc.amp_now = last_med
+    fc.drop_per_h = float(-sl)
+    fc.noise = noise
+
+    established = (decline >= max(15.0, 3.0 * noise)) and sl < -0.4
+    if not established:
+        lost = max(0.0, decline)
+        if fc.rated_hours == fc.rated_hours:
+            need = 0.6 * fc.rated_hours
+            fc.note = (
+                f"Amplitude is holding near {last_med:.0f} deg after {t[-1]:.0f} h "
+                f"-- {lost:.0f} deg lost, within the {noise:.0f} deg measurement "
+                f"scatter. This caliber is rated about {fc.rated_hours:.0f} h; the "
+                f"decay does not steepen until roughly {need:.0f} h in, so there is "
+                f"nothing firm to project yet.")
+        else:
+            fc.note = (
+                f"Amplitude is still on the torque plateau ({lost:.0f} deg lost in "
+                f"{t[-1]:.0f} h, scatter {noise:.0f} deg). A projection needs a "
+                f"clear decline -- usually only in the last third of the reserve.")
         return fc
 
     def _root(coef, target, after):
@@ -771,56 +830,45 @@ def reserve_forecast(samples, stop_deg: float = 135.0, practical_deg: float = 20
         r = [float(x.real) for x in r if abs(x.imag) < 1e-6 and x.real > after]
         return min(r) if r else None
 
-    full = None
-    method = ""
-    coef2, _ = _robust_polyfit(t, amp, 2)
-    if coef2[0] < 0:               # opens downward -- decay accelerating, good
-        full = _root(coef2, stop_deg, t[-1])
-        method = "quadratic"
-    if full is None:
-        tail = t >= (t[-1] - max(1.0, (t[-1] - t[0]) * 0.4))
-        if tail.sum() >= 3:
-            sl, ic = _polyfit(t[tail], amp[tail], 1)
-            if sl < -1e-3:
-                full = (stop_deg - ic) / sl
-                method = "linear (tail)"
-    if full is None or full <= t[-1] or full > t[-1] + 240.0:
-        fc.note = "decay is still too shallow to project -- keep the run going."
+    coef2, _ = _robust_polyfit(bt, ba, 2)
+    full = _root(coef2, stop_deg, t[-1]) if coef2[0] < 0 else None
+    method = "quadratic" if full is not None else ""
+    if full is None and sl < -0.4:
+        full = (stop_deg - ic) / sl
+        method = "linear"
+        coef2 = np.array([0.0, sl, ic])
+    if full is None or full <= t[-1] or full > t[-1] + 400.0:
+        fc.note = "the decline is not consistent enough to project a runtime yet."
         return fc
 
-    # bound it: refit on the first 80% and see how far the estimate moves
     lo = hi = full
-    k = max(min_points, int(t.size * 0.8))
-    if k < t.size:
-        c_early, _ = _robust_polyfit(t[:k], amp[:k], 2)
-        early = _root(c_early, stop_deg, t[k - 1]) if c_early[0] < 0 else None
+    k = max(4, int(n * 0.8))
+    if k < n:
+        ce, _ = _robust_polyfit(bt[:k], ba[:k], 2)
+        early = _root(ce, stop_deg, bt[k - 1]) if ce[0] < 0 else None
         if early and early > t[-1]:
             lo, hi = min(full, early), max(full, early)
-    if method == "quadratic":
-        plot_coef = coef2
-        resid = float(np.std(amp - np.polyval(coef2, t)))
-    else:
-        tail = t >= (t[-1] - max(1.0, (t[-1] - t[0]) * 0.4))
-        plot_coef = _polyfit(t[tail], amp[tail], 1)
-        resid = 0.0
-    pad = max(1.0, 0.08 * full, resid * 0.1)
+    pad = max(1.0, 0.10 * full, noise * 0.15)
     fc.ready = True
     fc.full_hours = float(full)
     fc.low = float(max(t[-1], lo - pad))
     fc.high = float(hi + pad)
     fc.method = method
-    if amp[-1] > practical_deg:
-        prac = _root(plot_coef, practical_deg, t[-1])
+    if last_med > practical_deg:
+        prac = _root(coef2, practical_deg, t[-1])
         if prac is not None and prac <= full:
             fc.practical_hours = float(prac)
     grid = np.linspace(float(t[0]), float(full), 60)
     fc.curve_h = grid
-    fc.curve_deg = np.polyval(plot_coef, grid)
-    fc.note = (f"projected to run down at ~{full:.1f} h "
-               f"({fc.low:.1f}-{fc.high:.1f})"
-               + (f", to {practical_deg:.0f} deg at ~{fc.practical_hours:.1f} h"
-                  if fc.practical_hours == fc.practical_hours else "")
-               + f"; {method} fit on {t.size} points.")
+    fc.curve_deg = np.polyval(coef2, grid)
+    fc.note = (f"projected to run down at ~{full:.1f} h ({fc.low:.1f}-{fc.high:.1f}); "
+               f"{method} fit on {n} half-hour points.")
+    if fc.rated_hours == fc.rated_hours and full < 0.6 * fc.rated_hours:
+        fc.warning = (
+            f"This is well under the caliber's rated ~{fc.rated_hours:.0f} h. "
+            f"The amplitude trace here is noisy (scatter {noise:.0f} deg), so the "
+            f"fit may be reading spikes rather than real decay -- check the "
+            f"signal quality before trusting this number.")
     return fc
 
 

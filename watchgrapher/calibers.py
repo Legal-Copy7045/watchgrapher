@@ -485,6 +485,30 @@ for _k, (_pr, _j, _si, _ki) in _NORMS.items():
         CALIBERS[_k].service_interval_years = _si
         CALIBERS[_k].known_issues = _ki
 
+# Rated power reserve (hours) for calibers not covered above -- used only to
+# sanity-check the reserve-run forecast, so an approximate manufacturer figure
+# is fine.
+_RESERVE_H = {
+    "rolex_3000": 48, "rolex_3130": 48, "rolex_3131": 48, "rolex_3135": 50,
+    "rolex_3155": 50, "rolex_3186": 50, "rolex_4130": 72,
+    "rolex_3230": 70, "rolex_3235": 70, "rolex_3255": 70, "rolex_2235": 55,
+    "rolex_1570": 42, "rolex_1520": 42, "rolex_1030": 42,
+    "tudor_mt5602": 70, "tudor_2824": 38,
+    "omega_2500": 48, "omega_8500": 60, "omega_8800": 55, "omega_8900": 60,
+    "omega_1861": 48, "omega_321": 55, "omega_565": 50, "omega_1120": 44,
+    "eta_2846": 40, "eta_2893_2": 42, "eta_2894_2": 42, "eta_2836_2": 38,
+    "sw210_1": 42, "sw221_1": 38, "sw240": 38, "sw290_1": 42, "sw500": 62,
+    "jlc_889": 43, "jlc_899": 43, "jlc_938": 43, "jlc_920": 45,
+    "iwc_30110": 42, "iwc_32110": 72, "iwc_52010": 168, "iwc_79350": 44,
+    "breitling_b01": 70, "miyota_9015": 42, "miyota_90s5": 42, "miyota_9110": 42,
+    "panerai_p3000": 72, "panerai_p9000": 72,
+    "eta_6497_2": 46, "seiko_6r35": 70, "seiko_4r35": 41, "seiko_nh36": 41,
+    "eta_7753": 44,
+}
+for _k, _h in _RESERVE_H.items():
+    if _k in CALIBERS and not CALIBERS[_k].power_reserve_h:
+        CALIBERS[_k].power_reserve_h = float(_h)
+
 
 # --------------------------------------------------------------------------
 # Cross-reference: base movements and their clones / equivalents
