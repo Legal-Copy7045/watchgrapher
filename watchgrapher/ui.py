@@ -4017,6 +4017,9 @@ alongside the application.</p>
             b = QtWidgets.QPushButton(label)
             b.clicked.connect(slot)
             row.addWidget(b)
+        self.btn_archive = QtWidgets.QPushButton("Archive")
+        self.btn_archive.clicked.connect(self._watch_toggle_archive)
+        row.addWidget(self.btn_archive)
         left.addLayout(row)
 
         row2 = QtWidgets.QHBoxLayout()
@@ -7260,7 +7263,9 @@ alongside the application.</p>
         self.lst_watches.clear()
         self._watch_ids = []
         px = self.lst_watches.iconSize().height()
-        for w in self.collection.sorted_watches():
+        source = (self.collection.archived_watches() if sel == "Archived"
+                  else self.collection.sorted_watches())
+        for w in source:
             if not self._watch_passes_filter(w, sel, rem_ids):
                 continue
             n = len(w.history)
@@ -7306,6 +7311,8 @@ alongside the application.</p>
         tags = sorted({t for w in self.collection.watches.values() for t in w.tags})
         items = ["All watches"] + list(coll.SMART_COLLECTIONS.keys()) + \
                 [f"tag: {t}" for t in tags]
+        if self.collection.archived_watches():
+            items.append("Archived")
         self.cmb_watch_filter.blockSignals(True)
         self.cmb_watch_filter.clear()
         self.cmb_watch_filter.addItems(items)
@@ -7315,7 +7322,7 @@ alongside the application.</p>
         return self.cmb_watch_filter.currentText()
 
     def _watch_passes_filter(self, w, sel, rem_ids):
-        if not sel or sel == "All watches":
+        if not sel or sel in ("All watches", "Archived"):
             return True
         if sel.startswith("tag: "):
             return sel[5:] in w.tags
@@ -7431,6 +7438,16 @@ alongside the application.</p>
         self.collection.remove(w.id)
         self._refresh_watches()
 
+    def _watch_toggle_archive(self):
+        w = self._current_watch()
+        if not w:
+            return
+        w.archived = not getattr(w, "archived", False)
+        self.collection.save()
+        self.status.showMessage(
+            f"{w.label} {'archived' if w.archived else 'un-archived'}.", 6000)
+        self._refresh_watches(None if w.archived else w.id)
+
     def _watch_selected(self, row):
         w = self._current_watch()
         if not w:
@@ -7456,6 +7473,10 @@ alongside the application.</p>
             for c in (self.c_tr_amp, self.c_tr_rate, self.c_tr_delta):
                 c.setData([], [])
             return
+
+        if hasattr(self, "btn_archive"):
+            self.btn_archive.setText("Un-archive" if getattr(w, "archived", False)
+                                     else "Archive")
 
         p = self.collection.photo_path(w)
         thumb = self._list_thumb(p, 148, fallback=w)
