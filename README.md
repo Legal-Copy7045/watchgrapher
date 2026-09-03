@@ -105,8 +105,8 @@ tells you what to adjust for the caliber you're working on.
   the four numbers, and for a power-reserve run the power-reserve and
   good-time-to figures, elapsed/target hours, amplitude and rate decay,
   deg/hour, isochronism spread, next-sample countdown and a decay sparkline
-- Watch management from the phone: add / edit (with catalogue reference lookup)
-  / archive; bench-level fields stay on the desktop
+- Watch management from the phone: a thumbnail list, add / edit (with catalogue
+  reference lookup) / archive; bench-level fields stay on the desktop
 - Dedicated Phone Portal tab with QR code; optional autostart
 - Bound to the LAN address only; watch list and commands token-gated
 
