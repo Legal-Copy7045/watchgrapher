@@ -2120,6 +2120,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._res_t0 = None
         self._res_watch_id = None
         self._res_next = 0.0
+        self._phone_reserve = None  # cached power-reserve summary for the phone monitor
 
         self.collection = coll.Collection(COLLECTION_DIR)
         self._watch_ids = []
@@ -2695,6 +2696,15 @@ class MainWindow(QtWidgets.QMainWindow):
             st["beat_error"] = num(m.beat_error)
             st["bph"] = m.detected_bph
             st["quality"] = num(m.quality)
+
+        if (getattr(self, "btn_res", None) and self.btn_res.isChecked()
+                and self._res_t0 is not None):
+            r = dict(self._phone_reserve or {"running": True, "samples": 0})
+            el = time.time() - self._res_t0
+            r["hours"] = round(el / 3600.0, 3)
+            r["target_h"] = float(self.spn_res_hours.value())
+            r["next_sample_s"] = int(max(0.0, self._res_next - el))
+            st["reserve"] = r
         return st
 
     def _handle_phone_cmd(self, cmd):
@@ -6567,6 +6577,7 @@ alongside the application.</p>
             self._res_next = 0.0
             self._res_done = False
             self._reserve = []
+            self._phone_reserve = {"running": True, "samples": 0}
             w = self._current_watch()
             self._res_watch_id = (w.id if (w and self.chk_res_save.isChecked()) else None)
             self.btn_res.setText("Stop power reserve log")
@@ -6591,6 +6602,7 @@ alongside the application.</p>
             self.btn_res.setText("Start power reserve log")
             if self._reserve and not getattr(self, "_res_done", False):
                 self._reserve_finished(stopped_early=True)
+            self._phone_reserve = None
 
     def _log_reserve(self, m):
         if not self.btn_res.isChecked() or self._res_t0 is None:
@@ -6637,6 +6649,10 @@ alongside the application.</p>
         rates = a[:, 1][np.isfinite(a[:, 1])]
         lines = [f"{'Stopped' if stopped_early else 'Completed'} after {hrs:.2f} hours, "
                  f"{len(self._reserve)} samples."]
+        if amps.size >= 1:
+            self._phone_last_save = (
+                f"Power reserve {'stopped' if stopped_early else 'complete'}: "
+                f"{hrs:.1f} h, amplitude {amps[0]:.0f}->{amps[-1]:.0f} deg")
         if amps.size >= 2:
             lines.append(f"Amplitude {amps[0]:.0f} -> {amps[-1]:.0f} degrees "
                          f"({amps[-1]-amps[0]:+.0f}).")
@@ -6729,6 +6745,42 @@ alongside the application.</p>
         self.lbl_res.setText(
             f"{len(self._reserve)} samples over {hrs[-1]:.2f} h{drop}{proj}")
         self._update_iso()
+        self._build_phone_reserve(a, ok, fc)
+
+    def _build_phone_reserve(self, a, ok, fc):
+        """The power-reserve snapshot the phone monitor polls. Heavy bits
+        (sparkline, forecast) refresh per sample; _phone_state overlays the
+        live elapsed time and next-sample countdown each tick."""
+        amp, rate, be = a[:, 2], a[:, 1], a[:, 3]
+        af = amp[ok]
+        rf = rate[np.isfinite(rate)]
+        bf = be[np.isfinite(be)]
+        blk = {"running": True, "samples": int(a.shape[0]),
+               "interval_s": int(self.spn_res_int.value())}
+        if af.size:
+            blk["amp_first"] = round(float(af[0]))
+            blk["amp_now"] = round(float(af[-1]))
+        if rf.size:
+            blk["rate_first"] = round(float(rf[0]), 1)
+            blk["rate_now"] = round(float(rf[-1]), 1)
+        if bf.size:
+            blk["be_now"] = round(float(bf[-1]), 2)
+        st = reserve_analytics(self._reserve, iso_model="linear")
+        if st.amp_per_hour == st.amp_per_hour:
+            blk["amp_per_hour"] = round(float(st.amp_per_hour), 1)
+        if st.iso_span == st.iso_span:
+            blk["iso_span"] = round(float(st.iso_span), 1)
+        pts = a[ok][:, [0, 2]]
+        if pts.shape[0] > 48:
+            idx = np.linspace(0, pts.shape[0] - 1, 48).astype(int)
+            pts = pts[idx]
+        blk["spark"] = [[round(float(t) / 3600.0, 3), round(float(v))] for t, v in pts]
+        if fc is not None and fc.ready:
+            blk["forecast_h"] = round(float(fc.full_hours), 1)
+            blk["forecast_lo"] = round(float(fc.low), 1)
+            blk["forecast_hi"] = round(float(fc.high), 1)
+            blk["stop_deg"] = round(float(fc.stop_deg))
+        self._phone_reserve = blk
 
     def _update_iso(self):
         if not self._reserve:

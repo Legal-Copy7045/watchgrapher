@@ -701,6 +701,16 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
 
 <div id="prog" style="max-width:340px;margin:6px auto;color:#8a94a4;font-size:13px;
      min-height:16px"></div>
+
+<div id="resv" style="display:none;max-width:360px;margin:10px auto;padding:12px;
+     background:#141d16;border:1px solid #2c4030;border-radius:12px;text-align:left">
+  <div style="font-weight:700;color:#7fd8a0;margin-bottom:4px">Power reserve run</div>
+  <div id="resv_head" style="font-size:12px;color:#c8d0dc;font-variant-numeric:tabular-nums"></div>
+  <canvas id="resv_spark" width="320" height="88" style="width:100%;height:88px;
+     margin:8px 0 6px;background:#0f1512;border-radius:6px"></canvas>
+  <div id="resv_body" style="font-size:13px;color:#b6bfcc;line-height:1.55"></div>
+</div>
+
 <div id="meter"><div id="bar"></div></div>
 <div id="clip"></div>
 <p id="status">idle</p>
@@ -798,10 +808,60 @@ loadWatches();
 watchEl.onchange=()=>cmd('select',{id:watchEl.value});
 
 function fmt(v,d){ return (v===null||v===undefined)?'--':Number(v).toFixed(d); }
+function mmss(x){ x=Math.max(0,Math.round(x)); return Math.floor(x/60)+':'+('0'+(x%60)).slice(-2); }
+function hm(h){ h=Math.max(0,h); const m=Math.round((h-Math.floor(h))*60);
+  return Math.floor(h)+'h '+('0'+m).slice(-2)+'m'; }
+
+function drawSpark(r){
+  const c=$("resv_spark"), ctx=c.getContext('2d'); const W=c.width, H=c.height;
+  ctx.clearRect(0,0,W,H);
+  const pts=r.spark||[]; if(pts.length<2) return;
+  const xs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]);
+  const x1=Math.max(xs[xs.length-1], r.forecast_h||0);
+  const stop=r.stop_deg||Math.min.apply(null,ys);
+  const ylo=Math.min(Math.min.apply(null,ys), stop)-8, yhi=Math.max.apply(null,ys)+8;
+  const X=v=>4+(v-xs[0])/((x1-xs[0])||1)*(W-8);
+  const Y=v=>H-4-(v-ylo)/((yhi-ylo)||1)*(H-8);
+  if(r.stop_deg){ ctx.strokeStyle='#4a2e2e'; ctx.lineWidth=1; ctx.beginPath();
+    ctx.moveTo(0,Y(stop)); ctx.lineTo(W,Y(stop)); ctx.stroke(); }
+  ctx.strokeStyle='#57d38c'; ctx.lineWidth=2; ctx.beginPath();
+  pts.forEach((p,i)=>{ const fx=X(p[0]), fy=Y(p[1]); i?ctx.lineTo(fx,fy):ctx.moveTo(fx,fy); });
+  ctx.stroke();
+  if(r.forecast_h){
+    const ey=Y(stop);
+    ctx.strokeStyle='#3f5c46'; ctx.setLineDash([3,3]); ctx.beginPath();
+    ctx.moveTo(X(xs[xs.length-1]),Y(ys[ys.length-1])); ctx.lineTo(X(r.forecast_h),ey);
+    ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle='#7fd8a0'; ctx.beginPath(); ctx.arc(X(r.forecast_h),ey,3,0,7); ctx.fill();
+  }
+}
+
+function showReserve(r){
+  $("resv").style.display='block';
+  const tgt = r.target_h>0 ? (' / '+r.target_h.toFixed(0)+'h target') : ' (until stopped)';
+  $("resv_head").textContent =
+    hm(r.hours||0)+' elapsed'+tgt+'   |   '+(r.samples||0)+' samples'+
+    (r.next_sample_s!=null && r.next_sample_s>0 ? '   |   next in '+mmss(r.next_sample_s) : '');
+  const b=[];
+  if(r.amp_first!=null) b.push('Amplitude  '+r.amp_first+' &rarr; <b>'+r.amp_now+'</b> deg  ('+
+    (r.amp_now-r.amp_first>=0?'+':'')+(r.amp_now-r.amp_first)+')');
+  if(r.rate_first!=null) b.push('Rate  '+fmt(r.rate_first,1)+' &rarr; <b>'+fmt(r.rate_now,1)+'</b> s/d');
+  if(r.amp_per_hour!=null) b.push('Falling '+Math.abs(r.amp_per_hour).toFixed(1)+' deg/hour');
+  if(r.iso_span!=null) b.push('Isochronism spread '+fmt(r.iso_span,1)+' s/d so far');
+  if(r.forecast_h!=null) b.push('<b>Projected full reserve ~'+r.forecast_h.toFixed(1)+' h</b> ('+
+    r.forecast_lo.toFixed(0)+'&ndash;'+r.forecast_hi.toFixed(0)+', to '+r.stop_deg+' deg)');
+  if(r.be_now!=null) b.push('Beat error '+fmt(r.be_now,2)+' ms');
+  $("resv_body").innerHTML=b.join('<br>');
+  drawSpark(r);
+}
+
 async function refresh(){
   let s; try{ s=await (await get('/api/state')).json(); }catch(e){ return; }
+  const monitoring = s.listening && !running;
   if(!s.device_is_net)
     desk.textContent='Desktop input is not set to the phone pickup -- choose it there.';
+  else if(monitoring)
+    desk.textContent='monitoring the desktop'+(s.watch?' -- '+s.watch:'');
   else if(s.listening)
     desk.textContent='desktop listening'+(s.watch?' -- '+s.watch:'');
   else
@@ -813,8 +873,9 @@ async function refresh(){
   saveBtn.disabled=!(running && s.have_reading && watchEl.value);
   if(s.last_save) status.textContent=s.last_save;
 
+  if(s.reserve){ showReserve(s.reserve); } else { $("resv").style.display='none'; }
+
   // progress / finished handling for the phone side
-  function mmss(x){ x=Math.max(0,Math.round(x)); return Math.floor(x/60)+':'+('0'+(x%60)).slice(-2); }
   if(running && s.listening){
     runSeen=true;
     if(s.settling) prog.textContent='settling before the timed run...';
@@ -823,8 +884,14 @@ async function refresh(){
       prog.textContent='timed run  '+mmss(e)+' / '+mmss(s.run_len);
       bar.style.width='';   // meter still shows audio level; progress is text
     } else prog.textContent='open-ended -- tap Stop when steady  ('+mmss(s.elapsed||0)+')';
+  } else if(monitoring && !s.reserve){
+    if(s.settling) prog.textContent='desktop: settling before a timed run...';
+    else if(s.run_len>0) prog.textContent='desktop timed run  '+mmss(s.run_elapsed||0)+' / '+mmss(s.run_len);
+    else prog.textContent='desktop open-ended run  ('+mmss(s.elapsed||0)+')';
   } else if(running && runSeen && !s.pending){
     prog.textContent='';    // run ended on the desktop; wait for the summary
+  } else if(!running && !s.listening){
+    prog.textContent='';
   }
   if(running && runSeen && !s.listening){
     // the desktop run has ended (timed out or was stopped) -- tidy up locally
