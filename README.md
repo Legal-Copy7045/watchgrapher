@@ -1086,6 +1086,9 @@ into half-hour medians first, so a marginal pickup that spikes low now and then
 does not fake a wind-down, and it flags a projection that comes out well below
 the caliber's rated reserve as likely reading noise. Once a real decline is
 established the estimate is shown with a range and tightens as the run goes on.
+The half-hour-median trend is drawn on the amplitude plot in blue whether or not
+a projection is available, so a reopened run shows the app's read of the decay
+even when it is still on the plateau.
 
 If a watch is selected in the Measure tab, the finished run is filed to its
 history by default (*Save to the selected watch*, on unless you turn it off).
