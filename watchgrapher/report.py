@@ -571,13 +571,19 @@ def _reserve_section(watch):
     if not runs:
         return ""
     out = ["<h2>Power reserve runs</h2>",
-           "<table><tr><th>Date</th><th class='n'>Hours</th>"
-           "<th class='n'>Amplitude start &rarr; end</th><th class='n'>To 220&deg;</th>"
-           "<th>Isochronism</th></tr>"]
+           "<table><tr><th>Date</th><th class='n'>Power reserve</th>"
+           "<th class='n'>Good time to</th><th class='n'>Run length</th>"
+           "<th class='n'>Amplitude start &rarr; end</th><th>Isochronism</th></tr>"]
     for r in runs:
         amp = (f"{r.amp_first:.0f} &rarr; {r.amp_last:.0f}"
                if r.amp_first == r.amp_first else "--")
-        to220 = f"{r.hours_to_220:.0f} h" if r.hours_to_220 == r.hours_to_220 else "--"
+        pr = getattr(r, "power_reserve_h", float("nan"))
+        prac = getattr(r, "practical_h", float("nan"))
+        if not (pr == pr) and r.hours_to_200 == r.hours_to_200:
+            prac = prac if prac == prac else r.hours_to_200
+        est = " est" if getattr(r, "pr_estimated", False) else ""
+        pr_txt = (f"~{pr:.0f} h{est}" if pr == pr else "--")
+        prac_txt = (f"{prac:.0f} h" if prac == prac else "--")
         if r.iso_span == r.iso_span:
             mag = abs(r.iso_span)
             iso = (f"{'good' if mag < 4 else 'fair' if mag < 12 else 'poor'} "
@@ -586,9 +592,13 @@ def _reserve_section(watch):
             iso = "--"
         note = " &mdash; stopped early" if r.stopped_early else ""
         out.append(f"<tr><td>{e(r.when[:16].replace('T', ' '))}{note}</td>"
-                   f"<td class='n'>{_fmt(r.hours, 1)}</td><td class='n'>{amp}</td>"
-                   f"<td class='n'>{to220}</td><td>{iso}</td></tr>")
+                   f"<td class='n'>{pr_txt}</td><td class='n'>{prac_txt}</td>"
+                   f"<td class='n'>{_fmt(r.hours, 1)}</td>"
+                   f"<td class='n'>{amp}</td><td>{iso}</td></tr>")
     out.append("</table>")
+    out.append("<p class='sub'>Power reserve is full wind to the watch running "
+               "down (~135&deg;); 'good time to' is when amplitude reaches 200&deg;. "
+               "'est' means projected from the decay rather than reached in the run.</p>")
     return "".join(out)
 
 
@@ -961,8 +971,12 @@ def build_portfolio(path, collection, owner=""):
         rsv = sorted(getattr(w, "reserves", []), key=lambda r: r.when, reverse=True)
         if rsv:
             last = rsv[0]
+            prh = getattr(last, "power_reserve_h", float("nan"))
+            prtxt = (f"power reserve ~{prh:.0f} h"
+                     + (" (est)" if getattr(last, "pr_estimated", False) else "")
+                     if prh == prh else f"{_fmt(last.hours, 1)} h run")
             p.append(f"<p><b>{len(rsv)} power-reserve run(s).</b> Most recent "
-                     f"({last.when[:10]}): {_fmt(last.hours, 1)} h, amplitude "
+                     f"({last.when[:10]}): {prtxt}, amplitude "
                      f"{_fmt(last.amp_first, 0)}&ndash;{_fmt(last.amp_last, 0)} deg"
                      + (f", isochronism {last.iso_span:+.1f} s/d across the range"
                         if last.iso_span == last.iso_span else "") + ".</p>")

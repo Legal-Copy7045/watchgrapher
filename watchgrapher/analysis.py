@@ -705,18 +705,44 @@ class ReserveForecast:
     full_hours: float = float("nan")       # projected time to `stop_deg`
     low: float = float("nan")              # rough lower / upper bound
     high: float = float("nan")
-    stop_deg: float = 160.0
+    stop_deg: float = 135.0
+    practical_hours: float = float("nan")  # projected time to `practical_deg` (200)
+    practical_deg: float = 200.0
     method: str = ""                       # "quadratic" | "linear (tail)"
     curve_h: "np.ndarray" = field(default_factory=lambda: np.array([]))
     curve_deg: "np.ndarray" = field(default_factory=lambda: np.array([]))
     note: str = ""
 
 
-def reserve_forecast(samples, stop_deg: float = 160.0,
+def reserve_crossings(samples, levels=(220.0, 200.0, 135.0)):
+    """
+    Elapsed hours at which the logged amplitude actually crossed each level,
+    by linear interpolation between the bracketing samples. Only levels the
+    run genuinely passed through are returned. {level: hours}.
+    """
+    a = np.asarray(list(samples), dtype=float)
+    out = {}
+    if a.ndim != 2 or a.shape[0] < 2:
+        return out
+    t = a[:, 0] / 3600.0
+    amp = a[:, 2]
+    ok = np.isfinite(t) & np.isfinite(amp)
+    t, amp = t[ok], amp[ok]
+    for lv in levels:
+        for i in range(1, t.size):
+            if amp[i - 1] >= lv >= amp[i] and amp[i - 1] != amp[i]:
+                frac = (amp[i - 1] - lv) / (amp[i - 1] - amp[i])
+                out[lv] = float(t[i - 1] + frac * (t[i] - t[i - 1]))
+                break
+    return out
+
+
+def reserve_forecast(samples, stop_deg: float = 135.0, practical_deg: float = 200.0,
                      min_points: int = 6, min_hours: float = 1.0) -> ReserveForecast:
     """
-    From a power-reserve run in progress, project when amplitude will reach
-    `stop_deg` -- the level below which the watch keeps poor time or stops.
+    From a power-reserve run in progress, project the runtime: when amplitude
+    reaches `stop_deg` (the watch running down) and when it reaches
+    `practical_deg` (200 deg, below which timekeeping degrades).
 
     Fits a robust quadratic to amplitude vs elapsed hours (the decay
     accelerates as torque falls, so a straight line under-reads the runtime
@@ -724,7 +750,7 @@ def reserve_forecast(samples, stop_deg: float = 160.0,
     if the quadratic curls the wrong way. Re-run it as samples arrive: more
     data, and especially data further down the decay, tightens the estimate.
     """
-    fc = ReserveForecast(stop_deg=float(stop_deg))
+    fc = ReserveForecast(stop_deg=float(stop_deg), practical_deg=float(practical_deg))
     a = np.asarray(list(samples), dtype=float)
     if a.ndim != 2 or a.shape[0] < min_points:
         return fc
@@ -783,11 +809,18 @@ def reserve_forecast(samples, stop_deg: float = 160.0,
     fc.low = float(max(t[-1], lo - pad))
     fc.high = float(hi + pad)
     fc.method = method
+    if amp[-1] > practical_deg:
+        prac = _root(plot_coef, practical_deg, t[-1])
+        if prac is not None and prac <= full:
+            fc.practical_hours = float(prac)
     grid = np.linspace(float(t[0]), float(full), 60)
     fc.curve_h = grid
     fc.curve_deg = np.polyval(plot_coef, grid)
-    fc.note = (f"projected to {stop_deg:.0f} deg at ~{full:.1f} h "
-               f"({fc.low:.1f}-{fc.high:.1f}), {method} fit on {t.size} points.")
+    fc.note = (f"projected to run down at ~{full:.1f} h "
+               f"({fc.low:.1f}-{fc.high:.1f})"
+               + (f", to {practical_deg:.0f} deg at ~{fc.practical_hours:.1f} h"
+                  if fc.practical_hours == fc.practical_hours else "")
+               + f"; {method} fit on {t.size} points.")
     return fc
 
 
