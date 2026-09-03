@@ -1746,6 +1746,28 @@ class EscapementDialog(QtWidgets.QDialog):
 
 
 
+class _UpdateWorker(QtCore.QObject):
+    """One-shot: check GitHub for a newer version, or apply the update."""
+    checked = QtCore.Signal(object)                 # update.UpdateInfo | None
+    applied = QtCore.Signal(bool, str)              # ok, message
+
+    def __init__(self, action="check"):
+        super().__init__()
+        self.action = action
+
+    @QtCore.Slot()
+    def run(self):
+        from . import update
+        if self.action == "apply":
+            try:
+                ok, msg = update.apply()
+            except Exception as e:                  # noqa: BLE001
+                ok, msg = False, f"{type(e).__name__}: {e}"
+            self.applied.emit(ok, msg)
+        else:
+            self.checked.emit(update.check())
+
+
 class _NtpProbe(QtCore.QObject):
     done = QtCore.Signal(str, float, float, str)   # label, offset_s, roundtrip_s, error
 
@@ -2105,6 +2127,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._watch_set_ref = None  # (true_epoch, watch_epoch) when the watch was set
         self._clock_cal_thread = None
         self._clock_cal_worker = None
+        self._update_thread = None
+        self._update_worker = None
+        self._update_prog = None
         self._clock_cal_seg = []          # (true_epoch, frames) for the current unbroken stream
         self._clock_cal_done_segs = []    # segments closed by an audio-stream restart
         self._clock_cal_rec = None
@@ -2143,6 +2168,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
         if not self._settings_get("setup_done", False):
             QtCore.QTimer.singleShot(300, self._run_setup_wizard)
+        elif self._settings_get("update_check", True):
+            QtCore.QTimer.singleShot(1500, lambda: self._check_for_update(manual=False))
 
     # ---------------------------------------------------------------- build
     def _build(self):
@@ -2324,6 +2351,16 @@ class MainWindow(QtWidgets.QMainWindow):
             act = QtGui.QAction(label, self)
             act.triggered.connect(slot)
             hm.addAction(act)
+        hm.addSeparator()
+        upd_act = QtGui.QAction("Check for updates now...", self)
+        upd_act.triggered.connect(lambda: self._check_for_update(manual=True))
+        hm.addAction(upd_act)
+        self.act_update_check = QtGui.QAction("Check for updates at start-up", self)
+        self.act_update_check.setCheckable(True)
+        self.act_update_check.setChecked(self._settings_get("update_check", True))
+        self.act_update_check.toggled.connect(
+            lambda v: self._settings_set("update_check", bool(v)))
+        hm.addAction(self.act_update_check)
 
     def _show_escapement(self):
         dlg = QtWidgets.QDialog(self)
@@ -2356,6 +2393,115 @@ class MainWindow(QtWidgets.QMainWindow):
     def _run_setup_wizard(self):
         SetupWizard(self).exec()
         self._settings_set("setup_done", True)
+
+    # ------------------------------------------------------------ updates
+    def _check_for_update(self, manual=False):
+        if getattr(self, "_update_thread", None) is not None:
+            return
+        self._update_manual = manual
+        if manual:
+            self.status.showMessage("Checking GitHub for updates...", 4000)
+        self._update_thread = QtCore.QThread(self)
+        self._update_worker = _UpdateWorker("check")
+        self._update_worker.moveToThread(self._update_thread)
+        self._update_thread.started.connect(self._update_worker.run)
+        self._update_worker.checked.connect(self._on_update_checked)
+        self._update_worker.checked.connect(self._update_thread.quit)
+        self._update_thread.finished.connect(self._update_cleanup)
+        self._update_thread.start()
+
+    def _update_cleanup(self):
+        self._update_worker = None
+        self._update_thread = None
+
+    def _on_update_checked(self, info):
+        if self._closing:
+            return
+        if info is None:
+            if getattr(self, "_update_manual", False):
+                QtWidgets.QMessageBox.information(
+                    self, "Check for updates",
+                    "Could not reach GitHub. Check your connection and try again.")
+            return
+        if not info.available:
+            if getattr(self, "_update_manual", False):
+                QtWidgets.QMessageBox.information(
+                    self, "Check for updates",
+                    f"You are on the latest version ({info.current}).")
+            return
+        if (not getattr(self, "_update_manual", False)
+                and info.latest
+                and info.latest == self._settings_get("update_skip_version", "")):
+            return
+        self._prompt_update(info)
+
+    def _prompt_update(self, info):
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Update available")
+        box.setIcon(QtWidgets.QMessageBox.Information)
+        box.setText(f"WatchGrapher {info.latest} is available "
+                    f"(you have {info.current}).")
+        box.setInformativeText(
+            info.detail + ("\n\nThis will pull the update, install any new "
+                           "dependencies and restart the app."
+                           if info.method == "git" else
+                           "\n\nThis is not a git install, so open the page and "
+                           "download the new version yourself."))
+        if info.method == "git":
+            go = box.addButton("Update and restart", QtWidgets.QMessageBox.AcceptRole)
+        else:
+            go = box.addButton("Open download page", QtWidgets.QMessageBox.AcceptRole)
+        later = box.addButton("Not this session", QtWidgets.QMessageBox.RejectRole)
+        skip = box.addButton("Skip this version", QtWidgets.QMessageBox.DestructiveRole)
+        box.setDefaultButton(later)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is skip:
+            self._settings_set("update_skip_version", info.latest)
+            self.status.showMessage(
+                f"Version {info.latest} skipped. Help menu re-enables the check.", 8000)
+        elif clicked is go:
+            if info.method == "git":
+                self._apply_update()
+            else:
+                from . import update
+                QtGui.QDesktopServices.openUrl(QtCore.QUrl(update.RELEASES_URL))
+
+    def _apply_update(self):
+        self._update_prog = QtWidgets.QProgressDialog(
+            "Updating WatchGrapher -- pulling the latest and installing "
+            "dependencies...", None, 0, 0, self)
+        self._update_prog.setWindowTitle("Updating")
+        self._update_prog.setWindowModality(QtCore.Qt.WindowModal)
+        self._update_prog.setCancelButton(None)
+        self._update_prog.setMinimumDuration(0)
+        self._update_prog.show()
+        self._update_thread = QtCore.QThread(self)
+        self._update_worker = _UpdateWorker("apply")
+        self._update_worker.moveToThread(self._update_thread)
+        self._update_thread.started.connect(self._update_worker.run)
+        self._update_worker.applied.connect(self._on_update_applied)
+        self._update_worker.applied.connect(self._update_thread.quit)
+        self._update_thread.finished.connect(self._update_cleanup)
+        self._update_thread.start()
+
+    def _on_update_applied(self, ok, msg):
+        if getattr(self, "_update_prog", None) is not None:
+            self._update_prog.close()
+            self._update_prog = None
+        if not ok:
+            QtWidgets.QMessageBox.warning(self, "Update failed", msg)
+            return
+        QtWidgets.QMessageBox.information(
+            self, "Update installed",
+            "WatchGrapher has been updated and will now restart.")
+        from . import update
+        self._closing = True
+        try:
+            update.restart()
+        except Exception:
+            pass
+        QtWidgets.QApplication.quit()
 
     def _show_report(self, out):
         """Open a freshly built report. If the chosen name ends .pdf, convert
@@ -8872,6 +9018,10 @@ alongside the application.</p>
         if th is not None:
             th.quit()
             th.wait(2000)
+        ut = getattr(self, "_update_thread", None)
+        if ut is not None:
+            ut.quit()
+            ut.wait(2000)
         try:
             self.worker.stop()
             self.thread.quit()

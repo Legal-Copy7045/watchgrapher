@@ -134,6 +134,9 @@ tells you what to adjust for the caliber you're working on.
 - Light / dark / system theme
 - `WATCHGRAPHER_HOME` to relocate all data
 - One-button `run.bat` launcher: installs Python and dependencies on first run
+- Start-up update check: if the checkout is behind GitHub it offers to pull,
+  reinstall dependencies and restart -- or skip that version, or wait; git
+  installs get the one-click update, a zip install gets pointed at the page
 
 ---
 
@@ -162,6 +165,17 @@ python -m venv .venv
 pip install -r requirements.txt
 python -m watchgrapher
 ```
+
+### Updates
+
+If you installed by `git clone` (what `run.bat` expects), WatchGrapher checks
+GitHub at start-up. When there is a newer version it says so and offers to
+**update and restart** -- a fast-forward `git pull`, plus `pip install` only if
+the dependencies changed -- or **skip this version** (it will not ask again
+until an even newer one), or **not this session**. *Help -> Check for updates
+now* runs it on demand; *Help -> Check for updates at start-up* turns the
+automatic check off. A zip install (no `.git` folder) just gets told a newer
+version exists and pointed at the download page.
 
 ---
 
