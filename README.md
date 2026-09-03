@@ -97,6 +97,10 @@ tells you what to adjust for the caliber you're working on.
 - Server-side makeup AGC + a boost slider on the page
 - Remote control: pick a stored watch, set the duration, start/stop and get the
   save/discard prompt all on the phone
+- Live monitor: watch a desktop-initiated run from the phone -- rate, amplitude,
+  beat error, and for a power-reserve run the elapsed/target hours, amplitude
+  and rate decay, deg/hour, isochronism spread, next-sample countdown, a decay
+  sparkline and the projected full-reserve time
 - Dedicated Phone Portal tab with QR code; optional autostart
 - Bound to the LAN address only; watch list and commands token-gated
 
@@ -269,6 +273,16 @@ You can also drive it the other way: press Start on the desktop and the phone
 page just shows the live numbers and lets you save. A desktop-started run
 prompts on the desktop as usual. The page reconnects on its own if the Wi-Fi
 blips or WatchGrapher restarts.
+
+**Monitoring a long run.** Open the page on your phone while a run is going on
+the desktop -- whatever the pickup -- and it becomes a read-only monitor: the
+four numbers update, and a **power reserve run** gets its own card with elapsed
+and target hours, amplitude and rate start-to-now, degrees per hour, the
+isochronism spread so far, the countdown to the next sample, a small amplitude
+decay sparkline, and the projected full-reserve time (with its range), so you
+can check on a 48-hour run from another room. The card appears automatically
+whenever the desktop has a power-reserve log active and disappears when it
+ends; no button to press.
 
 **Security.** The server binds only to this computer's LAN address (never all
 interfaces, so it is not reachable over a VPN or a public-Wi-Fi link). Your
