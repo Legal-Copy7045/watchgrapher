@@ -1562,190 +1562,6 @@ class AnalogClock(QtWidgets.QWidget):
         p.drawEllipse(-4, -4, 8, 8)
 
 
-class EscapementView(QtWidgets.QWidget):
-    """
-    Schematic Swiss lever escapement, animated from the measured numbers.
-
-    Not a mechanism simulation -- it is driven by a phase clock so you can
-    watch, slowed right down, what the balance, fork and escape wheel are
-    doing at each of the three noises the analyzer listens for.
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setMinimumSize(320, 300)
-        self.amp = 275.0
-        self.bph = 28800
-        self.dt = 0.006          # unlocking-to-drop interval, seconds
-        self.slowdown = 0.1
-        self._t0 = time.monotonic()
-        self._phase = 0.0        # seconds into the watch's own timeline
-
-    def set_params(self, amp, bph, dt):
-        if amp == amp:
-            self.amp = float(np.clip(amp, 120, 340))
-        if bph:
-            self.bph = int(bph)
-        if dt == dt and dt > 0:
-            self.dt = float(dt)
-
-    def resync(self):
-        """Drop the elapsed gap so the phase does not jump after being hidden."""
-        self._t0 = time.monotonic()
-
-    def advance(self):
-        now = time.monotonic()
-        self._phase += (now - self._t0) * self.slowdown
-        self._t0 = now
-        self.update()
-
-    def paintEvent(self, _ev):
-        p = QtGui.QPainter(self)
-        p.setRenderHint(QtGui.QPainter.Antialiasing)
-        p.fillRect(self.rect(), QtGui.QColor("#12151a"))
-        s = min(self.width(), self.height())
-        p.translate(self.width() / 2.0, self.height() / 2.0)
-        p.scale(s / 300.0, s / 300.0)
-
-        t_beat = 3600.0 / self.bph
-        t_osc = 2.0 * t_beat
-        k = int(self._phase / t_beat)              # beat index
-        into = self._phase - k * t_beat            # seconds into this beat
-        theta = self.amp * math.sin(2 * math.pi * self._phase / t_osc)   # balance angle, deg
-
-        # phase within the beat: unlock at 0, impulse ~dt/2, drop at dt
-        stage = ("unlock" if into < self.dt * 0.35 else
-                 "impulse" if into < self.dt else "free")
-
-        # ---- escape wheel (top) : steps one half-tooth per beat -------------
-        p.save()
-        p.translate(-70, -78)
-        ew_ang = -k * (360.0 / 15.0 / 2.0) - (min(into, self.dt) / self.dt) * 6.0
-        p.rotate(ew_ang)
-        p.setPen(QtGui.QPen(QtGui.QColor("#8a94a4"), 2))
-        p.setBrush(QtGui.QColor("#1a1f27"))
-        pts = []
-        for i in range(15):
-            a0 = math.radians(i * 24)
-            a1 = math.radians(i * 24 + 10)
-            pts.append(QtCore.QPointF(34 * math.cos(a0), 34 * math.sin(a0)))
-            pts.append(QtCore.QPointF(22 * math.cos(a1), 22 * math.sin(a1)))
-        p.drawPolygon(QtGui.QPolygonF(pts))
-        p.restore()
-
-        # ---- pallet fork : flips between bankings each beat ----------------
-        p.save()
-        p.translate(-22, -30)
-        p.rotate(12.0 if k % 2 == 0 else -12.0)
-        col = ("#ff5d5d" if stage == "unlock"
-               else "#ffb648" if stage == "impulse" else "#8a94a4")
-        pen = QtGui.QPen(QtGui.QColor(col), 5)
-        pen.setCapStyle(QtCore.Qt.RoundCap)
-        p.setPen(pen)
-        p.drawLine(0, -34, 0, 20)
-        p.drawLine(-10, -34, 10, -34)
-        p.setBrush(QtGui.QColor(col))
-        p.drawEllipse(-3, 16, 6, 6)
-        p.restore()
-
-        # ---- balance wheel (fills the lower area) -------------------------
-        p.save()
-        p.translate(0, 46)
-        p.rotate(theta)
-        p.setPen(QtGui.QPen(QtGui.QColor("#e8eef7"), 4))
-        p.setBrush(QtCore.Qt.NoBrush)
-        p.drawEllipse(-88, -88, 176, 176)
-        for a in (0, 60, 120):
-            p.save()
-            p.rotate(a)
-            p.drawLine(-88, 0, 88, 0)
-            p.restore()
-        p.setPen(QtGui.QPen(QtGui.QColor("#ff5d5d"), 5))
-        p.drawLine(0, 0, 0, -88)
-        p.restore()
-
-        # ---- labels ------------------------------------------------------
-        p.setPen(QtGui.QColor("#c8d0dc"))
-        p.setFont(QtGui.QFont("Segoe UI", 9))
-        p.drawText(QtCore.QRectF(-150, 118, 300, 18), QtCore.Qt.AlignCenter,
-                   f"amplitude {self.amp:.0f} deg   {self.bph} bph   "
-                   f"slowed {1/self.slowdown:.0f}x")
-        for i, (name, active) in enumerate([("unlock", stage == "unlock"),
-                                            ("impulse", stage == "impulse"),
-                                            ("drop / lock", stage == "free")]):
-            p.setPen(QtGui.QColor("#ff5d5d" if (i == 0 and active) else
-                                  "#ffb648" if (i == 1 and active) else
-                                  "#57d38c" if (i == 2 and active) else "#5a6472"))
-            p.drawText(QtCore.QRectF(-150, -142 + i * 16, 300, 16),
-                       QtCore.Qt.AlignHCenter, ("> " if active else "") + name)
-
-
-class EscapementDialog(QtWidgets.QDialog):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.setWindowTitle("Escapement animation")
-        self.setMinimumSize(380, 460)
-        self._parent = parent
-        lay = QtWidgets.QVBoxLayout(self)
-        self.view = EscapementView()
-        lay.addWidget(self.view, 1)
-
-        row = QtWidgets.QHBoxLayout()
-        row.addWidget(QtWidgets.QLabel("Speed"))
-        self.sld = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self.sld.setRange(2, 100)          # percent of real time
-        self.sld.setValue(10)
-        self.sld.valueChanged.connect(
-            lambda v: setattr(self.view, "slowdown", v / 100.0))
-        row.addWidget(self.sld, 1)
-        self.b_sound = QtWidgets.QPushButton("Play the beat, slowed")
-        self.b_sound.clicked.connect(self._play)
-        row.addWidget(self.b_sound)
-        lay.addLayout(row)
-
-        self._tmr = QtCore.QTimer(self)
-        self._tmr.setInterval(33)
-        self._tmr.timeout.connect(self._tick)
-
-    def showEvent(self, e):
-        self.view.resync()
-        self._tmr.start()
-        super().showEvent(e)
-
-    def hideEvent(self, e):
-        self._tmr.stop()
-        super().hideEvent(e)
-
-    def _tick(self):
-        m = getattr(self._parent, "last", None)
-        if m is not None and m.ok:
-            self.view.set_params(m.amplitude, m.nominal_bph or m.detected_bph, m.dt_mean)
-        self.view.advance()
-
-    def _play(self):
-        if not audio.HAVE_SD:
-            QtWidgets.QMessageBox.information(self, "Slowed playback",
-                                             "sounddevice is not available.")
-            return
-        m = getattr(self._parent, "last", None)
-        if m is None or m.beat_wave is None or not m.beat_wave_fs:
-            QtWidgets.QMessageBox.information(
-                self, "Slowed playback",
-                "No beat captured yet -- take a reading (live or from a recording) first.")
-            return
-        import sounddevice as sd
-        w = np.asarray(m.beat_wave, dtype=np.float32)
-        w = w / (np.max(np.abs(w)) + 1e-9) * 0.5
-        slow = max(4, int(round(1.0 / max(0.02, self.sld.value() / 100.0))))
-        gap = np.zeros(int(m.beat_wave_fs * 0.10), dtype=np.float32)
-        seq = np.concatenate([np.concatenate([w, gap]) for _ in range(4)])
-        try:
-            sd.play(seq, samplerate=max(2000, m.beat_wave_fs // slow))
-        except Exception as e:                       # noqa: BLE001
-            QtWidgets.QMessageBox.warning(self, "Slowed playback", str(e))
-
-
-
 class _UpdateWorker(QtCore.QObject):
     """One-shot: check GitHub for a newer version, or apply the update."""
     checked = QtCore.Signal(object)                 # update.UpdateInfo | None
@@ -1966,6 +1782,81 @@ class EscapementView(QtWidgets.QWidget):
         p.drawText(10, h - 10, f"shown ~{self.slow:.0f}x slower than real   |   "
                                f"green = balance receiving impulse")
         p.end()
+
+
+class EscapementDialog(QtWidgets.QDialog):
+    """The escapement animation plus slowed-down playback of a captured beat."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._parent = parent
+        self.setWindowTitle("Escapement animation")
+        self.resize(560, 480)
+        v = QtWidgets.QVBoxLayout(self)
+        self.view = EscapementView(self)
+        v.addWidget(self.view, 1)
+
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Slower"))
+        self.sld = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.sld.setRange(2, 40)
+        self.sld.setValue(int(self.view.slow))
+        self.sld.valueChanged.connect(lambda x: setattr(self.view, "slow", float(x)))
+        row.addWidget(self.sld, 1)
+        self.b_sound = QtWidgets.QPushButton("Play the beat, slowed")
+        self.b_sound.clicked.connect(self._play)
+        row.addWidget(self.b_sound)
+        v.addLayout(row)
+        v.addWidget(QtWidgets.QLabel(
+            "Uses the latest reading if there is one, or a healthy default. "
+            "A large beat error visibly offsets the tick and the tock."))
+
+        self._feed = QtCore.QTimer(self)
+        self._feed.setInterval(700)
+        self._feed.timeout.connect(self._pull)
+        self._pull()
+
+    def showEvent(self, e):
+        self._feed.start()
+        super().showEvent(e)
+
+    def hideEvent(self, e):
+        self._feed.stop()
+        super().hideEvent(e)
+
+    def _pull(self):
+        m = getattr(self._parent, "last", None)
+        c = self._parent._current_caliber() if self._parent else None
+        self.view.set_reading(
+            bph=(m.detected_bph if m and m.ok else (c.bph if c else 28800)),
+            amplitude=(m.amplitude if m and m.ok else 270.0),
+            beat_error_ms=(m.beat_error if m and m.ok else 0.0),
+            lift_angle=(self._parent.spn_lift.value()
+                        if hasattr(self._parent, "spn_lift") else 52.0),
+            escape_teeth=(c.escape_teeth if c else 15))
+
+    def _play(self):
+        if not audio.HAVE_SD:
+            QtWidgets.QMessageBox.information(self, "Slowed playback",
+                                             "sounddevice is not available.")
+            return
+        m = getattr(self._parent, "last", None)
+        if m is None or m.beat_wave is None or not m.beat_wave_fs:
+            QtWidgets.QMessageBox.information(
+                self, "Slowed playback",
+                "No beat captured yet -- take a reading (live or from a "
+                "recording) first.")
+            return
+        import sounddevice as sd
+        w = np.asarray(m.beat_wave, dtype=np.float32)
+        w = w / (np.max(np.abs(w)) + 1e-9) * 0.5
+        slow = max(4, int(round(self.sld.value())))
+        gap = np.zeros(int(m.beat_wave_fs * 0.10), dtype=np.float32)
+        seq = np.concatenate([np.concatenate([w, gap]) for _ in range(4)])
+        try:
+            sd.play(seq, samplerate=max(2000, m.beat_wave_fs // slow))
+        except Exception as e:                        # noqa: BLE001
+            QtWidgets.QMessageBox.warning(self, "Slowed playback", str(e))
 
 
 class SetupWizard(QtWidgets.QWizard):
@@ -2266,9 +2157,6 @@ class MainWindow(QtWidgets.QMainWindow):
             act.triggered.connect(lambda _=False, i=idx: self._goto_page(i))
             vm.addAction(act)
         vm.addSeparator()
-        esc_act = QtGui.QAction("Escapement animation...", self)
-        esc_act.triggered.connect(self._open_escapement)
-        vm.addAction(esc_act)
         rescan_act = QtGui.QAction("Rescan audio devices", self)
         rescan_act.setShortcut("Ctrl+R")
         rescan_act.triggered.connect(self._refresh_devices)
@@ -2346,7 +2234,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         hm = mb.addMenu("&Help")
         for label, slot in (("Setup wizard...", self._run_setup_wizard),
-                            ("Escapement animation...", self._show_escapement),
+                            ("Escapement animation...", self._open_escapement),
                             ("Glossary and guide", lambda: self._goto_page(5))):
             act = QtGui.QAction(label, self)
             act.triggered.connect(slot)
@@ -2362,33 +2250,6 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda v: self._settings_set("update_check", bool(v)))
         hm.addAction(self.act_update_check)
 
-    def _show_escapement(self):
-        dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle("Escapement animation")
-        dlg.resize(560, 460)
-        v = QtWidgets.QVBoxLayout(dlg)
-        view = EscapementView(dlg)
-        m = self.last
-        c = self._current_caliber()
-        view.set_reading(
-            bph=(m.detected_bph if m and m.ok else (c.bph if c else 28800)),
-            amplitude=(m.amplitude if m and m.ok else 270.0),
-            beat_error_ms=(m.beat_error if m and m.ok else 0.0),
-            lift_angle=self.spn_lift.value() if hasattr(self, "spn_lift") else 52.0,
-            escape_teeth=(c.escape_teeth if c else 15))
-        v.addWidget(view, 1)
-        row = QtWidgets.QHBoxLayout()
-        row.addWidget(QtWidgets.QLabel("Slower"))
-        sl = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        sl.setRange(2, 40)
-        sl.setValue(int(view.slow))
-        sl.valueChanged.connect(lambda x: setattr(view, "slow", float(x)))
-        row.addWidget(sl, 1)
-        v.addLayout(row)
-        v.addWidget(QtWidgets.QLabel(
-            "Uses the latest reading if there is one, or a healthy default. "
-            "Watch how a large beat error offsets the tick and tock."))
-        dlg.exec()
 
     def _run_setup_wizard(self):
         SetupWizard(self).exec()
@@ -4084,7 +3945,7 @@ class MainWindow(QtWidgets.QMainWindow):
         v.setContentsMargins(24, 18, 24, 18)
         brow = QtWidgets.QHBoxLayout()
         for label, slot in (("Run setup wizard", self._run_setup_wizard),
-                            ("Escapement animation", self._show_escapement)):
+                            ("Escapement animation", self._open_escapement)):
             b = QtWidgets.QPushButton(label)
             b.clicked.connect(slot)
             brow.addWidget(b)
