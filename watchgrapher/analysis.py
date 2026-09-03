@@ -762,6 +762,50 @@ def reserve_crossings(samples, levels=(220.0, 200.0, 135.0)):
     return out
 
 
+def reserve_headline(samples, rated_hours: float = None) -> dict:
+    """
+    The two figures a power-reserve run is really about, computed from the raw
+    sample series so it stays correct for historical runs even as the method
+    improves:
+      power_reserve_h -- full wind to the watch running down (~135 deg)
+      practical_h     -- full wind to 200 deg, where timekeeping degrades
+    Taken from where the run actually crossed each level, else projected from
+    the decay ('estimated'); {} if the run is too short to say anything.
+    """
+    a = np.asarray(list(samples), dtype=float)
+    if a.ndim != 2 or a.shape[0] < 3:
+        return {}
+    amps = a[:, 2][np.isfinite(a[:, 2])]
+    if amps.size < 2:
+        return {}
+    hrs = float(a[-1, 0] / 3600.0)
+    cross = reserve_crossings(a)
+    fc = reserve_forecast(a, rated_hours=rated_hours)
+    last = fc.amp_now if fc.amp_now == fc.amp_now else float(np.median(amps[-5:]))
+
+    prac = cross.get(200.0)
+    prac_est = False
+    if prac is None:
+        if last <= 200.0:
+            prac = hrs
+        elif fc.ready and fc.practical_hours == fc.practical_hours:
+            prac, prac_est = fc.practical_hours, True
+
+    stop = cross.get(135.0)
+    stop_est = False
+    if stop is None:
+        if last <= 135.0:
+            stop = hrs
+        elif fc.ready:
+            stop, stop_est = fc.full_hours, True
+
+    return {"power_reserve_h": stop, "practical_h": prac,
+            "estimated": bool(prac_est or stop_est),
+            "fc": fc, "last": last, "hrs": hrs,
+            "rated": float(rated_hours or 0.0),
+            "warning": fc.warning, "holding": (not fc.ready and stop is None)}
+
+
 def reserve_forecast(samples, stop_deg: float = 135.0, practical_deg: float = 200.0,
                      rated_hours: float = None,
                      min_points: int = 6, min_hours: float = 3.0) -> ReserveForecast:

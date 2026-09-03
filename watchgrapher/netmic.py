@@ -158,6 +158,7 @@ class NetworkRecorder:
         self.token = secrets.token_hex(16)
         self.state_json = "{}"
         self.watches_json = "[]"
+        self.watch_thumbs = {}          # {watch_id: png bytes} for user photos
         self.cmd_q: "queue.Queue" = queue.Queue(maxsize=64)
 
     def _watch_svg(self, wid: str) -> bytes:
@@ -258,13 +259,16 @@ class NetworkRecorder:
                     body = (rec.state_json if path == "/api/state"
                             else rec.watches_json).encode()
                     self._send(200, body, "application/json")
-                elif path == "/api/watch.svg":
+                elif path in ("/api/watch.svg", "/api/watch-thumb"):
                     if not self._authed():
                         self._send(403)
                         return
-                    self._send(200, rec._watch_svg(
-                        parse_qs(urlparse(self.path).query).get("id", [""])[0]),
-                        "image/svg+xml")
+                    wid = parse_qs(urlparse(self.path).query).get("id", [""])[0]
+                    png = (rec.watch_thumbs or {}).get(wid)
+                    if png:
+                        self._send(200, png, "image/png")
+                    else:
+                        self._send(200, rec._watch_svg(wid), "image/svg+xml")
                 else:
                     self._send(404)
 
@@ -729,7 +733,8 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
   #prog{max-width:340px;margin:6px auto;color:#8a94a4;font-size:13px;min-height:16px}
   .wrow{display:flex;align-items:center;gap:10px;padding:9px 4px;text-align:left;
         border-bottom:1px solid #232a34;font-size:14px}
-  .wrow img{width:38px;height:38px;flex:0 0 38px;border-radius:6px;background:#fff}
+  .wrow img{width:40px;height:40px;flex:0 0 40px;border-radius:6px;background:#fff;
+            object-fit:contain}
   .wrow .wtxt{flex:1 1 auto;min-width:0}
   .wrow .wgo{flex:0 0 auto;color:#8a94a4;font-size:13px}
   .wrow small{color:#8a94a4}
@@ -1135,7 +1140,7 @@ function renderWatches(){
   const showA=$("w_arch").checked;
   const rows=WATCHES.filter(w=>showA||!w.archived).map(w=>
     '<div class="wrow" data-id="'+w.id+'">'+
-    '<img alt="" loading="lazy" src="/api/watch.svg?t='+TOKEN+'&id='+encodeURIComponent(w.id)+'">'+
+    '<img alt="" loading="lazy" src="/api/watch-thumb?t='+TOKEN+'&id='+encodeURIComponent(w.id)+'">'+
     '<div class="wtxt">'+esc(w.label)+
     (w.archived?' <small>[archived]</small>':'')+
     '<br><small>'+w.runs+' run'+(w.runs===1?'':'s')+
