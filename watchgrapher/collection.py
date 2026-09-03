@@ -187,6 +187,8 @@ class Watch:
     regulation_log: List[dict] = field(default_factory=list)
     # Free-text tags for filtering ("daily", "safe queen", "for sale", ...).
     tags: List[str] = field(default_factory=list)
+    # Archived watches are kept but hidden from the normal list and reminders.
+    archived: bool = False
 
     @property
     def label(self) -> str:
@@ -352,6 +354,8 @@ def reminders(collection, now=None):
     now = now or datetime.now()
     out = []
     for w in collection.watches.values():
+        if getattr(w, "archived", False):
+            continue
         due = w.service_due()
         if due and "past the" in due:
             out.append({"watch_id": w.id, "kind": "service", "severity": "warn",
@@ -511,8 +515,14 @@ class Collection:
                     pass
         self.save()
 
-    def sorted_watches(self) -> List[Watch]:
-        return sorted(self.watches.values(), key=lambda w: w.label.lower())
+    def sorted_watches(self, include_archived: bool = False) -> List[Watch]:
+        ws = self.watches.values() if include_archived else \
+            [w for w in self.watches.values() if not getattr(w, "archived", False)]
+        return sorted(ws, key=lambda w: w.label.lower())
+
+    def archived_watches(self) -> List[Watch]:
+        return sorted((w for w in self.watches.values() if getattr(w, "archived", False)),
+                      key=lambda w: w.label.lower())
 
     def store_photo(self, watch_id: str, src: str) -> str:
         """Copy a photo into the collection folder; returns the stored filename."""
