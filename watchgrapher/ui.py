@@ -2039,6 +2039,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._res_watch_id = None
         self._res_next = 0.0
         self._phone_reserve = None  # cached power-reserve summary for the phone monitor
+        self._reserve_cal_key = None  # caliber override while a stored run is reopened
 
         self.collection = coll.Collection(COLLECTION_DIR)
         self._watch_ids = []
@@ -5456,6 +5457,8 @@ alongside the application.</p>
         self.c_res_amp = self.p_res.plot(pen=pg.mkPen("#57d38c", width=2), name="amplitude")
         self.c_res_proj = self.p_res.plot(
             pen=pg.mkPen("#57d38c", width=1.5, style=QtCore.Qt.DashLine), name="projected")
+        self.c_res_trend = self.p_res.plot(
+            pen=pg.mkPen("#8ab6ff", width=2), name="trend (30-min median)")
         self.res_rate_vb = pg.ViewBox()
         self.p_res.scene().addItem(self.res_rate_vb)
         ax2 = pg.AxisItem("right")
@@ -6720,6 +6723,7 @@ alongside the application.</p>
             self._res_next = 0.0
             self._res_done = False
             self._reserve = []
+            self._reserve_cal_key = None
             self._phone_reserve = {"running": True, "samples": 0}
             w = self._current_watch()
             self._res_watch_id = (w.id if (w and self.chk_res_save.isChecked()) else None)
@@ -6863,7 +6867,9 @@ alongside the application.</p>
 
     def _reserve_headline(self):
         from .analysis import reserve_headline
-        c = self._current_caliber()
+        from .calibers import CALIBERS
+        key = getattr(self, "_reserve_cal_key", None)
+        c = CALIBERS.get(key) if key else self._current_caliber()
         rated = getattr(c, "power_reserve_h", 0.0) if c else 0.0
         return reserve_headline(self._reserve, rated_hours=rated or None)
 
@@ -6949,6 +6955,11 @@ alongside the application.</p>
         else:
             self.c_res_proj.setData([], [])
             self._reserve_fc = None
+        if fc is not None and getattr(fc, "smooth_h", None) is not None \
+                and len(fc.smooth_h) >= 2:
+            self.c_res_trend.setData(np.asarray(fc.smooth_h), np.asarray(fc.smooth_deg))
+        else:
+            self.c_res_trend.setData([], [])
         headtxt = self._reserve_headline_text(head)
         self.lbl_res.setText(
             f"{len(self._reserve)} samples over {hrs[-1]:.2f} h{drop}"
@@ -7975,10 +7986,15 @@ alongside the application.</p>
         self._reserve = [tuple(row) for row in rec.samples]
         self._res_t0 = None
         self._res_done = True
+        self._reserve_cal_key = rec.caliber_key or None
         self._redraw_reserve()
         self._update_iso()
-        self.lbl_res.setText(f"{w.label}: reserve run of {rec.when[:10]} "
-                             f"({len(rec.samples)} samples over {rec.hours:.1f} h)")
+        head = self._reserve_headline()
+        htxt = self._reserve_headline_text(head)
+        self.lbl_res.setText(
+            f"{w.label}: reserve run of {rec.when[:10]} "
+            f"({len(rec.samples)} samples over {rec.hours:.1f} h)"
+            + (f"   |   {htxt}" if htxt else ""))
         self._goto_page(0)
         for i in range(self.tabs.count()):
             if self.tabs.tabText(i) == "Power reserve":
