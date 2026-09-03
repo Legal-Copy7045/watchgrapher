@@ -1071,9 +1071,16 @@ Throughout the run, and in the summary at the end, it gives two figures:
   practical end of the useful reserve.
 
 Each is read from where the run actually crossed that level. If the run was
-stopped before reaching it, the figure is **projected** from the decay curve
-(shown with a range and marked *estimated*), and it tightens as the run goes
-on -- so a shorter run still gives a usable number.
+stopped before reaching it, the figure is **projected** from the decay -- but
+only once amplitude has genuinely fallen. Mainspring torque holds a near-flat
+plateau for most of the reserve and only steepens near the end, so a projection
+from the first few hours would be meaningless; while amplitude is still on the
+plateau the app says so ("holding near 285 deg after 8 h -- rated ~70 h, too
+early to project") rather than inventing a number. It smooths the amplitude
+into half-hour medians first, so a marginal pickup that spikes low now and then
+does not fake a wind-down, and it flags a projection that comes out well below
+the caliber's rated reserve as likely reading noise. Once a real decline is
+established the estimate is shown with a range and tightens as the run goes on.
 
 If a watch is selected in the Measure tab, the finished run is filed to its
 history by default (*Save to the selected watch*, on unless you turn it off).

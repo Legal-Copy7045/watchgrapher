@@ -1097,10 +1097,18 @@ function showReserve(r){
     (r.next_sample_s!=null && r.next_sample_s>0 ? '   |   next in '+mmss(r.next_sample_s) : '');
   const b=[];
   const est = r.pr_estimated ? ' <span style="color:#8a94a4">(est.)</span>' : '';
-  if(r.power_reserve_h!=null) b.push('<b style="color:#7fd8a0">Power reserve ~'+
-    r.power_reserve_h.toFixed(1)+' h</b>'+est+
-    (r.forecast_lo!=null && r.pr_estimated ? ' <span style="color:#8a94a4">('+
-      r.forecast_lo.toFixed(0)+'&ndash;'+r.forecast_hi.toFixed(0)+')</span>' : ''));
+  if(r.power_reserve_h!=null){
+    b.push('<b style="color:#7fd8a0">Power reserve ~'+r.power_reserve_h.toFixed(1)+
+      ' h</b>'+est+(r.forecast_lo!=null && r.pr_estimated ?
+      ' <span style="color:#8a94a4">('+r.forecast_lo.toFixed(0)+'&ndash;'+
+      r.forecast_hi.toFixed(0)+')</span>' : ''));
+    if(r.pr_warning) b.push('<span style="color:#ffb648">projection may be '+
+      'unreliable &ndash; amplitude signal is noisy</span>');
+  } else if(r.holding){
+    b.push('<span style="color:#c8d0dc">Amplitude holding near <b>'+r.amp_now+
+      '</b> deg'+(r.rated_h ? ' &ndash; rated ~'+r.rated_h+' h' : '')+
+      '. Too early to project a run-down.</span>');
+  }
   if(r.practical_h!=null) b.push('Keeps good time to ~<b>'+r.practical_h.toFixed(1)+
     ' h</b> (200 deg)');
   if(r.amp_first!=null) b.push('Amplitude  '+r.amp_first+' &rarr; <b>'+r.amp_now+'</b> deg  ('+
