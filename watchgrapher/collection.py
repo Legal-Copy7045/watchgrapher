@@ -79,10 +79,17 @@ class ReserveRecord:
     lift_angle: float = 52.0
     interval_s: int = 300
     stopped_early: bool = False
-    hours: float = float("nan")
+    hours: float = float("nan")        # how long the run itself lasted
     samples: List[list] = field(default_factory=list)   # [elapsed_s, rate, amp, beat_error]
     amp_first: float = float("nan")
     amp_last: float = float("nan")
+    # Headline reserve figures. power_reserve_h is time from full wind to the
+    # watch running down (amplitude ~135 deg); practical_h is time to 200 deg,
+    # below which timekeeping degrades. pr_estimated is True when either was
+    # projected from the decay rather than actually reached in the run.
+    power_reserve_h: float = float("nan")
+    practical_h: float = float("nan")
+    pr_estimated: bool = False
     hours_to_220: float = float("nan")
     hours_to_200: float = float("nan")
     iso_slope: float = float("nan")   # s/day of rate per +1 deg amplitude

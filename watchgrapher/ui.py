@@ -6762,12 +6762,19 @@ alongside the application.</p>
         hrs = a[-1, 0] / 3600.0
         amps = a[:, 2][np.isfinite(a[:, 2])]
         rates = a[:, 1][np.isfinite(a[:, 1])]
-        lines = [f"{'Stopped' if stopped_early else 'Completed'} after {hrs:.2f} hours, "
-                 f"{len(self._reserve)} samples."]
+        head = self._reserve_headline()
+        head_txt = self._reserve_headline_text(head)
+        lines = []
+        if head_txt:
+            lines.append(head_txt + ".")
+        lines.append(f"{'Stopped' if stopped_early else 'Completed'} after {hrs:.2f} "
+                     f"hours, {len(self._reserve)} samples.")
         if amps.size >= 1:
+            pr = head.get("power_reserve_h") if head else None
             self._phone_last_save = (
-                f"Power reserve {'stopped' if stopped_early else 'complete'}: "
-                f"{hrs:.1f} h, amplitude {amps[0]:.0f}->{amps[-1]:.0f} deg")
+                (f"Power reserve ~{pr:.1f} h" if pr == pr and pr is not None
+                 else f"Power reserve {'stopped' if stopped_early else 'complete'} at {hrs:.1f} h")
+                + f", amplitude {amps[0]:.0f}->{amps[-1]:.0f} deg")
         if amps.size >= 2:
             lines.append(f"Amplitude {amps[0]:.0f} -> {amps[-1]:.0f} degrees "
                          f"({amps[-1]-amps[0]:+.0f}).")
@@ -6786,14 +6793,13 @@ alongside the application.</p>
             iso_model="quadratic" if self.chk_iso_nl.isChecked() else "linear")
         lines.extend(st.verdict)
 
-        if stopped_early:
-            fc = reserve_forecast(self._reserve)
-            if fc.ready:
-                lines.append(f"Projection from the decay so far: amplitude reaches "
-                             f"{fc.stop_deg:.0f} deg at about {fc.full_hours:.1f} h "
-                             f"({fc.low:.0f}-{fc.high:.0f}), by a {fc.method} fit.")
+        if head and head["estimated"] and head.get("fc") and head["fc"].ready:
+            fc = head["fc"]
+            lines.append(f"The run-down figure is projected from the decay so far "
+                         f"(range {fc.low:.0f}-{fc.high:.0f} h, {fc.method} fit). "
+                         f"Let a run reach ~135 deg for a measured number.")
 
-        saved_to = self._save_reserve_to_watch(st, stopped_early)
+        saved_to = self._save_reserve_to_watch(st, stopped_early, head)
         if saved_to:
             lines.append(f"Filed to {saved_to}'s history.")
         self.lbl_res.setText(lines[0])
@@ -6811,7 +6817,61 @@ alongside the application.</p>
         QtWidgets.QMessageBox.information(self, "Power reserve run finished",
                                           "\n\n".join(lines))
 
-    def _save_reserve_to_watch(self, st, stopped_early):
+    def _reserve_headline(self):
+        """
+        The two figures a power-reserve run is really about:
+          power_reserve_h -- full wind to the watch running down (~135 deg)
+          practical_h     -- full wind to 200 deg, where timekeeping degrades
+        Read from the logged data where the run actually crossed each level,
+        else projected from the decay ('estimated'). Returns {} if too early.
+        """
+        from .analysis import reserve_crossings, reserve_forecast
+        if len(self._reserve) < 3:
+            return {}
+        a = np.array(self._reserve, dtype=float)
+        amps = a[:, 2][np.isfinite(a[:, 2])]
+        if amps.size < 2:
+            return {}
+        hrs = float(a[-1, 0] / 3600.0)
+        last = float(amps[-1])
+        cross = reserve_crossings(self._reserve)
+        fc = reserve_forecast(self._reserve)
+
+        prac = cross.get(200.0)
+        prac_est = False
+        if prac is None:
+            if last <= 200.0:
+                prac = hrs
+            elif fc.ready and fc.practical_hours == fc.practical_hours:
+                prac, prac_est = fc.practical_hours, True
+
+        stop = cross.get(135.0)
+        stop_est = False
+        if stop is None:
+            if last <= 135.0:
+                stop = hrs
+            elif fc.ready:
+                stop, stop_est = fc.full_hours, True
+
+        return {"power_reserve_h": stop, "practical_h": prac,
+                "estimated": bool(prac_est or stop_est),
+                "fc": fc, "last": last, "hrs": hrs}
+
+    def _reserve_headline_text(self, h=None):
+        h = h or self._reserve_headline()
+        if not h:
+            return ""
+        est = " (estimated)" if h["estimated"] else ""
+        pr = h.get("power_reserve_h")
+        parts = []
+        if pr == pr and pr is not None:
+            parts.append(f"Power reserve ~{pr:.1f} h{est}")
+        p2 = h.get("practical_h")
+        if p2 == p2 and p2 is not None:
+            parts.append(f"keeps good time to ~{p2:.1f} h (200 deg)")
+        return "  --  ".join(parts)
+
+    def _save_reserve_to_watch(self, st, stopped_early, head=None):
         wid = getattr(self, "_res_watch_id", None)
         self._res_watch_id = None
         if not wid or len(self._reserve) < 3:
@@ -6819,7 +6879,10 @@ alongside the application.</p>
         w = self.collection.watches.get(wid)
         if not w:
             return None
+        head = head or self._reserve_headline()
         c = self._current_caliber()
+        def _f(v):
+            return float(v) if (v is not None and v == v) else float("nan")
         rec = coll.ReserveRecord(
             when=datetime.now().isoformat(timespec="seconds"),
             caliber_key=(c.key if c else w.caliber_key),
@@ -6829,6 +6892,9 @@ alongside the application.</p>
             hours=float(st.hours),
             samples=[[round(el, 1), r, a, b] for el, r, a, b in self._reserve],
             amp_first=float(st.amp_first), amp_last=float(st.amp_last),
+            power_reserve_h=_f((head or {}).get("power_reserve_h")),
+            practical_h=_f((head or {}).get("practical_h")),
+            pr_estimated=bool((head or {}).get("estimated", False)),
             hours_to_220=float(st.hours_to_220), hours_to_200=float(st.hours_to_200),
             iso_slope=float(st.iso_slope), iso_span=float(st.iso_span),
             be_slope=float(st.be_slope))
@@ -6854,22 +6920,22 @@ alongside the application.</p>
         if ok.sum() >= 2:
             drop = f", amplitude {amp[ok][0]:.0f} -> {amp[ok][-1]:.0f} deg"
 
-        proj = ""
         fc = reserve_forecast(self._reserve)
         if fc.ready:
             self.c_res_proj.setData(fc.curve_h, fc.curve_deg)
             self._reserve_fc = fc
-            proj = (f"  |  projected full reserve ~{fc.full_hours:.1f} h "
-                    f"({fc.low:.0f}-{fc.high:.0f})")
         else:
             self.c_res_proj.setData([], [])
             self._reserve_fc = None
+        head = self._reserve_headline()
+        headtxt = self._reserve_headline_text(head)
         self.lbl_res.setText(
-            f"{len(self._reserve)} samples over {hrs[-1]:.2f} h{drop}{proj}")
+            f"{len(self._reserve)} samples over {hrs[-1]:.2f} h{drop}"
+            + (f"   |   {headtxt}" if headtxt else ""))
         self._update_iso()
-        self._build_phone_reserve(a, ok, fc)
+        self._build_phone_reserve(a, ok, fc, head)
 
-    def _build_phone_reserve(self, a, ok, fc):
+    def _build_phone_reserve(self, a, ok, fc, head=None):
         """The power-reserve snapshot the phone monitor polls. Heavy bits
         (sparkline, forecast) refresh per sample; _phone_state overlays the
         live elapsed time and next-sample countdown each tick."""
@@ -6902,6 +6968,15 @@ alongside the application.</p>
             blk["forecast_lo"] = round(float(fc.low), 1)
             blk["forecast_hi"] = round(float(fc.high), 1)
             blk["stop_deg"] = round(float(fc.stop_deg))
+        head = head or self._reserve_headline()
+        if head:
+            pr = head.get("power_reserve_h")
+            p2 = head.get("practical_h")
+            if pr == pr and pr is not None:
+                blk["power_reserve_h"] = round(float(pr), 1)
+            if p2 == p2 and p2 is not None:
+                blk["practical_h"] = round(float(p2), 1)
+            blk["pr_estimated"] = bool(head.get("estimated", False))
         self._phone_reserve = blk
 
     def _update_iso(self):

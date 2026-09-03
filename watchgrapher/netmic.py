@@ -1071,13 +1071,18 @@ function showReserve(r){
     hm(r.hours||0)+' elapsed'+tgt+'   |   '+(r.samples||0)+' samples'+
     (r.next_sample_s!=null && r.next_sample_s>0 ? '   |   next in '+mmss(r.next_sample_s) : '');
   const b=[];
+  const est = r.pr_estimated ? ' <span style="color:#8a94a4">(est.)</span>' : '';
+  if(r.power_reserve_h!=null) b.push('<b style="color:#7fd8a0">Power reserve ~'+
+    r.power_reserve_h.toFixed(1)+' h</b>'+est+
+    (r.forecast_lo!=null && r.pr_estimated ? ' <span style="color:#8a94a4">('+
+      r.forecast_lo.toFixed(0)+'&ndash;'+r.forecast_hi.toFixed(0)+')</span>' : ''));
+  if(r.practical_h!=null) b.push('Keeps good time to ~<b>'+r.practical_h.toFixed(1)+
+    ' h</b> (200 deg)');
   if(r.amp_first!=null) b.push('Amplitude  '+r.amp_first+' &rarr; <b>'+r.amp_now+'</b> deg  ('+
     (r.amp_now-r.amp_first>=0?'+':'')+(r.amp_now-r.amp_first)+')');
   if(r.rate_first!=null) b.push('Rate  '+fmt(r.rate_first,1)+' &rarr; <b>'+fmt(r.rate_now,1)+'</b> s/d');
   if(r.amp_per_hour!=null) b.push('Falling '+Math.abs(r.amp_per_hour).toFixed(1)+' deg/hour');
   if(r.iso_span!=null) b.push('Isochronism spread '+fmt(r.iso_span,1)+' s/d so far');
-  if(r.forecast_h!=null) b.push('<b>Projected full reserve ~'+r.forecast_h.toFixed(1)+' h</b> ('+
-    r.forecast_lo.toFixed(0)+'&ndash;'+r.forecast_hi.toFixed(0)+', to '+r.stop_deg+' deg)');
   if(r.be_now!=null) b.push('Beat error '+fmt(r.be_now,2)+' ms');
   $("resv_body").innerHTML=b.join('<br>');
   drawSpark(r);

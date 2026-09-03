@@ -34,7 +34,10 @@ tells you what to adjust for the caliber you're working on.
 - Escapement efficiency: impulse fraction lift / (2 x amplitude)
 - Power-reserve logging: amplitude/rate decay, isochronism (linear or quadratic,
   toggleable), post-wind "kick" analysis
-- Live power-reserve forecast: projects full runtime, sharpening as the run goes
+- Two headline reserve figures, live and in the history: **power reserve** (full
+  wind to run-down, ~135 deg) and **good time to** (amplitude 200 deg) -- taken
+  from where the run actually crossed each level, or projected from the decay
+  and marked estimated, sharpening as the run goes
 - Gear-train / periodic-fault scan with wheel identification
 - Fault-signature library (magnetism, poise error, hairspring flat, rebanking, ...)
 - Rebanking / knocking detection
@@ -99,9 +102,9 @@ tells you what to adjust for the caliber you're working on.
   start or stop a run (asking which mic each time), start a power-reserve log,
   and get the save/discard prompt -- all on the phone
 - Live monitor: any desktop run shows on the phone automatically -- the watch,
-  the four numbers, and for a power-reserve run the elapsed/target hours,
-  amplitude and rate decay, deg/hour, isochronism spread, next-sample countdown,
-  a decay sparkline and the projected full-reserve time
+  the four numbers, and for a power-reserve run the power-reserve and
+  good-time-to figures, elapsed/target hours, amplitude and rate decay,
+  deg/hour, isochronism spread, next-sample countdown and a decay sparkline
 - Watch management from the phone: add / edit (with catalogue reference lookup)
   / archive; bench-level fields stay on the desktop
 - Dedicated Phone Portal tab with QR code; optional autostart
@@ -1045,16 +1048,25 @@ pickup throughout. Pressing **Stop** on the main run ends the reserve log too
 and files what it has so far -- a reserve log has no meaning once the app is not
 listening.
 
-At the end it reports the amplitude and rate change across the run, and flags
-the point amplitude crossed 200 degrees. That crossing, not the moment the
-watch stops, is the practical end of the useful reserve.
+Throughout the run, and in the summary at the end, it gives two figures:
+
+- **Power reserve** -- full wind to the watch running down, taken as amplitude
+  reaching about 135 degrees.
+- **Good time to** -- full wind to amplitude 200 degrees, below which rate and
+  positional stability degrade. This, not the moment the watch stops, is the
+  practical end of the useful reserve.
+
+Each is read from where the run actually crossed that level. If the run was
+stopped before reaching it, the figure is **projected** from the decay curve
+(shown with a range and marked *estimated*), and it tightens as the run goes
+on -- so a shorter run still gives a usable number.
 
 If a watch is selected in the Measure tab, the finished run is filed to its
 history by default (*Save to the selected watch*, on unless you turn it off).
-It then shows up under **My Watches -> Power reserve** -- date, hours,
-amplitude start to end, projected runway to 220 degrees and the isochronism
-grade -- and double-clicking a row reloads it on the Power reserve tab. It is
-also included in the watch report and the portfolio report.
+It then shows up under **My Watches -> Power reserve** -- date, power reserve,
+good-time-to, run length, amplitude start to end and the isochronism grade --
+and double-clicking a row reloads it on the Power reserve tab. It is also in the
+watch report and the portfolio report.
 
 **Year in review** (button on My Watches) writes a one-page summary for a
 calendar year: watches acquired, every service with cost and water-resistance
