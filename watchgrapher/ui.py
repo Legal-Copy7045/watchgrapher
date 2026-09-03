@@ -5512,9 +5512,15 @@ alongside the application.</p>
         self.p_iso.setLabel("bottom", "amplitude", units="deg")
         self.p_iso.setLabel("left", "rate", units="s/d")
         self.p_iso.showGrid(x=True, y=True, alpha=0.25)
-        self.s_iso = pg.ScatterPlotItem(size=5, brush=pg.mkBrush("#ff9d4d"), pen=None)
+        _iso_tip = lambda x, y, data: (
+            f"amplitude {x:.0f} deg\nrate {y:+.1f} s/d"
+            + (f"\nat {data:.1f} h" if data is not None and data == data else ""))
+        self.s_iso = pg.ScatterPlotItem(size=5, brush=pg.mkBrush("#ff9d4d"), pen=None,
+                                        hoverable=True, hoverSize=9,
+                                        hoverBrush=pg.mkBrush("#ffd39b"), tip=_iso_tip)
         self.s_iso_out = pg.ScatterPlotItem(size=7, symbol="x", pen=pg.mkPen("#5a6472", width=1),
-                                            brush=None)
+                                            brush=None, hoverable=True, hoverSize=11,
+                                            hoverPen=pg.mkPen("#c8d0dc", width=1.5), tip=_iso_tip)
         self.c_iso_fit = self.p_iso.plot(pen=pg.mkPen("#e8eef7", width=1, style=QtCore.Qt.DashLine))
         self.p_iso.addItem(self.s_iso)
         self.p_iso.addItem(self.s_iso_out)
@@ -7033,15 +7039,17 @@ alongside the application.</p>
         a = np.array(self._reserve, dtype=float) if self._reserve else np.zeros((0, 4))
         if st.iso_coef:
             # Once the fit exists, colour the points by whether it used them.
-            self.s_iso.setData(list(st.iso_in[0]), list(st.iso_in[1]))
-            self.s_iso_out.setData(list(st.iso_out[0]), list(st.iso_out[1]))
+            self.s_iso.setData(list(st.iso_in[0]), list(st.iso_in[1]),
+                               data=list(st.iso_in_h) or None)
+            self.s_iso_out.setData(list(st.iso_out[0]), list(st.iso_out[1]),
+                                   data=list(st.iso_out_h) or None)
             xin = np.asarray(st.iso_in[0], dtype=float)
             xs = np.linspace(xin.min(), xin.max(), 80 if len(st.iso_coef) > 2 else 2)
             self.c_iso_fit.setData(xs, np.polyval(st.iso_coef, xs))
         else:
             if a.shape[0]:
                 m = np.isfinite(a[:, 2]) & np.isfinite(a[:, 1])
-                self.s_iso.setData(a[m, 2], a[m, 1])
+                self.s_iso.setData(a[m, 2], a[m, 1], data=list(a[m, 0] / 3600.0) or None)
             else:
                 self.s_iso.setData([], [])
             self.s_iso_out.setData([], [])
