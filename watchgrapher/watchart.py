@@ -373,6 +373,62 @@ def watch_svg_for(entry, size=400) -> str:
         caliber_key=g("caliber_key"), size=size)
 
 
+def watch_thumb_svg(brand="", model="", reference="", material="", bezel="",
+                    nickname="", notes="", caliber_key="", size=64) -> str:
+    """
+    A stripped-down illustration for list icons: case, bezel, dial, the four
+    cardinal markers, two hands and a date tick. ~1 KB versus ~16 KB for the
+    full watch_svg -- no minute track, hairspring, escape wheel or lettering.
+    """
+    S = float(size)
+    cx = cy = S / 2.0
+    metal = _metal(material)
+    shape = _shape(brand, model)
+    bz_kind = _bezel_kind(bezel, model, caliber_key)
+    bz_col = _find_colour(bezel, nickname, notes) or metal["ring"]
+    dial = _dial_colour(brand, model, bezel, nickname, notes, metal)
+    ink = "#f4f5f6" if _luma(dial) < 0.45 else "#1c1e22"
+    date = _has_date(model, caliber_key, notes, bezel)
+    Rc, Rb, Rd = S * 0.42, S * 0.36, S * 0.30
+    p = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {S:.0f} {S:.0f}" '
+         f'width="{S:.0f}" height="{S:.0f}">',
+         f'<rect width="{S:.0f}" height="{S:.0f}" fill="#fff"/>',
+         f'<rect x="{cx-S*0.13:.1f}" y="0" width="{S*0.26:.1f}" height="{S:.0f}" '
+         f'fill="{metal["lug"] if _is_bracelet(material, model) else _strap_colour(notes, dial)}"/>',
+         _case_path(cx, cy, Rc, shape, metal["face"], metal["edge"]),
+         f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{Rb:.1f}" fill="{bz_col}" '
+         f'stroke="{metal["edge"]}" stroke-width="1"/>',
+         f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{Rd:.1f}" fill="{dial}" '
+         f'stroke="{metal["edge"]}" stroke-width="1"/>']
+    for h in range(12):
+        x1, y1 = _pol(cx, cy, Rd * 0.86, h * 30)
+        x2, y2 = _pol(cx, cy, Rd * 0.72, h * 30)
+        wdt = 2.2 if h % 3 == 0 else 1.0
+        p.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
+                 f'stroke="{ink}" stroke-width="{wdt}"/>')
+    if date:
+        dx, dy = _pol(cx, cy, Rd * 0.72, 90)
+        p.append(f'<rect x="{dx-3:.1f}" y="{dy-3:.1f}" width="6" height="6" fill="#fff" '
+                 f'stroke="{ink}" stroke-width="0.6"/>')
+    hx, hy = _pol(cx, cy, Rd * 0.5, 300)
+    mx, my = _pol(cx, cy, Rd * 0.78, 100)
+    p.append(f'<line x1="{cx:.1f}" y1="{cy:.1f}" x2="{hx:.1f}" y2="{hy:.1f}" '
+             f'stroke="{ink}" stroke-width="2.6" stroke-linecap="round"/>')
+    p.append(f'<line x1="{cx:.1f}" y1="{cy:.1f}" x2="{mx:.1f}" y2="{my:.1f}" '
+             f'stroke="{ink}" stroke-width="1.8" stroke-linecap="round"/>')
+    p.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="1.6" fill="{ink}"/></svg>')
+    return "".join(p)
+
+
+def watch_thumb_for(entry, size=64) -> str:
+    g = lambda *names: next((getattr(entry, n) for n in names
+                             if getattr(entry, n, None)), "")
+    return watch_thumb_svg(
+        brand=g("brand"), model=g("model"), reference=g("reference"),
+        material=g("material"), bezel=g("bezel"), nickname=g("nickname"),
+        notes=g("notes"), caliber_key=g("caliber_key"), size=size)
+
+
 # --------------------------------------------------------------------------
 # drawing helpers
 # --------------------------------------------------------------------------

@@ -1945,16 +1945,18 @@ class SetupWizard(QtWidgets.QWizard):
             m.status.showMessage("Theme will change on the next start.", 8000)
 
 
-def _schematic_pixmap(obj, px):
+def _schematic_pixmap(obj, px, thumb=False):
     """
     A square px-by-px schematic illustration of `obj` (a Watch or a catalogue
     entry -- anything with brand/model/material/... attributes), rendered on a
-    white ground. Used wherever there is no user photo. Returns None on failure.
+    white ground. `thumb` uses the stripped-down icon renderer. Returns None
+    on failure.
     """
     try:
         from PySide6 import QtSvg
         from . import watchart
-        svg = watchart.watch_svg_for(obj, size=max(64, int(px))).encode("utf-8")
+        fn = watchart.watch_thumb_for if thumb else watchart.watch_svg_for
+        svg = fn(obj, size=max(64, int(px))).encode("utf-8")
         r = QtSvg.QSvgRenderer(QtCore.QByteArray(svg))
         dpr = getattr(_schematic_pixmap, "_dpr", 1.0)
         n = max(1, int(round(px * dpr)))
@@ -2675,6 +2677,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "reference": w.reference, "nickname": w.nickname,
                 "caliber_key": w.caliber_key,
                 "caliber_label": (f"{c.brand} {c.name}" if c else ""),
+                "material": w.material, "bezel": w.bezel, "crystal": w.crystal,
                 "serial": w.serial, "tags": list(w.tags),
                 "target_rate": w.target_rate, "notes": w.notes,
                 "archived": bool(getattr(w, "archived", False)),
@@ -7446,7 +7449,7 @@ alongside the application.</p>
         canvas.fill(QtGui.QColor("white"))
         src = QtGui.QPixmap(path) if path else QtGui.QPixmap()
         if src.isNull() and fallback is not None:
-            src = _schematic_pixmap(fallback, px) or QtGui.QPixmap()
+            src = _schematic_pixmap(fallback, px, thumb=px <= 72) or QtGui.QPixmap()
         if not src.isNull():
             scaled = src.scaled(n, n, QtCore.Qt.KeepAspectRatio,
                                 QtCore.Qt.SmoothTransformation)

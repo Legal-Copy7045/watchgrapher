@@ -160,6 +160,21 @@ class NetworkRecorder:
         self.watches_json = "[]"
         self.cmd_q: "queue.Queue" = queue.Queue(maxsize=64)
 
+    def _watch_svg(self, wid: str) -> bytes:
+        """A small schematic illustration for one watch, from the published
+        watch list. Returns a blank SVG if the id is unknown."""
+        blank = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"></svg>'
+        try:
+            import types
+            from . import watchart
+            for w in json.loads(self.watches_json):
+                if w.get("id") == wid:
+                    return watchart.watch_thumb_for(
+                        types.SimpleNamespace(**w), size=64).encode("utf-8")
+        except Exception:
+            pass
+        return blank
+
     def _wipe_certfile(self):
         if self._certfile:
             try:
@@ -243,6 +258,13 @@ class NetworkRecorder:
                     body = (rec.state_json if path == "/api/state"
                             else rec.watches_json).encode()
                     self._send(200, body, "application/json")
+                elif path == "/api/watch.svg":
+                    if not self._authed():
+                        self._send(403)
+                        return
+                    self._send(200, rec._watch_svg(
+                        parse_qs(urlparse(self.path).query).get("id", [""])[0]),
+                        "image/svg+xml")
                 else:
                     self._send(404)
 
@@ -705,8 +727,11 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
   #status{color:#8a94a4;font-size:13px;min-height:18px}
   #desk{color:#7fb2ff;font-size:13px;min-height:18px;margin:6px 0}
   #prog{max-width:340px;margin:6px auto;color:#8a94a4;font-size:13px;min-height:16px}
-  .wrow{display:flex;justify-content:space-between;align-items:center;padding:9px 4px;
+  .wrow{display:flex;align-items:center;gap:10px;padding:9px 4px;text-align:left;
         border-bottom:1px solid #232a34;font-size:14px}
+  .wrow img{width:38px;height:38px;flex:0 0 38px;border-radius:6px;background:#fff}
+  .wrow .wtxt{flex:1 1 auto;min-width:0}
+  .wrow .wgo{flex:0 0 auto;color:#8a94a4;font-size:13px}
   .wrow small{color:#8a94a4}
   .hint{max-width:360px;margin:2px auto 6px;font-size:12px;color:#7fd8a0;text-align:left}
   details{max-width:360px;margin:14px auto;text-align:left;color:#b6bfcc;font-size:14px}
@@ -1101,11 +1126,13 @@ async function loadWatches(){
 function renderWatches(){
   const showA=$("w_arch").checked;
   const rows=WATCHES.filter(w=>showA||!w.archived).map(w=>
-    '<div class="wrow" data-id="'+w.id+'"><div>'+esc(w.label)+
+    '<div class="wrow" data-id="'+w.id+'">'+
+    '<img alt="" loading="lazy" src="/api/watch.svg?t='+TOKEN+'&id='+encodeURIComponent(w.id)+'">'+
+    '<div class="wtxt">'+esc(w.label)+
     (w.archived?' <small>[archived]</small>':'')+
     '<br><small>'+w.runs+' run'+(w.runs===1?'':'s')+
     (w.tags.length?'  #'+w.tags.map(esc).join(' #'):'')+'</small></div>'+
-    '<div style="color:#8a94a4">edit &rsaquo;</div></div>').join('');
+    '<div class="wgo">edit &rsaquo;</div></div>').join('');
   $("wlist").innerHTML = rows || '<p style="color:#8a94a4">No watches yet.</p>';
   $("wlist").querySelectorAll('.wrow').forEach(r=>{
     r.onclick=()=>openwatch(WATCHES.find(w=>w.id===r.dataset.id));
