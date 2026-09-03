@@ -512,6 +512,7 @@ class ReserveStats:
     amp_first: float = float("nan")
     amp_last: float = float("nan")
     amp_per_hour: float = float("nan")     # mean slope over the run, deg/h
+    amp_established: bool = False           # amplitude has genuinely fallen (not plateau)
     hours_to_220: float = float("nan")     # extrapolated from the last third of the run
     hours_to_200: float = float("nan")
     kick_deg_per_h: float = float("nan")   # amplitude lost per hour over the first hour
@@ -609,13 +610,22 @@ def reserve_analytics(samples, iso_model: str = "linear") -> ReserveStats:
             (sk, _), _ = _robust_polyfit(t_h[head], amp[head], 1)
             st.kick_deg_per_h = float(-sk)          # positive = amplitude falling
 
+        # Only project a runway once amplitude has genuinely fallen -- more
+        # than the measurement scatter and more than ~15 deg. On the torque
+        # plateau the tail slope is just noise, and extrapolating it gives the
+        # kind of "11 h left on a 72 h watch" nonsense this used to produce.
+        _av = amp[ma]
+        _fit = np.polyval(np.polyfit(t_h[ma], _av, 1), t_h[ma])
+        _scatter = float(np.std(_av - _fit)) if _av.size > 3 else 0.0
+        _n3 = max(2, _av.size // 3)
+        _decline = float(np.median(_av[:_n3]) - np.median(_av[-_n3:]))
+        st.amp_established = bool(_decline >= max(15.0, 3.0 * _scatter))
+
         cut = t_h[ma][-1] - max(1.0, st.hours / 3.0)
         tail = ma & (t_h >= cut)
-        if tail.sum() >= 3:
+        if tail.sum() >= 3 and st.amp_established:
             (sl, ic), _ = _robust_polyfit(t_h[tail], amp[tail], 1)
-            if sl < -1e-3:
-                # Cap the extrapolation: a shallow, noisy tail slope can throw
-                # the crossing hundreds of hours out, which is not a measurement.
+            if sl < -0.4:
                 horizon = t_h[tail][-1] + 3.0 * st.hours + 24.0
                 for target, name in ((220.0, "hours_to_220"), (200.0, "hours_to_200")):
                     th = (target - ic) / sl
@@ -683,6 +693,9 @@ def reserve_analytics(samples, iso_model: str = "linear") -> ReserveStats:
                  f"{st.hours_to_220:.0f} h" +
                  (f" and 200 deg at {st.hours_to_200:.0f} h." if st.hours_to_200 == st.hours_to_200
                   else "."))
+    elif not st.amp_established and st.amp_last == st.amp_last:
+        v.append(f"Amplitude is holding near {st.amp_last:.0f} deg -- still on the "
+                 f"torque plateau, so there is no runway to extrapolate yet.")
     elif st.amp_per_hour == st.amp_per_hour:
         v.append(f"Amplitude is falling about {abs(st.amp_per_hour):.1f} deg/hour on average.")
     if st.kick_deg_per_h == st.kick_deg_per_h and st.amp_per_hour == st.amp_per_hour:
@@ -717,6 +730,8 @@ class ReserveForecast:
     amp_now: float = float("nan")          # smoothed current amplitude
     drop_per_h: float = float("nan")       # robust deg/hour over the run so far
     noise: float = float("nan")            # amplitude scatter about the trend
+    smooth_h: "np.ndarray" = field(default_factory=lambda: np.array([]))
+    smooth_deg: "np.ndarray" = field(default_factory=lambda: np.array([]))
 
 
 def _amp_windows(t, amp, minutes=30.0):
@@ -848,6 +863,8 @@ def reserve_forecast(samples, stop_deg: float = 135.0, practical_deg: float = 20
     fc.amp_now = last_med
     fc.drop_per_h = float(-sl)
     fc.noise = noise
+    fc.smooth_h = np.asarray(bt, dtype=float)
+    fc.smooth_deg = np.asarray(ba, dtype=float)
 
     established = (decline >= max(15.0, 3.0 * noise)) and sl < -0.4
     if not established:
