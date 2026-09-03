@@ -263,13 +263,19 @@ desktop is idle it shows the new-run form.
    phone.
 4. Mid-run you can also tap **Start power reserve log** from the monitor.
 
-**Monitoring.** Whenever the desktop has a run going -- started anywhere, on any
-pickup -- the Measure tab shows it: the watch, position and wind, the four
-tiles, the progress line, and for a **power reserve run** a card with elapsed
-and target hours, amplitude and rate start-to-now, degrees per hour, the
-isochronism spread so far, the next-sample countdown, an amplitude-decay
-sparkline and the projected full-reserve time. So you can check a 48-hour run
-from another room. Nothing to switch on.
+**Monitoring and taking over.** Whenever the desktop has a run going -- started
+anywhere, on any pickup -- the Measure tab shows it: the watch, position and
+wind, the four tiles, the progress line, and for a **power reserve run** a card
+with elapsed and target hours, amplitude and rate start-to-now, degrees per
+hour, the isochronism spread so far, the next-sample countdown, an
+amplitude-decay sparkline and the projected full-reserve time. So you can check
+a 48-hour run from another room. Nothing to switch on.
+
+**Stop run** works on a desktop-started run too (with a confirm). Whoever stops
+it from the phone gets the *Run finished* panel on the phone -- the desktop does
+not pop a blocking dialog, so a run that finishes on its own while you are away
+never freezes the monitor. After it stops the desktop is idle and the New run
+form is right there to start the next one.
 
 **Managing watches.** The **Watches** tab lists your collection. Tap one to edit
 brand, model, reference (with a **look up** that resolves the movement from the
