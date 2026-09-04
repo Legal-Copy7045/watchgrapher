@@ -4432,8 +4432,30 @@ alongside the application.</p>
         dv.setSpacing(6)
         dv.addWidget(self.cmb_dev, 3)
         dv.addWidget(self.cmb_sr, 1)
+        self.spn_gain = QtWidgets.QDoubleSpinBox()
+        self.spn_gain.setRange(1.0, 15.0)
+        self.spn_gain.setSingleStep(0.5)
+        self.spn_gain.setDecimals(1)
+        self.spn_gain.setSuffix("x")
+        self.spn_gain.setValue(float(self._settings_get("input_gain", 1.0)))
+        self.spn_gain.setToolTip(
+            "A fixed digital boost for a genuinely quiet pickup -- set it so the\n"
+            "level meter sits in the upper half without hitting red. It is a\n"
+            "manual multiplier, not auto-gain: it will not chase the level or\n"
+            "run away and amplify noise into a false reading. Fixing the level\n"
+            "at your audio interface is always better; this is a fallback.\n"
+            "Does not affect the recorded WAV. Ignored for the simulator and\n"
+            "the phone pickup (the phone page has its own gain slider).")
+        self.spn_gain.valueChanged.connect(self._set_input_gain)
+        lvl_row = QtWidgets.QWidget()
+        lr = QtWidgets.QHBoxLayout(lvl_row)
+        lr.setContentsMargins(0, 0, 0, 0)
+        lr.setSpacing(6)
+        lr.addWidget(self.lvl, 1)
+        lr.addWidget(QtWidgets.QLabel("Gain"))
+        lr.addWidget(self.spn_gain)
         g.addRow("Device", dev_row)
-        g.addRow("Level", self.lvl)
+        g.addRow("Level", lvl_row)
         lay.addWidget(g)
 
         # ---------- 2. the watch ----------
@@ -4765,6 +4787,14 @@ alongside the application.</p>
                      (self.spn_env, 0.35), (self.spn_thr, 0.16)):
             w.setValue(v)
         self.chk_parity.setChecked(True)
+
+    def _set_input_gain(self, val):
+        val = float(val)
+        self._settings_set("input_gain", val)
+        r = self.recorder
+        if r is not None and hasattr(r, "input_gain") \
+                and self.cmb_dev.currentData() not in ("SIM", "NET"):
+            r.input_gain = val
 
     def _device_changed(self):
         dev = self.cmb_dev.currentData()
@@ -5906,6 +5936,8 @@ alongside the application.</p>
                 self.recorder = None
                 return
             self._clip_count0 = 0
+            if dev not in ("SIM", "NET") and hasattr(self.recorder, "input_gain"):
+                self.recorder.input_gain = float(self.spn_gain.value())
             if dev == "NET":
                 got_port = getattr(self.recorder, "port", 0)
                 if got_port and got_port != self._settings_get("phone_port", 8477):
@@ -6274,8 +6306,10 @@ alongside the application.</p>
             if el >= self._run_len:
                 self._finish_run(stopped_early=False)
         if self.recorder:
-            self.lvl.setValue(int(min(100, self.recorder.peak * 140)))
-            p = self.recorder.peak
+            # Show the level the analysis actually sees -- raw input times the
+            # manual gain -- so the meter is the thing to set the gain against.
+            p = self.recorder.peak * float(getattr(self.recorder, "input_gain", 1.0))
+            self.lvl.setValue(int(min(100, p * 140)))
             col = "#ff5d5d" if p > 0.92 else ("#57d38c" if p > 0.02 else "#5a6472")
             self.lvl.setStyleSheet(
                 f"QProgressBar{{background:#1a1f27;border:none;}}"
@@ -6286,14 +6320,18 @@ alongside the application.</p>
             self._clip_count0 = clips
             if hasattr(self, "lbl_live"):
                 if self.act_agc.isChecked() and new_clips > 0:
+                    how = ("lower Gain" if self.spn_gain.value() > 1.0
+                           else "lower the level in Windows sound settings")
                     self.lbl_live.setText(
-                        "input is CLIPPING -- lower the level in Windows sound settings "
-                        "or move the pickup back; amplitude will read wrong")
+                        f"input is CLIPPING -- {how} or move the pickup back; "
+                        f"amplitude will read wrong")
                     self.lbl_live.setStyleSheet("color:#ff5d5d;font-size:12px;")
                 elif self.act_agc.isChecked() and 0.0005 < p < 0.01:
+                    extra = ("" if self.spn_gain.value() > 1.0
+                             else " -- or raise Gain above 1x")
                     self.lbl_live.setText(
-                        "input very quiet -- raise the level at your audio interface "
-                        "for a cleaner reading")
+                        "input very quiet -- raise the level at your audio interface"
+                        + extra)
                     self.lbl_live.setStyleSheet("color:#ffb648;font-size:12px;")
 
             if self._rate_last_update is not None and hasattr(self, "lbl_live"):
