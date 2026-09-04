@@ -278,7 +278,10 @@ desktop is idle it shows the new-run form.
    for an open-ended run tap **Stop run**. Because the phone started it, the
    *Run finished* panel with **Save to watch** / **Discard** appears on the
    phone.
-4. Mid-run you can also tap **Start power reserve log** from the monitor.
+4. Mid-run you can also tap **Start power reserve log** from the monitor. A
+   power-reserve run started from the phone -- on its own or with the run --
+   needs no clicks on the desktop: it starts silently and the monitor card
+   fills in as samples come.
 
 **Monitoring and taking over.** Whenever the desktop has a run going -- started
 anywhere, on any pickup -- the Measure tab shows it: the watch, position and
