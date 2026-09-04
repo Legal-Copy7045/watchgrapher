@@ -78,10 +78,12 @@ class Recorder:
         self.peak = 0.0          # raw input peak, EMA -- the level meter reads this
         self.overflows = 0
         self.frames = 0          # total samples ever received; monotonic, for a stall watchdog
-        # The signal is used exactly as it arrives -- no digital makeup gain.
-        # A quiet pickup is fixed at the interface, not by amplifying the noise
-        # floor (which is how the analyzer used to be handed a "80,000 bph"
-        # reading). `clips` just counts full-scale hits for the on-screen warning.
+        # No automatic gain. `input_gain` is a fixed multiplier the user sets by
+        # hand for a genuinely quiet pickup -- it does not chase a level, so it
+        # cannot run away and amplify the noise floor into a false reading the
+        # way the old auto-gain did. `clips` counts full-scale hits (measured on
+        # the raw input) for the on-screen warning.
+        self.input_gain = 1.0
         self.clips = 0
         self._wav: Optional[wave.Wave_write] = None
         self._wav_path = ""
@@ -96,29 +98,34 @@ class Recorder:
         p = float(np.max(np.abs(data))) if data.size else 0.0
         self.peak = max(self.peak * 0.92, p)
         self.frames += len(data)
-        if p >= 0.999:
+
+        g = self.input_gain
+        # A clip at the input, or one the manual gain would create, both spoil
+        # the reading -- count either.
+        if p >= 0.999 or p * g >= 0.999:
             self.clips += 1
+        buf_data = np.clip(data * g, -1.0, 1.0) if g != 1.0 else data
 
         with self._lock:
-            k = len(data)
+            k = len(buf_data)
             if k >= self.n:
-                self._buf[:] = data[-self.n:]
+                self._buf[:] = buf_data[-self.n:]
                 self._write = 0
                 self._filled = self.n
             else:
                 end = self._write + k
                 if end <= self.n:
-                    self._buf[self._write:end] = data
+                    self._buf[self._write:end] = buf_data
                 else:
                     split = self.n - self._write
-                    self._buf[self._write:] = data[:split]
-                    self._buf[: end - self.n] = data[split:]
+                    self._buf[self._write:] = buf_data[:split]
+                    self._buf[: end - self.n] = buf_data[split:]
                 self._write = end % self.n
                 self._filled = min(self.n, self._filled + k)
 
         with self._wav_lock:
             if self._wav is not None:
-                self._wav.writeframes(
+                self._wav.writeframes(          # raw input, before the manual gain
                     np.clip(data * 32767.0, -32768, 32767).astype("<i2").tobytes())
 
     def _device_info(self):
@@ -386,6 +393,7 @@ class SimulatedRecorder:
         self.overflows = 0
         self.frames = 0
         self.clips = 0
+        self.input_gain = 1.0            # accepted for interface parity; unused
         self._wav = None
         self._wav_path = ""
         self._wav_lock = threading.Lock()
