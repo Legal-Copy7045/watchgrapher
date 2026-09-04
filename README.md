@@ -26,7 +26,7 @@ tells you what to adjust for the caliber you're working on.
 - Timed runs with a settling period, or open-ended
 - Simulated-watch mode: full end-to-end operation with no hardware
 - Analyze a recorded WAV offline; record WAV during a session
-- Auto-gain + clipping guard (toggleable); one-press self-tune pickup
+- Clipping warning (toggleable); one-press self-tune pickup
 
 ### Analysis
 - Rate-stability (Allan deviation) for a single run
@@ -205,12 +205,12 @@ Whatever you use, kill the room noise: no fans, no HVAC, no talking. If your
 interface has gain, set it so the level meter sits in the upper half without
 touching red. Clipping destroys the sub-noise structure that amplitude reads.
 
-**View -> Auto-gain and clipping guard** (on by default) helps here. Auto-gain
-applies a digital makeup gain into the analysis buffer so the DSP keeps
-headroom on a quiet pickup -- it does not touch the Windows mixer, and the
-recorded WAV stays raw. The clipping guard puts a red warning under the trace
+**View -> Clipping warning** (on by default) puts a red warning under the trace
 the moment the input hits full scale, because a clipped capture reads amplitude
-wrong. Turn it off to use the signal exactly as it arrives.
+wrong. The signal is always used exactly as it arrives -- there is no digital
+gain. A quiet pickup is fixed by raising the level at your audio interface, not
+by amplifying it in software, which only lifts the noise floor with it and can
+push the beat-rate detector onto noise.
 
 Sample rate: 48 kHz is the sensible default. At 4 Hz, one sample at 48 kHz is
 worth roughly 0.7 degrees of amplitude resolution. 96 kHz halves that if your
@@ -735,6 +735,12 @@ and a quick way to confirm the install is sane.
 3. Beat period from envelope autocorrelation, cross-checked against actual
    peak spacing. The cross-check matters: tick and tock never sound quite
    alike, so autocorrelation alone will happily report half the true bph.
+   The cross-check only halves the estimate when the peaks form a regular
+   grid clear of the noise floor -- on a weak pickup the detector fires on
+   noise roughly every half-beat, and believing that gave the "80,000 bph"
+   readings a marginal signal used to produce. A detected rate outside
+   12,000-43,200 bph, or a beat lock that disagrees with the fitted rate by
+   hundreds of s/day, is reported as "no steady beat rate" rather than shown.
 4. Sub-sample beat timing by cross-correlating each beat against an averaged
    template, with parabolic interpolation. Tick and tock get **separate**
    templates -- entry and exit pallet stones sound different, and sharing one
