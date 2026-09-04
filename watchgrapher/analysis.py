@@ -350,9 +350,17 @@ def analyze(samples: np.ndarray, fs: int, cfg: AnalyzerConfig) -> Measurement:
         return m
 
     if cfg.forced_bph and m.detected_bph != nominal:
-        m.message = (f"Measured {m.detected_bph} bph but rate is being computed against "
-                     f"{nominal} bph. The rate figure is meaningless until these agree -- "
-                     f"check the caliber selection, or switch beat rate to Auto-detect.")
+        # The pickup and the selected caliber disagree on the beat rate. Every
+        # downstream figure is computed against `nominal`, so a rate off by
+        # thousands of s/day is the usual result -- do not show it. Either the
+        # caliber is wrong or (more often on a quiet pickup) the detection is
+        # unreliable.
+        m.message = (
+            f"Beat rate does not match the caliber -- {m.detected_bph} bph measured, "
+            f"{nominal} bph selected. Check the caliber, or switch beat rate to "
+            f"Auto-detect. If the watch is a {nominal} bph movement the pickup "
+            f"signal is too weak or noisy to read -- reseat it and raise the gain.")
+        return m
 
     # Measure the impulse interval first -- it also yields a physically
     # anchored reference for the parity correction below.
@@ -410,15 +418,17 @@ def analyze(samples: np.ndarray, fs: int, cfg: AnalyzerConfig) -> Measurement:
     m.rate = rate_spd(fitted_period, nominal)
     m.beat_error = beat_error_ms(idx, resid)
 
-    # In auto-detect the nominal rate IS the detected rate, so a well-locked
-    # reading sits within a few tens of s/day of zero. A rate in the hundreds
-    # or thousands means the period fit and the autocorrelation disagree --
-    # the beat lock is on a spurious lag -- and nothing downstream is safe.
-    if cfg.forced_bph is None and abs(m.rate) > 250.0:
+    # A real watch -- even a badly magnetised or worn one -- keeps time within
+    # a couple of hundred s/day. A rate past 400 means the beat lock is on a
+    # spurious lag (the period fit and the autocorrelation disagree), so
+    # nothing downstream is safe. This catches the noise-driven mis-locks that
+    # slip through the band check because the bogus rate still lands in it.
+    if abs(m.rate) > 400.0:
         m.message = (
             "Could not lock a stable beat rate -- the escapement signal is "
             "being masked by noise or a resonance. Reseat the watch on the "
-            "microphone, add gain, and quieten the room, then try again.")
+            "microphone, raise the level at the audio interface, and quieten "
+            "the room, then try again.")
         return m
 
     # Instantaneous rate: each beat's own period against nominal, so the fine
