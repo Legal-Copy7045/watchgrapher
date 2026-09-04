@@ -6230,6 +6230,13 @@ alongside the application.</p>
                     self._handle_phone_cmd(cmd)
                 except Exception:
                     pass
+                # Refresh the served state after each command so a phone-driven
+                # start is reflected immediately, even if a later command in the
+                # batch stalls.
+                try:
+                    nr.state_json = json.dumps(self._phone_state())
+                except Exception:
+                    pass
             try:
                 nr.state_json = json.dumps(self._phone_state())
             except Exception:
@@ -6719,11 +6726,13 @@ alongside the application.</p>
                 f"({', '.join(remaining)}).", 8000)
 
     def _toggle_reserve(self, on):
+        phone = getattr(self, "_phone_run", False)
         if on:
             if not self.recorder:
                 self.btn_res.setChecked(False)
-                QtWidgets.QMessageBox.information(
-                    self, "Power reserve", "Start listening first.")
+                if not phone:
+                    QtWidgets.QMessageBox.information(
+                        self, "Power reserve", "Start listening first.")
                 return
             self._res_t0 = time.time()
             self._res_next = 0.0
@@ -6740,17 +6749,22 @@ alongside the application.</p>
                     ("No watch is selected in the Measure tab, so this run will not be "
                      "saved to a watch -- pick one there first if you want that.\n\n"
                      if self.chk_res_save.isChecked() else ""))
-            QtWidgets.QMessageBox.information(
-                self, "Power reserve started",
-                (f"Sampling every {self.spn_res_int.value()} s"
-                 + (f" until {hrs:g} hours have elapsed.\n\n" if hrs else
-                    ", until you press stop.\n\n")
-                 + dest
-                 + "This is a long run, not a 20 second test. Leave the watch on the "
-                   "pickup and the app listening the whole time -- if either stops, "
-                   "the curve has a hole in it.\n\n"
-                   "The label beside the buttons counts down to the next sample, so "
-                   "you can tell it is alive between points."))
+            if not phone:
+                QtWidgets.QMessageBox.information(
+                    self, "Power reserve started",
+                    (f"Sampling every {self.spn_res_int.value()} s"
+                     + (f" until {hrs:g} hours have elapsed.\n\n" if hrs else
+                        ", until you press stop.\n\n")
+                     + dest
+                     + "This is a long run, not a 20 second test. Leave the watch on the "
+                       "pickup and the app listening the whole time -- if either stops, "
+                       "the curve has a hole in it.\n\n"
+                       "The label beside the buttons counts down to the next sample, so "
+                       "you can tell it is alive between points."))
+            else:
+                self.status.showMessage(
+                    f"Power reserve log started from the phone -- sampling every "
+                    f"{self.spn_res_int.value()} s.", 8000)
         else:
             self.btn_res.setText("Start power reserve log")
             if self._reserve and not getattr(self, "_res_done", False):
