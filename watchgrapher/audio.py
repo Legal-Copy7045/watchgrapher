@@ -152,31 +152,54 @@ class Recorder:
             if r and r not in tries:
                 tries.append(r)
 
-        last_err = None
-        for rate in tries:
-            for ex in ([extra, None] if extra is not None else [None]):
-                try:
-                    s = sd.InputStream(
-                        device=self.device, channels=ch, samplerate=rate,
-                        blocksize=self.blocksize, dtype="float32",
-                        callback=self._callback, extra_settings=ex)
-                    s.start()
-                except Exception as e:               # sd.PortAudioError et al.
-                    last_err = e
+        # The device the user picked, then any other host-API copy of the same
+        # physical device. WDM-KS in particular fails with -9996 on hardware
+        # that opens fine through MME or DirectSound, and the user should not
+        # have to know that -- try the siblings before giving up.
+        want_name = (info.get("name") or "").strip().lower()
+        dev_tries = [self.device]
+        if want_name:
+            for i, nm, chans, _sr, _api in list_input_devices():
+                if i == self.device or chans <= 0:
                     continue
-                self._stream = s
-                if rate != want:
-                    self.samplerate = rate
-                    self.n = max(1, int(self.buffer_seconds * rate))
-                    self._buf = np.zeros(self.n, dtype=np.float32)
-                    self._write = self._filled = 0
-                    self.opened_note = (
-                        f"{(info.get('name') or 'device')} would not open at {want} Hz; "
-                        f"running at {rate} Hz. Amplitude resolution is coarser -- for "
-                        f"serious work use a dedicated pickup, or pick the MME / "
-                        f"DirectSound copy of this device.")
-                return
+                a, b = nm.strip().lower(), want_name
+                if a == b or a.startswith(b[:24]) or b.startswith(a[:24]):
+                    dev_tries.append(i)
 
+        last_err = None
+        for dev in dev_tries:
+            for rate in tries:
+                for ex in ([extra, None] if extra is not None else [None]):
+                    try:
+                        s = sd.InputStream(
+                            device=dev, channels=ch, samplerate=rate,
+                            blocksize=self.blocksize, dtype="float32",
+                            callback=self._callback, extra_settings=ex)
+                        s.start()
+                    except Exception as e:           # sd.PortAudioError et al.
+                        last_err = e
+                        continue
+                    self._stream = s
+                    self.device = dev
+                    notes = []
+                    if dev != dev_tries[0]:
+                        try:
+                            sib = sd.query_hostapis(sd.query_devices(dev)["hostapi"])["name"]
+                        except Exception:
+                            sib = "another host API"
+                        notes.append(f"the selected input would not open; using its "
+                                     f"{sib} copy instead")
+                    if rate != want:
+                        self.samplerate = rate
+                        self.n = max(1, int(self.buffer_seconds * rate))
+                        self._buf = np.zeros(self.n, dtype=np.float32)
+                        self._write = self._filled = 0
+                        notes.append(f"running at {rate} Hz, not {want} Hz -- amplitude "
+                                     f"resolution is a little coarser")
+                    self.opened_note = ". ".join(notes) if notes else ""
+                    return
+
+        self.device = dev_tries[0]
         name = info.get("name") or f"device {self.device}"
         supported = []
         for r in (16000, 32000, 44100, 48000, 96000):
@@ -185,7 +208,10 @@ class Recorder:
                 supported.append(r)
             except Exception:
                 pass
-        hint = (f" It reports support for {', '.join(f'{r} Hz' for r in supported)}."
+        tried_sib = " (its other host-API copies were tried too)" if len(dev_tries) > 1 else ""
+        hint = (f" It reports support for {', '.join(f'{r} Hz' for r in supported)}"
+                f" but the driver still refused the stream{tried_sib}. Close any app "
+                f"that might be using it, or pick a different input in the Device list."
                 if supported else
                 " It did not accept any common sample rate as an input -- it may be an "
                 "output-only endpoint, in use by another app, or need a different host "
