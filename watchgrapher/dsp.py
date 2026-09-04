@@ -159,14 +159,6 @@ def verify_period(env: np.ndarray, fs: int, period: float) -> float:
     than one beat and then reading the median spacing settles the question
     directly: if the peaks really are twice as dense as the estimate claims,
     the estimate was a harmonic.
-
-    The halving is only applied when the peaks form a REGULAR grid (coefficient
-    of variation of the spacing a few percent) and stand well clear of the
-    floor. On a weak or noisy pickup the peak detector fires on the noise floor
-    roughly every refractory interval -- about half a beat -- with wildly
-    uneven spacing, and the old code read that as "the real rate is double",
-    which is exactly the "80,000 bph" nonsense a marginal signal used to
-    produce.
     """
     dist = max(3, int(0.38 * period * fs))
     if env.max() <= 0:
@@ -177,23 +169,11 @@ def verify_period(env: np.ndarray, fs: int, period: float) -> float:
     idx, _ = signal.find_peaks(e, distance=dist, prominence=min(prom, 0.5))
     if idx.size < 8:
         return period
-
-    d = np.diff(idx)
-    med = float(np.median(d)) / fs
-    # Coefficient of variation of the spacing. Genuine sub-beats land on a
-    # near-perfect grid (CV a few percent); noise peaks fired at roughly the
-    # refractory interval scatter badly (CV > 0.15). This is what separates a
-    # real tick/tock pair from the noise floor that used to read as "double".
-    cv = float(np.std(d) / (np.median(d) + 1e-9))
-    med_height = float(np.median(e[idx]))
-
+    med = float(np.median(np.diff(idx))) / fs
     if 0.40 * period < med < 0.64 * period:
-        if cv < 0.10 and med_height > 0.5:
-            return period / 2.0
-        return period
+        return period / 2.0
     if 1.55 * period < med < 2.60 * period:
-        if cv < 0.15:
-            return period * 2.0
+        return period * 2.0
     return period
 
 

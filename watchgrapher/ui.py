@@ -2184,13 +2184,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_pin_ref.triggered.connect(self._pin_reference)
         vm.addAction(self.act_pin_ref)
         vm.addSeparator()
-        self.act_agc = QtGui.QAction("Clipping warning", self)
+        self.act_agc = QtGui.QAction("Auto-gain and clipping guard", self)
         self.act_agc.setCheckable(True)
         self.act_agc.setChecked(True)
         self.act_agc.setToolTip(
-            "Warn under the trace when the input hits full scale -- a clipped "
-            "capture reads amplitude wrong. The signal is always used exactly as "
-            "it arrives; there is no digital gain.")
+            "Auto-gain applies a digital makeup gain into the analysis buffer so the "
+            "DSP keeps headroom on a quiet pickup -- it does not touch the Windows "
+            "mixer, and the recorded WAV stays raw. The clipping guard warns when the "
+            "input hits full scale, where the amplitude reading goes wrong. Off = the "
+            "signal is used exactly as it arrives.")
         self.act_agc.toggled.connect(self._set_agc)
         vm.addAction(self.act_agc)
         vm.addSeparator()
@@ -2967,8 +2969,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Theme set to {mode}. Restart WatchGrapher to apply it.")
 
     def _set_agc(self, on):
-        # Toggles only the on-screen clipping warning now -- the recorder never
-        # applies digital gain.
+        if self.recorder is not None:
+            self.recorder.agc_enabled = bool(on)
         self._clip_seen_frac = 0.0
 
     def _cross_check(self):
@@ -5905,6 +5907,7 @@ alongside the application.</p>
                 QtWidgets.QMessageBox.critical(self, "Audio error", str(e))
                 self.recorder = None
                 return
+            self.recorder.agc_enabled = self.act_agc.isChecked()
             self._clip_count0 = 0
             if dev == "NET":
                 got_port = getattr(self.recorder, "port", 0)
@@ -6284,16 +6287,17 @@ alongside the application.</p>
             clips = getattr(self.recorder, "clips", 0)
             new_clips = clips - getattr(self, "_clip_count0", clips)
             self._clip_count0 = clips
+            gain = getattr(self.recorder, "gain", 1.0)
             if hasattr(self, "lbl_live"):
                 if self.act_agc.isChecked() and new_clips > 0:
                     self.lbl_live.setText(
                         "input is CLIPPING -- lower the level in Windows sound settings "
                         "or move the pickup back; amplitude will read wrong")
                     self.lbl_live.setStyleSheet("color:#ff5d5d;font-size:12px;")
-                elif self.act_agc.isChecked() and 0.0005 < p < 0.01:
+                elif self.act_agc.isChecked() and p > 0.005 and p < 0.03 and gain > 8:
                     self.lbl_live.setText(
-                        "input very quiet -- raise the level at your audio interface "
-                        "for a cleaner reading")
+                        f"input very quiet (auto-gain at {gain:.0f}x) -- raise the level "
+                        f"for a cleaner reading")
                     self.lbl_live.setStyleSheet("color:#ffb648;font-size:12px;")
 
             if self._rate_last_update is not None and hasattr(self, "lbl_live"):
