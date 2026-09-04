@@ -26,7 +26,7 @@ tells you what to adjust for the caliber you're working on.
 - Timed runs with a settling period, or open-ended
 - Simulated-watch mode: full end-to-end operation with no hardware
 - Analyze a recorded WAV offline; record WAV during a session
-- Manual input gain for a quiet pickup; clipping warning; one-press self-tune pickup
+- Clipping warning (toggleable); one-press self-tune pickup
 
 ### Analysis
 - Rate-stability (Allan deviation) for a single run
@@ -207,16 +207,10 @@ touching red. Clipping destroys the sub-noise structure that amplitude reads.
 
 **View -> Clipping warning** (on by default) puts a red warning under the trace
 the moment the input hits full scale, because a clipped capture reads amplitude
-wrong.
-
-There is no auto-gain. The **Gain** box next to the level meter is a fixed
-multiplier (1x-15x) you set by hand for a genuinely quiet pickup -- set it so
-the meter sits in the upper half without hitting red. It does not chase the
-level, so it cannot run away and amplify noise into a false reading the way the
-old auto-gain did; it does not touch the recorded WAV; and it is ignored for
-the simulator and the phone pickup. Raising the level at the audio interface is
-always better -- the manual gain lifts the noise floor with the signal, so it
-helps a quiet-but-clean pickup and does nothing for a noisy one.
+wrong. The signal is always used exactly as it arrives -- there is no digital
+gain. A quiet pickup is fixed by raising the level at your audio interface, not
+by amplifying it in software, which only lifts the noise floor with it and can
+push the beat-rate detector onto noise.
 
 Sample rate: 48 kHz is the sensible default. At 4 Hz, one sample at 48 kHz is
 worth roughly 0.7 degrees of amplitude resolution. 96 kHz halves that if your
