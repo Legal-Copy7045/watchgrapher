@@ -336,19 +336,6 @@ def analyze(samples: np.ndarray, fs: int, cfg: AnalyzerConfig) -> Measurement:
     m.detected_bph = snapped if snapped else int(round(m.raw_bph))
     nominal = int(cfg.forced_bph) if cfg.forced_bph else m.detected_bph
     m.nominal_bph = nominal
-
-    # A mechanical watch beats between 12,000 and 43,200 bph. A detected rate
-    # outside that band means the pickup locked onto noise or a harmonic --
-    # the "80,000 bph" a marginal signal produces -- and every downstream
-    # figure would be fiction, so stop here with a plain-language message.
-    if not (10800 <= m.detected_bph <= 45000):
-        m.message = (
-            f"No steady beat rate -- {m.raw_bph:,.0f} bph measured, which is not "
-            f"a mechanical-watch rate. The pickup is hearing mostly noise: "
-            f"reseat the watch against the microphone, raise the gain, and "
-            f"quieten the room, then try again.")
-        return m
-
     if cfg.forced_bph and m.detected_bph != nominal:
         m.message = (f"Measured {m.detected_bph} bph but rate is being computed against "
                      f"{nominal} bph. The rate figure is meaningless until these agree -- "
@@ -409,17 +396,6 @@ def analyze(samples: np.ndarray, fs: int, cfg: AnalyzerConfig) -> Measurement:
     m.times, m.index, m.resid = times, idx, resid
     m.rate = rate_spd(fitted_period, nominal)
     m.beat_error = beat_error_ms(idx, resid)
-
-    # In auto-detect the nominal rate IS the detected rate, so a well-locked
-    # reading sits within a few tens of s/day of zero. A rate in the hundreds
-    # or thousands means the period fit and the autocorrelation disagree --
-    # the beat lock is on a spurious lag -- and nothing downstream is safe.
-    if cfg.forced_bph is None and abs(m.rate) > 250.0:
-        m.message = (
-            "Could not lock a stable beat rate -- the escapement signal is "
-            "being masked by noise or a resonance. Reseat the watch on the "
-            "microphone, add gain, and quieten the room, then try again.")
-        return m
 
     # Instantaneous rate: each beat's own period against nominal, so the fine
     # structure the single averaged number hides is visible -- a slow wave at
