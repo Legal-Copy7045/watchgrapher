@@ -40,8 +40,9 @@ struct Run {
     uint64_t measure_start = 0; // frame the measurement phase began
     bool stop_requested = false;
     String position, wind, watch_id, caliber_key;
-    // Per-window readings taken during the measurement phase.
-    std::vector<double> rate, ci, amp, be;
+    // Per-window readings taken during the measurement phase, with the
+    // length of audio each was taken over.
+    std::vector<double> rate, ci, amp, be, len_s;
     int bph = 0;
     float lift = 52;
     std::string result;         // JSON object once DONE
@@ -233,12 +234,32 @@ static double median(std::vector<double> v) {
     return v.size() % 2 ? v[h] : 0.5 * (v[h - 1] + v[h]);
 }
 
-// Readings from successive windows overlap, so they are not independent:
-// the run's rate is their mean, and its confidence interval is scaled by the
-// number of NON-overlapping windows the run spans, not by the number taken.
-static void finish_run() {
+// A run no longer than the analysis window is reported from the one reading
+// over the whole run -- what the desktop does. A longer run uses only the
+// full-length windows (the early, short ones are the noisiest); those overlap,
+// so they are not independent: the rate is their mean and the confidence
+// interval is scaled by the number of NON-overlapping windows the run spans.
+static void finish_run(double window_s) {
     using namespace json;
     Run& r = run;
+    if (!r.rate.empty()) {
+        double longest = *std::max_element(r.len_s.begin(), r.len_s.end());
+        double want = std::min(longest, std::min<double>(window_s, r.duration_s)) * 0.95;
+        Run kept = Run();
+        for (size_t i = 0; i < r.rate.size(); ++i) {
+            if (r.len_s[i] < want) continue;
+            kept.rate.push_back(r.rate[i]);
+            kept.ci.push_back(r.ci[i]);
+            kept.amp.push_back(r.amp[i]);
+            kept.be.push_back(r.be[i]);
+            kept.len_s.push_back(r.len_s[i]);
+        }
+        r.rate.swap(kept.rate);
+        r.ci.swap(kept.ci);
+        r.amp.swap(kept.amp);
+        r.be.swap(kept.be);
+        r.len_s.swap(kept.len_s);
+    }
     std::string& o = r.result;
     o = "{";
     kv(o, "position", r.position.c_str());
@@ -255,7 +276,7 @@ static void finish_run() {
         kv(o, "ok", false);
         kv(o, "msg", "No usable reading during the run. Check the pickup and try again.");
     } else {
-        double win = std::min<double>(g_settings.window_s, r.duration_s);
+        double win = std::min<double>(window_s, r.duration_s);
         double n_ind = std::max(1.0, std::min<double>(measured, r.duration_s) / std::max(1.0, win));
         double mr = mean(r.rate);
         double sd = 0, ci2 = 0;
@@ -319,7 +340,16 @@ static void pr_sample(uint32_t t) {
     }
     pr.misses = 0;
     double el = (t - pr.t0_ms) / 1000.0;
-    double v[4] = {el, median(pr.rate), median(pr.amp), median(pr.be)};
+    // Late in a run many readings have rate but no amplitude: NaN must not
+    // reach the median (sorting NaN is undefined) exactly where the 200 and
+    // 135 degree crossings are.
+    auto finite_median = [](const std::vector<double>& v) {
+        std::vector<double> f;
+        for (double x : v)
+            if (std::isfinite(x)) f.push_back(x);
+        return median(f);
+    };
+    double v[4] = {el, finite_median(pr.rate), finite_median(pr.amp), finite_median(pr.be)};
     pr.rate.clear();
     pr.amp.clear();
     pr.be.clear();
@@ -347,9 +377,28 @@ void recover_interrupted_pr() {
     p.end();
     if (id.isEmpty()) return;
     if (!LittleFS.exists(pr_path(id, ".end"))) {
+        // How far it got: the elapsed time of the last sample written.
+        double hours = NAN;
+        int samples = 0;
+        File c = LittleFS.open(pr_path(id, ".csv"), "r");
+        if (c) {
+            while (c.available()) {
+                String line = c.readStringUntil('\n');
+                if (line.length() < 2) continue;
+                ++samples;
+                hours = line.toFloat() / 3600.0;
+            }
+            c.close();
+        }
         File f = LittleFS.open(pr_path(id, ".end"), "w");
         if (f) {
-            f.print("{\"reason\":\"interrupted\",\"ended\":\"\",\"hours\":null,\"samples\":null}");
+            std::string o = "{";
+            json::kv(o, "reason", "interrupted (power lost)");
+            json::kv(o, "ended", "");
+            json::kv(o, "hours", hours, 3);
+            json::kv(o, "samples", samples);
+            json::close_obj(o);
+            f.print(o.c_str());
             f.close();
         }
     }
@@ -364,8 +413,12 @@ void recover_interrupted_pr() {
 
 static void task(void*) {
     for (;;) {
-        const bool want = listening || pr.active || run.state == RunState::SETTLE ||
-                          run.state == RunState::MEASURE;
+        bool want;
+        {
+            Lock l;
+            want = listening || pr.active || run.state == RunState::SETTLE ||
+                   run.state == RunState::MEASURE;
+        }
         audio::set_capturing(want);
         if (!want) {
             led::set(led::IDLE);
@@ -374,9 +427,17 @@ static void task(void*) {
         }
         const uint32_t t_loop = now_ms();
         const int fs = audio::sample_rate();
-        const Settings s = g_settings;   // snapshot
+        wg::Config cfg;
+        float window_s;
+        {
+            SettingsLock sl;
+            cfg = g_settings.cfg;
+            window_s = std::min(g_settings.window_s, cap_s);
+        }
         uint64_t end = audio::total();
-        size_t n = (size_t)(std::min(s.window_s, cap_s) * fs);
+        // Never reach back past the start of the current unbroken stream.
+        const uint64_t epoch = audio::epoch();
+        size_t n = (size_t)std::min<uint64_t>((uint64_t)(window_s * fs), end - std::min(end, epoch));
         bool final_window = false;
 
         {
@@ -386,27 +447,29 @@ static void task(void*) {
                 run.measure_start = end;
             }
             if (run.state == RunState::MEASURE) {
+                if (run.measure_start < epoch) run.measure_start = epoch;   // stream restarted
                 uint64_t target = run.measure_start + (uint64_t)(run.duration_s * fs);
                 if (end >= target) {
                     end = target;
                     final_window = true;
                 }
                 if (run.stop_requested) final_window = true;
-                n = std::min<uint64_t>(n, end - run.measure_start);
+                n = std::min<uint64_t>(n, end - std::min(end, run.measure_start));
             }
         }
 
         if (n < (size_t)(3 * fs)) {
             if (final_window) {
                 Lock l;
-                finish_run();
+                finish_run(window_s);
             }
+            if (!audio::input_ready()) led::set(led::NOSIGNAL);
             vTaskDelay(pdMS_TO_TICKS(250));
             continue;
         }
 
         n = audio::copy_window(analyzer->input(), n, end);
-        wg::Measurement m = analyzer->analyze(n, fs, s.cfg);
+        wg::Measurement m = analyzer->analyze(n, fs, cfg);
         std::string js;
         measurement_json(m, js);
 
@@ -415,9 +478,9 @@ static void task(void*) {
             m_json.swap(js);
             ++seq;
             last_an_ms = m.t_total_ms;
-            hist.push_back({t_loop / 1000.0f, (float)m.rate, (float)m.amplitude,
-                            (float)m.beat_error});
-            if (!m.ok) hist.back() = {t_loop / 1000.0f, NAN, NAN, NAN};
+            if (m.ok) hist.push_back({t_loop / 1000.0f, (float)m.rate, (float)m.amplitude,
+                                      (float)m.beat_error});
+            else hist.push_back({t_loop / 1000.0f, NAN, NAN, NAN});
             if (hist.size() > 900) hist.pop_front();
 
             if (run.state == RunState::MEASURE) {
@@ -426,9 +489,10 @@ static void task(void*) {
                     run.ci.push_back(m.rate_ci);
                     run.amp.push_back(m.amplitude);
                     run.be.push_back(m.beat_error);
+                    run.len_s.push_back((double)n / fs);
                     run.bph = m.nominal_bph;
                 }
-                if (final_window) finish_run();
+                if (final_window) finish_run(window_s);
             }
             if (pr.active) {
                 if (m.ok) {
@@ -459,7 +523,10 @@ bool begin(float window_cap) {
     const size_t samples = (size_t)(cap_s * g_settings.sample_rate);
     analyzer = new wg::Analyzer(
         samples, [](size_t b) { return heap_caps_malloc(b, MALLOC_CAP_SPIRAM); },
-        [](void* p) { heap_caps_free(p); }, clock_ms);
+        [](void* p) { heap_caps_free(p); }, clock_ms,
+        // Hot scratch (the autocorrelation's ~130 kB) in internal RAM if it fits.
+        [](size_t b) { return heap_caps_malloc(b, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); },
+        [](void* p) { heap_caps_free(p); });
     if (!analyzer->ok()) return false;
     LittleFS.mkdir("/pr");
     // Core 1, same priority as the Arduino loop (web server): they time-slice,
@@ -507,7 +574,10 @@ std::string command(const String& action, const ArgFn& arg) {
         run.wind = arg("wind");
         run.watch_id = arg("watch_id");
         run.caliber_key = arg("caliber_key");
-        run.lift = g_settings.cfg.lift_angle;
+        {
+            SettingsLock sl;
+            run.lift = g_settings.cfg.lift_angle;
+        }
         return ok_reply();
     }
     if (action == "run_stop") {
@@ -544,7 +614,12 @@ std::string command(const String& action, const ArgFn& arg) {
         json::kv(o, "when", iso.c_str());
         json::kv(o, "watch_id", arg("watch_id").c_str());
         json::kv(o, "caliber_key", arg("caliber_key").c_str());
-        json::kv(o, "lift_angle", g_settings.cfg.lift_angle, 1);
+        float lift;
+        {
+            SettingsLock sl;
+            lift = g_settings.cfg.lift_angle;
+        }
+        json::kv(o, "lift_angle", lift, 1);
         json::kv(o, "interval_s", (int)pr.interval_s);
         json::kv(o, "target_h", arg("target_h").toFloat(), 1);
         json::kv(o, "notes", arg("notes").c_str());
@@ -589,7 +664,8 @@ void state_json(uint32_t since, std::string& o) {
     kv(o, "up", t / 1000.0, 0);
     kv(o, "listening", listening);
     kv(o, "capturing", audio::capturing());
-    kv(o, "src", g_settings.source == Source::SIM ? "sim" : "i2s");
+    const Source src = g_settings.source;
+    kv(o, "src", src == Source::SIM ? "sim" : src == Source::USB ? "usb" : "i2s");
     kv(o, "fs", fs);
     kv(o, "level", audio::level_db(), 1);
     kv(o, "gain", audio::gain_db(), 1);
@@ -599,7 +675,8 @@ void state_json(uint32_t since, std::string& o) {
     kv(o, "window_cap", cap_s, 1);
     kv(o, "an_ms", last_an_ms, 0);
     kv(o, "clock", clock_valid());
-    kv(o, "err", audio::error());
+    kv(o, "input", audio::status().c_str());
+    kv(o, "input_ready", audio::input_ready());
 
     o += "\"run\":{";
     kv(o, "state", run_name(run.state));
@@ -635,7 +712,10 @@ void state_json(uint32_t since, std::string& o) {
             if (i) o += ',';
             num(o, pr.last[i], 2);
         }
-        o += "],\"spark\":[";
+        o += "],";
+        // Sample number of the sparkline's first point (it keeps the last 240).
+        kv(o, "spark0", pr.samples - (int)pr.spark.size());
+        o += "\"spark\":[";
         for (size_t i = 0; i < pr.spark.size(); ++i) {
             if (i) o += ',';
             num(o, pr.spark[i], 1);
@@ -690,18 +770,25 @@ void pr_list_json(std::string& o) {
             if (slash >= 0) name = name.substring(slash + 1);
             if (!name.endsWith(".json")) continue;
             String id = name.substring(0, name.length() - 5);
-            String meta = f.readString();
+            // Pasted in verbatim, so a file cut short by a power loss must not
+            // make the whole list invalid JSON: anything that is not one
+            // closed object becomes null.
+            auto object_or_null = [](String v) {
+                v.trim();
+                return (v.length() >= 2 && v[0] == '{' && v[v.length() - 1] == '}') ? v : String("null");
+            };
+            String meta = object_or_null(f.readString());
             f.close();
             String end = "null";
             File e = LittleFS.open(pr_path(id, ".end"), "r");
-            if (e) { end = e.readString(); e.close(); }
+            if (e) { end = object_or_null(e.readString()); e.close(); }
             size_t bytes = 0;
             File c = LittleFS.open(pr_path(id, ".csv"), "r");
             if (c) { bytes = c.size(); c.close(); }
             if (!first) o += ',';
             first = false;
             o += "{\"meta\":";
-            o += meta.length() ? meta.c_str() : "null";
+            o += meta.c_str();
             o += ",\"end\":";
             o += end.c_str();
             o += ",\"active\":";

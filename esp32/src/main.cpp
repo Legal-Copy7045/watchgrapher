@@ -15,6 +15,7 @@
 
 #include "audio_in.h"
 #include "engine.h"
+#include "improv.h"
 #include "led.h"
 #include "settings.h"
 #include "web.h"
@@ -69,7 +70,7 @@ void setup() {
     }
     Serial.printf("PSRAM free %u, analysis window up to %.1f s at %d Hz\n", (unsigned)ps, cap, fs);
     if (cap >= 4.0f) {
-        if (!audio::begin(cap + RING_EXTRA_S)) Serial.printf("audio: %s\n", audio::error());
+        if (!audio::begin(cap + RING_EXTRA_S)) Serial.printf("audio: %s\n", audio::status().c_str());
         if (!engine::begin(cap)) Serial.println("engine: analyzer allocation failed");
     } else {
         Serial.println("Not enough PSRAM. WatchGrapher needs an ESP32-S3 with 8 MB PSRAM (N8R8 / N16R8).");
@@ -78,6 +79,7 @@ void setup() {
 
     wifi_start();
     web::begin();
+    improv::begin(g_settings.source == Source::USB);
 }
 
 void loop() {

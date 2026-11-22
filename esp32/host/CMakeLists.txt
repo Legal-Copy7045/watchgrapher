@@ -11,3 +11,10 @@ set(DSP ${CMAKE_CURRENT_SOURCE_DIR}/../lib/wgdsp/src)
 add_executable(wgcli wgcli.cpp ${DSP}/wgdsp.cpp ${DSP}/wgsim.cpp)
 target_include_directories(wgcli PRIVATE ${DSP})
 target_compile_options(wgcli PRIVATE -Wall -Wextra -Wno-unused-parameter)
+
+# USB Audio Class descriptor parser tests
+set(UAC ${CMAKE_CURRENT_SOURCE_DIR}/../lib/wguac/src)
+add_executable(uac_test uac_test.cpp ${UAC}/uac.cpp)
+target_include_directories(uac_test PRIVATE ${UAC})
+target_compile_options(uac_test PRIVATE -Wall -Wextra -fsanitize=address,undefined)
+target_link_options(uac_test PRIVATE -fsanitize=address,undefined)

@@ -30,6 +30,8 @@
 <main>
 <!-- ================================================================ Measure -->
 <section id="tab-measure" class="tab on">
+ <div class="cols">
+ <div class="col">
   <div class="tiles">
     <div class="tile" id="tRate"><div class="lbl">Rate</div><div class="val">--</div><div class="sub">s/day</div></div>
     <div class="tile" id="tAmp"><div class="lbl">Amplitude</div><div class="val">--</div><div class="sub">deg</div></div>
@@ -44,6 +46,7 @@
     <span id="gainTxt" class="mono small"></span>
   </div>
   <div id="calInfo" class="small muted"></div>
+  <div id="inputInfo" class="small muted"></div>
 
   <div class="card">
     <div class="cardhead"><h3>Timed run</h3><span id="runState" class="small muted"></span></div>
@@ -60,6 +63,13 @@
     <div class="progress"><div id="runBar"></div></div>
     <div id="runResult" hidden></div>
   </div>
+  <details class="card">
+    <summary>Diagnostics</summary>
+    <table class="kv" id="diag"></table>
+    <p class="small"><a id="wavLink" href="/api/wav?s=10">Download the last 10 s as WAV</a> &mdash; opens in the desktop app's <em>Analyze WAV</em>.</p>
+  </details>
+ </div>
+ <div class="col">
 
   <div class="card">
     <div class="cardhead"><h3>Trace</h3>
@@ -80,12 +90,9 @@
     <canvas id="cvHist" class="chart"></canvas>
     <div class="legend small"><span class="dot c1"></span>rate (s/day, left) <span class="dot c3"></span>amplitude (deg, right)</div>
   </div>
+ </div>
+ </div>
 
-  <details class="card">
-    <summary>Diagnostics</summary>
-    <table class="kv" id="diag"></table>
-    <p class="small"><a id="wavLink" href="/api/wav?s=10">Download the last 10 s as WAV</a> &mdash; opens in the desktop app's <em>Analyze WAV</em>.</p>
-  </details>
 </section>
 
 <!-- ============================================================== Positions -->
@@ -109,6 +116,8 @@
 
 <!-- ================================================================ Reserve -->
 <section id="tab-reserve" class="tab">
+ <div class="cols">
+ <div class="col">
   <div class="card" id="prLive">
     <h3>Power-reserve log</h3>
     <p class="small muted">Fully wind the watch, put it on the pickup and start. The device logs on its own -- you can close this page and come back. It stops by itself when the watch runs down.</p>
@@ -130,6 +139,8 @@
     <div id="prList" class="list"></div>
   </div>
 
+ </div>
+ <div class="col">
   <div class="card" id="prDetail" hidden>
     <div class="cardhead"><h3 id="prTitle"></h3><button id="btnPrClose" class="small">Close</button></div>
     <div id="prFigures" class="summary"></div>
@@ -141,15 +152,29 @@
       <button id="btnPrDelete" class="danger">Delete</button>
     </div>
   </div>
+ </div>
+ </div>
 </section>
 
 <!-- ================================================================ Watches -->
 <section id="tab-watches" class="tab">
+ <div class="cols">
+ <div class="col">
   <div class="row">
     <button id="btnWatchAdd" class="primary">+ Add watch</button>
     <label class="check small"><input id="showArchived" type="checkbox"> show archived</label>
   </div>
   <div id="watchList" class="list"></div>
+  <div class="card">
+    <h3>Sync with the desktop app</h3>
+    <p class="small muted">Load your desktop <code>collection.json</code> here to carry your watches with you. To bring results back, download the device's collection and merge it on the computer with <code>python esp32/tools/merge_device.py</code> &mdash; nothing on the desktop is overwritten.</p>
+    <div class="row">
+      <label class="button">Load desktop collection<input id="collFile" type="file" accept=".json,application/json" hidden></label>
+      <a class="button" href="/api/collection" download="device_collection.json">Download device collection</a>
+    </div>
+  </div>
+ </div>
+ <div class="col">
 
   <div class="card" id="watchEdit" hidden>
     <h3 id="weTitle">Watch</h3>
@@ -175,23 +200,18 @@
     <div id="weHistory"></div>
   </div>
 
-  <div class="card">
-    <h3>Sync with the desktop app</h3>
-    <p class="small muted">Load your desktop <code>collection.json</code> here to carry your watches with you. To bring results back, download the device's collection and merge it on the computer with <code>python esp32/tools/merge_device.py</code> &mdash; nothing on the desktop is overwritten.</p>
-    <div class="row">
-      <label class="button">Load desktop collection<input id="collFile" type="file" accept=".json,application/json" hidden></label>
-      <a class="button" href="/api/collection" download="device_collection.json">Download device collection</a>
-    </div>
-  </div>
+ </div>
+ </div>
 </section>
 
 <!-- =============================================================== Settings -->
 <section id="tab-settings" class="tab">
   <form id="setForm" autocomplete="off">
+  <div class="cardgrid">
   <div class="card">
     <h3>Input</h3>
     <div class="grid2">
-      <label>Source<select name="source"><option value="i2s">I2S microphone / ADC</option><option value="sim">Simulated watch</option></select></label>
+      <label>Source<select name="source"><option value="i2s">I2S microphone / ADC</option><option value="usb">USB microphone</option><option value="sim">Simulated watch</option></select></label>
       <label>Analysis window (s)<input name="window_s" type="number" step="0.5" min="4"></label>
       <label>Gain (dB)<input name="gain_db" type="number" step="1" min="0" max="54"></label>
       <label class="check"><input name="agc" type="checkbox"> Auto-gain</label>
@@ -243,6 +263,7 @@
       <label>Hostname (.local)<input name="hostname"></label>
     </div>
   </div>
+  </div>
   <div class="row sticky">
     <button type="submit" class="primary">Save settings</button>
     <button type="button" id="btnReboot">Restart device</button>
@@ -252,6 +273,11 @@
   <div class="card">
     <h3>Device</h3>
     <table class="kv" id="devInfo"></table>
+    <div class="row">
+      <button type="button" id="btnUpdCheck">Check for updates</button>
+      <span id="updInfo" class="small muted"></span>
+    </div>
+    <label>Hotspot password (needed to update firmware)<input id="fwKey" type="password" autocomplete="off"></label>
     <label class="button">Update firmware (.bin)<input id="fwFile" type="file" accept=".bin" hidden></label>
     <div class="progress"><div id="fwBar"></div></div>
     <button id="btnFactory" class="danger small">Factory reset settings</button>

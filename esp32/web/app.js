@@ -90,7 +90,7 @@ function niceTicks(lo, hi, n = 5) {
 // series: [{pts: [[x,y],...], color, kind: 'line'|'dot', axis: 'l'|'r'}]
 function plot(cv, series, o = {}) {
   const { g, w, h } = setupCanvas(cv);
-  const pad = { l: 40, r: o.right ? 40 : 10, t: 8, b: 20 };
+  const pad = { l: 40, r: o.right ? 40 : 18, t: 8, b: 20 };
   const all = (ax) => series.filter((s) => (s.axis || "l") === ax).flatMap((s) => s.pts.filter((p) => fin(p[0]) && fin(p[1])));
   const pl = all("l"), pr = all("r"), px = pl.concat(pr);
   const ext = (a, i, fx) => {
@@ -153,6 +153,7 @@ let calibers = null;          // rows from /calibers.json
 let calByKey = new Map();
 let settings = {};
 let lastSeq = -1;
+let histSeq = -1;             // newest measurement already in hist
 let lastM = null;
 let lastState = null;
 let hist = [];                // [[t, rate, amp, be]]
@@ -201,13 +202,16 @@ async function poll() {
     if (st.m !== undefined) {
       lastM = st.m;
       lastSeq = st.seq;
-      if (st.m && st.m.ok) hist.push([st.up, st.m.rate, st.m.amp, st.m.be]);
-      else if (st.m) hist.push([st.up, NaN, NaN, NaN]);
-      if (hist.length > 900) hist.shift();
+      // Forcing a resend (lastSeq = -1) repeats the current measurement; it
+      // must not add a second point to the history.
+      if (st.m && st.seq > histSeq) {
+        histSeq = st.seq;
+        hist.push(st.m.ok ? [st.up, st.m.rate, st.m.amp, st.m.be] : [st.up, NaN, NaN, NaN]);
+        if (hist.length > 900) hist.shift();
+      }
       redrawMeasure();
     }
     renderStatus(st);
-    if (st.err) banner(st.err, 0);
   } catch {
     if (++pollFail > 2) {
       $("#conn").classList.remove("ok");
@@ -236,7 +240,13 @@ function renderStatus(st) {
   const bar = $("#meterBar");
   bar.style.width = st.capturing ? (lvl * 100).toFixed(0) + "%" : "0";
   bar.classList.toggle("hot", st.clips > 0);
-  $("#gainTxt").textContent = `${st.src === "sim" ? "SIM " : ""}${st.agc ? "auto " : ""}${f(st.gain, 0)} dB`;
+  $("#gainTxt").textContent = `${st.src === "sim" ? "SIM " : st.src === "usb" ? "USB " : ""}${st.agc ? "auto " : ""}${f(st.gain, 0)} dB`;
+  // What the input is doing: a USB mic's name and format, or why there is no audio.
+  const inp = $("#inputInfo");
+  inp.textContent = st.input || "";
+  inp.className = "small " + (st.input_ready === false ? "warnText" : "muted");
+  if (st.input_ready === false && st.capturing && !lastM) $("#msg").textContent =
+    st.src === "usb" ? "Waiting for a USB microphone on the board's USB port." : "No audio from the input.";
   if (!st.capturing && !st.m) tile("#tRate", "--");
 
   // Timed run
@@ -438,6 +448,7 @@ async function applyWatchCaliber() {
   try {
     await post("/api/settings", fields);
     lastSeq = -1;
+    loadSettings();   // or a later Save on the Settings tab writes the old values back
   } catch (e) { banner(e.message); }
   updateCalInfo();
 }
@@ -543,7 +554,7 @@ function renderPrLive(pr) {
   $("#prStatus").innerHTML = `<b>${fmtH(pr.elapsed)}</b> elapsed &middot; ${pr.samples} samples &middot; next in ${f(Math.max(0, pr.next), 0)} s<br>` +
     (pr.samples ? `Last: ${f(L[2], 0)}&deg; &middot; ${f(L[1], 1, true)} s/day &middot; ${f(L[3], 1)} ms` : "Waiting for the first sample.");
   if ($("#tab-reserve").classList.contains("on") && pr.spark && pr.spark.length > 1)
-    plot($("#cvPrSpark"), [{ pts: pr.spark.map((v, i) => [(i + 1) * pr.interval / 3600, v]), color: css("--c3") }], { xfmt: (t) => t + "h" });
+    plot($("#cvPrSpark"), [{ pts: pr.spark.map((v, i) => [((pr.spark0 || 0) + i + 1) * pr.interval / 3600, v]), color: css("--c3") }], { xfmt: (t) => t + "h" });
 }
 
 $("#btnPrStart").addEventListener("click", async () => {
@@ -838,7 +849,7 @@ async function loadSettings() {
   $("#simCard").hidden = settings.source !== "sim";
   const mb = (b) => (b / 1048576).toFixed(1) + " MB";
   $("#devInfo").innerHTML = [
-    ["Firmware", settings.fw], ["Hotspot", settings.ap_ssid_live], ["On network", settings.sta_ip || "--"],
+    ["Firmware", `${settings.fw} (${settings.variant})`], ["Hotspot", settings.ap_ssid_live], ["On network", settings.sta_ip || "--"],
     ["Longest window", f(settings.window_cap, 1) + " s"], ["PSRAM free", mb(settings.psram_free)],
     ["RAM free", (settings.heap_free / 1024).toFixed(0) + " kB"], ["Storage", `${mb(settings.fs_used)} of ${mb(settings.fs_total)}`],
   ].map(([k, v]) => `<tr><td>${k}</td><td>${esc(v)}</td></tr>`).join("");
@@ -871,19 +882,60 @@ $("#btnFactory").addEventListener("click", async () => {
   post("/api/factory_reset", {}).catch(() => null);
   banner("Resetting and restarting...", 8000);
 });
+// Firmware updates from the published installer site. Needs a browser with
+// internet access (a computer on the same network as the device, or a phone
+// whose mobile data is on while it is joined to the hotspot).
+const SITE = "https://legal-copy7045.github.io/watchgrapher/";
+const verNum = (v) => String(v || "0").split(/[.-]/).map((x) => parseInt(x, 10) || 0);
+function newer(a, b) {
+  const x = verNum(a), y = verNum(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+}
+$("#btnUpdCheck").addEventListener("click", async () => {
+  const info = $("#updInfo");
+  info.textContent = "Checking...";
+  const base = SITE + (settings.variant === "n8r8" ? "n8r8/" : "");
+  let man;
+  try {
+    man = await (await fetch(base + "manifest.json", { cache: "no-store" })).json();
+  } catch {
+    info.textContent = "Couldn't reach the update site -- this browser needs internet access.";
+    return;
+  }
+  if (!newer(man.version, settings.fw)) { info.textContent = `Up to date (${settings.fw}).`; return; }
+  const ota = man.builds && man.builds[0] && man.builds[0].ota;
+  if (ota && !$("#fwKey").value) { info.textContent = `Version ${man.version} is available -- enter the hotspot password below to install it.`; return; }
+  if (!ota || !(await confirmBox(`Install version ${man.version}? The device restarts afterwards. Watches, logs and settings are kept.`))) {
+    info.textContent = `Version ${man.version} is available.`;
+    return;
+  }
+  info.textContent = "Downloading...";
+  try {
+    const bin = await (await fetch(base + ota.path, { cache: "no-store" })).blob();
+    uploadFirmware(new File([bin], "firmware.bin"));
+    info.textContent = "Installing...";
+  } catch {
+    info.textContent = "Download failed.";
+  }
+});
+
 $("#fwFile").addEventListener("change", (e) => {
   const file = e.target.files[0];
   e.target.value = "";
-  if (!file) return;
+  if (file) uploadFirmware(file);
+});
+function uploadFirmware(file) {
   const fd = new FormData();
   fd.append("firmware", file, file.name);
   const x = new XMLHttpRequest();
   x.upload.onprogress = (ev) => ($("#fwBar").style.width = ((100 * ev.loaded) / ev.total).toFixed(0) + "%");
   x.onload = () => { try { banner(JSON.parse(x.responseText).msg, 10000); } catch { banner("Upload finished.", 10000); } };
   x.onerror = () => banner("Upload failed.");
-  x.open("POST", "/api/update");
+  x.onloadend = () => { if (x.status === 403) banner("Wrong hotspot password -- firmware not changed.", 8000); };
+  x.open("POST", "/api/update?key=" + encodeURIComponent($("#fwKey").value || ""));
   x.send(fd);
-});
+}
 
 // ---------------------------------------------------------------- boot
 

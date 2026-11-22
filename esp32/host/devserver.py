@@ -56,7 +56,7 @@ class Device:
             lift_angle=52.0, forced_bph=0, exact_amplitude=True, no_parity_fix=False,
             sim_bph=28800, sim_amp=285.0, sim_lift=52.0, sim_rate=4.0, sim_be=0.3, sim_snr=18.0,
             ap_ssid="", ap_ssid_live="WatchGrapher-DEV", sta_ssid="", sta_ip="",
-            hostname="watchgrapher", pin_led=48, fw="0.1.0-dev",
+            hostname="watchgrapher", pin_led=48, fw="0.2.0-dev", variant="n16r8",
             psram_free=1_600_000, heap_free=210_000, fs_total=10_354_688, fs_used=40_960)
         self.rec = SimulatedRecorder(samplerate=48000, buffer_seconds=20.0)
         self._apply_sim()
@@ -143,7 +143,8 @@ class Device:
                 self.hist = self.hist[-900:]
                 if self.run["state"] == "measure":
                     if m.ok:
-                        for k, v in (("rate", m.rate), ("ci", m.rate_ci), ("amp", m.amplitude), ("be", m.beat_error)):
+                        for k, v in (("rate", m.rate), ("ci", m.rate_ci), ("amp", m.amplitude),
+                                     ("be", m.beat_error), ("len", len(x) / 48000.0)):
                             self.run[k].append(v)
                         self.run["bph"] = m.nominal_bph
                     if final:
@@ -183,6 +184,12 @@ class Device:
 
     def _finish_run(self):
         r = self.run
+        # As the firmware: only full-length windows count (engine.cpp finish_run).
+        if r["rate"]:
+            want = min(max(r["len"]), self.settings["window_s"], r["duration"]) * 0.95
+            keep = [i for i, n in enumerate(r["len"]) if n >= want]
+            for k in ("rate", "ci", "amp", "be", "len"):
+                r[k] = [r[k][i] for i in keep]
         res = dict(position=r["position"], wind=r["wind"], watch_id=r["watch_id"],
                    caliber_key=r["caliber_key"], when=time.strftime("%Y-%m-%dT%H:%M:%S"),
                    lift_angle=r["lift"], bph=r.get("bph", 0), windows=len(r["rate"]),
@@ -257,14 +264,17 @@ class Device:
             if p["active"]:
                 pr.update(id=p["id"], elapsed=round((t - p["t0"]) * self.speed), interval=p["interval"],
                           samples=p["samples"], next=round((p["next"] - t) * self.speed),
-                          last=p["last"], spark=p["spark"])
+                          last=p["last"], spark=p["spark"],
+                          spark0=p["samples"] - len(p["spark"]))
             pk = getattr(self.rec, "peak", 0.0)
             o = dict(seq=self.seq, up=round(t), listening=self.listening, capturing=self.capturing(),
                      src=self.settings["source"], fs=48000,
                      level=round(20 * math.log10(pk), 1) if pk > 1e-6 else -120,
                      gain=self.settings["gain_db"], agc=self.settings["agc"], clips=0,
                      window=self.settings["window_s"], window_cap=self.settings["window_cap"],
-                     an_ms=round(self.an_ms), clock=True, err="", run=run, pr=pr)
+                     an_ms=round(self.an_ms), clock=True, run=run, pr=pr,
+                     input="No USB microphone connected." if self.settings["source"] == "usb" else "",
+                     input_ready=self.settings["source"] != "usb")
             if since != self.seq:
                 o["m"] = self.m
             return o
@@ -281,7 +291,7 @@ class Device:
                                 duration=min(3600.0, max(6.0, float(g("duration", "30") or 30))),
                                 position=g("position"), wind=g("wind"), watch_id=g("watch_id"),
                                 caliber_key=g("caliber_key"), lift=self.settings["lift_angle"],
-                                rate=[], ci=[], amp=[], be=[])
+                                rate=[], ci=[], amp=[], be=[], len=[])
             elif a == "run_stop":
                 if self.run["state"] == "settle":
                     self.run = {"state": "idle"}

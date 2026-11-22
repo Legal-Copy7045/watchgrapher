@@ -80,9 +80,10 @@ static void h_history() {
 
 static void h_settings_get() {
     using namespace json;
+    SettingsLock lock;
     const Settings& s = g_settings;
     std::string o = "{";
-    kv(o, "source", s.source == Source::SIM ? "sim" : "i2s");
+    kv(o, "source", s.source == Source::SIM ? "sim" : s.source == Source::USB ? "usb" : "i2s");
     kv(o, "sample_rate", s.sample_rate);
     kv(o, "pin_bclk", s.pin_bclk);
     kv(o, "pin_ws", s.pin_ws);
@@ -114,6 +115,7 @@ static void h_settings_get() {
     kv(o, "hostname", s.hostname.c_str());
     kv(o, "pin_led", s.pin_led);
     kv(o, "fw", WG_FW_VERSION);
+    kv(o, "variant", WG_VARIANT);
     kv(o, "psram_free", (long long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     kv(o, "heap_free", (long long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     size_t tot = LittleFS.totalBytes(), used = LittleFS.usedBytes();
@@ -124,10 +126,13 @@ static void h_settings_get() {
 }
 
 static void h_settings_post() {
+    SettingsLock lock;
     Settings& s = g_settings;
     bool reboot = false;
     auto f = [](const char* k, float& v, float lo, float hi) {
-        if (server.hasArg(k)) v = constrain(server.arg(k).toFloat(), lo, hi);
+        if (!server.hasArg(k)) return;
+        float x = server.arg(k).toFloat();
+        if (std::isfinite(x)) v = constrain(x, lo, hi);   // "nan" would pass constrain()
     };
     auto i = [&](const char* k, int& v, int lo, int hi, bool needs_reboot) {
         if (!server.hasArg(k)) return;
@@ -146,7 +151,10 @@ static void h_settings_post() {
         v = nv;
     };
 
-    if (server.hasArg("source")) s.source = arg("source") == "sim" ? Source::SIM : Source::I2S;
+    if (server.hasArg("source")) {
+        String v = arg("source");
+        s.source = v == "sim" ? Source::SIM : v == "usb" ? Source::USB : Source::I2S;
+    }
     i("sample_rate", s.sample_rate, 16000, 96000, true);
     i("pin_bclk", s.pin_bclk, -1, 48, true);
     i("pin_ws", s.pin_ws, -1, 48, true);
@@ -162,10 +170,21 @@ static void h_settings_post() {
     f("env_win_ms", s.cfg.env_win_ms, 0.1f, 2.0f);
     f("sub_threshold", s.cfg.sub_threshold, 0.03f, 0.6f);
     f("lift_angle", s.cfg.lift_angle, 10, 80);
-    i("forced_bph", s.cfg.forced_bph, 0, 72000, false);
+    if (server.hasArg("forced_bph")) {
+        // Auto (0) or one of the standard rates: anything else is a typo, and a
+        // tiny one made the analysis allocate megabytes.
+        int v = (int)server.arg("forced_bph").toInt();
+        bool std_rate = v == 0;
+        for (int r : wg::STANDARD_BPH) std_rate |= v == r;
+        if (std_rate) s.cfg.forced_bph = v;
+    }
     b("exact_amplitude", s.cfg.exact_amplitude);
     b("no_parity_fix", s.cfg.no_parity_fix);
-    i("sim_bph", s.sim.bph, 7200, 72000, false);
+    if (server.hasArg("sim_bph")) {
+        int v = (int)server.arg("sim_bph").toInt();
+        for (int r : wg::STANDARD_BPH)
+            if (v == r) s.sim.bph = v;
+    }
     f("sim_amp", s.sim.amplitude, 90, 360);
     f("sim_lift", s.sim.lift_angle, 10, 80);
     f("sim_rate", s.sim.rate_spd, -500, 500);
@@ -299,8 +318,17 @@ static void h_wav() {
     }
 }
 
+// Firmware upload needs the hotspot password: anyone who can reach the page
+// over a shared home network should not be able to reflash the device.
+static bool update_allowed = false;
+
 static void h_update_done() {
-    bool ok = !Update.hasError();
+    if (!update_allowed) {
+        send_json("{\"ok\":false,\"msg\":\"Wrong hotspot password -- firmware not changed.\"}", 403);
+        return;
+    }
+    update_allowed = false;
+    bool ok = Update.isFinished() && !Update.hasError();
     send_json(ok ? "{\"ok\":true,\"msg\":\"Updated. Restarting...\"}"
                  : "{\"ok\":false,\"msg\":\"Update failed.\"}");
     if (ok) {
@@ -312,7 +340,16 @@ static void h_update_done() {
 static void h_update_chunk() {
     HTTPUpload& u = server.upload();
     if (u.status == UPLOAD_FILE_START) {
+        String pass;
+        {
+            SettingsLock lock;
+            pass = g_settings.ap_pass.length() >= 8 ? g_settings.ap_pass : String("watchgrapher");
+        }
+        update_allowed = server.arg("key") == pass;
+        if (!update_allowed) return;
         Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH);
+    } else if (!update_allowed) {
+        return;
     } else if (u.status == UPLOAD_FILE_WRITE) {
         Update.write(u.buf, u.currentSize);
     } else if (u.status == UPLOAD_FILE_END) {

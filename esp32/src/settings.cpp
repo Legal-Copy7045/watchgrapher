@@ -4,13 +4,23 @@
 
 Settings g_settings;
 
+static SemaphoreHandle_t settings_mtx() {
+    // Created on first use, before any task exists (settings_load runs in setup).
+    static SemaphoreHandle_t m = xSemaphoreCreateRecursiveMutex();
+    return m;
+}
+SettingsLock::SettingsLock() { xSemaphoreTakeRecursive(settings_mtx(), portMAX_DELAY); }
+SettingsLock::~SettingsLock() { xSemaphoreGiveRecursive(settings_mtx()); }
+
 static Preferences prefs;
 
 void settings_load() {
+    SettingsLock lock;
     Settings d;  // defaults
     Settings& s = g_settings;
     prefs.begin("wg", true);
-    s.source = (Source)prefs.getUChar("src", (uint8_t)d.source);
+    uint8_t src = prefs.getUChar("src", (uint8_t)d.source);
+    s.source = src <= (uint8_t)Source::USB ? (Source)src : d.source;
     s.sample_rate = prefs.getInt("fs", d.sample_rate);
     s.pin_bclk = prefs.getInt("p_bclk", d.pin_bclk);
     s.pin_ws = prefs.getInt("p_ws", d.pin_ws);
@@ -47,6 +57,7 @@ void settings_load() {
 }
 
 void settings_save() {
+    SettingsLock lock;
     const Settings& s = g_settings;
     prefs.begin("wg", false);
     prefs.putUChar("src", (uint8_t)s.source);
@@ -89,5 +100,6 @@ void settings_reset() {
     prefs.begin("wg", false);
     prefs.clear();
     prefs.end();
+    SettingsLock lock;
     g_settings = Settings();
 }

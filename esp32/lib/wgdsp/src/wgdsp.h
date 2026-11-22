@@ -97,8 +97,10 @@ using ClockFn = double (*)();   // monotonic milliseconds, optional
 // allocated once -- on the ESP32 in PSRAM -- instead of on every analysis.
 class Analyzer {
 public:
+    // `fast` / `fast_free` optionally allocate small, hot scratch buffers
+    // (tens of kB) from faster memory -- internal RAM on the ESP32.
     explicit Analyzer(size_t max_samples, AllocFn alloc = nullptr, FreeFn release = nullptr,
-                      ClockFn clock = nullptr);
+                      ClockFn clock = nullptr, AllocFn fast = nullptr, FreeFn fast_free = nullptr);
     ~Analyzer();
     Analyzer(const Analyzer&) = delete;
     Analyzer& operator=(const Analyzer&) = delete;
@@ -119,6 +121,8 @@ private:
     float* env_ = nullptr;   // RMS envelope
     FreeFn free_ = nullptr;
     ClockFn clock_ = nullptr;
+    AllocFn fast_ = nullptr;
+    FreeFn fast_free_ = nullptr;
     double now() const { return clock_ ? clock_() : 0.0; }
 };
 

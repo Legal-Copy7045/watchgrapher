@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WatchGrapher Installer</title>
+  <meta name="description" content="Install the WatchGrapher pocket timegrapher firmware on an ESP32-S3 from your browser.">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <!-- ESP Web Tools, served from this site: make_site.py downloads the pinned
+       release from npm and checks it against a fixed hash before publishing. -->
+  <script type="module" src="esp-web-tools/install-button.js"></script>
+  <style>
+    :root {
+      --bg: #f4f5f7; --card: #ffffff; --text: #17191d; --muted: #5d6470;
+      --accent: #1f6feb; --accent-text: #ffffff; --border: #dfe2e7; --chip: #e8eefb;
+      --warn-bg: #fff6e0; --warn-border: #f0d48a;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #101215; --card: #1a1d22; --text: #e8eaed; --muted: #9aa1ab;
+        --accent: #4c8dff; --accent-text: #0b0d10; --border: #2b3038; --chip: #1d2738;
+        --warn-bg: #2b2414; --warn-border: #6b5520;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+      font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    body::before { content: ""; display: block; height: 5px; background: linear-gradient(90deg, #1f6feb, #2f9e44, #e8590c); }
+    main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; display: grid; gap: 22px; }
+    header { display: flex; gap: 16px; align-items: center; }
+    header img { width: clamp(52px, 8vw, 68px); height: auto; flex: none; }
+    h1 { font-size: clamp(32px, 6vw, 46px); line-height: 1.05; margin: 0; letter-spacing: -.5px; }
+    .version { color: var(--muted); margin: 4px 0 0; }
+    .lede { margin: 0; max-width: 68ch; }
+    .products { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px; min-width: 0; }
+    .card h2 { font-size: 22px; margin: 0 0 6px; }
+    .card h3 { font-size: 19px; margin: 0 0 8px; }
+    .tag { display: inline-block; font-size: .78rem; font-weight: 600; background: var(--chip); border-radius: 999px; padding: 2px 10px; margin-bottom: 10px; }
+    .product p { margin: 0 0 12px; }
+    ol, ul { padding-left: 1.2rem; margin: 6px 0 0; display: grid; gap: 6px; }
+    .warn { display: block; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 10px; padding: 10px 14px; margin-top: 10px; }
+    esp-web-install-button:not(:defined) [slot="unsupported"],
+    esp-web-install-button:not(:defined) [slot="not-allowed"] { display: none; }
+    esp-web-install-button button, .btn {
+      display: inline-block; background: var(--accent); color: var(--accent-text); border: 0;
+      border-radius: 10px; padding: 11px 20px; font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
+    .muted { color: var(--muted); font-size: .92rem; }
+    code { background: var(--chip); padding: 1px 6px; border-radius: 5px; font-size: .9em; }
+    a { color: var(--accent); }
+    table { border-collapse: collapse; width: 100%; font-size: .95rem; }
+    td, th { text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="icon.svg" alt="">
+    <div>
+      <h1>WatchGrapher</h1>
+      <p class="version">Pocket timegrapher &middot; version {{VERSION}} &middot; ESP32-S3</p>
+    </div>
+  </header>
+  <p class="lede">An acoustic timegrapher that fits in your pocket: an ESP32-S3 with a microphone measures the watch's <strong>rate, amplitude, beat error and beat rate</strong>, and serves the app to your phone or computer over its own Wi-Fi. Timed runs, six-position checks, unattended power-reserve logs, your watch collection &mdash; and it shares its data with the WatchGrapher desktop app.</p>
+
+  <div class="products">
+    <section class="card product">
+      <span class="tag">Most boards</span>
+      <h2>16 MB flash (N16R8)</h2>
+      <p>ESP32-S3-DevKitC-1-N16R8 and other boards with an <strong>N16R8</strong> module: 16 MB flash, 8 MB PSRAM.</p>
+      <esp-web-install-button manifest="manifest.json">
+        <button slot="activate">Install WatchGrapher</button>
+        <span slot="unsupported" class="warn">Your browser can't flash boards. Open this page in Chrome or Edge on a computer.</span>
+        <span slot="not-allowed" class="warn">This page must be opened over HTTPS.</span>
+      </esp-web-install-button>
+    </section>
+    <section class="card product">
+      <span class="tag">Smaller flash</span>
+      <h2>8 MB flash (N8R8)</h2>
+      <p>Boards with an <strong>N8R8</strong> module: 8 MB flash, 8 MB PSRAM. Same app, less room for logs.</p>
+      <esp-web-install-button manifest="n8r8/manifest.json">
+        <button slot="activate">Install WatchGrapher (8 MB)</button>
+        <span slot="unsupported" class="warn">Your browser can't flash boards. Open this page in Chrome or Edge on a computer.</span>
+        <span slot="not-allowed" class="warn">This page must be opened over HTTPS.</span>
+      </esp-web-install-button>
+    </section>
+  </div>
+  <p class="muted" style="margin:-8px 0 0">The board needs 8 MB of PSRAM (the "R8" in N16<b>R8</b>): it holds the audio the analysis works on. N8, N16 or R2 boards won't run it.</p>
+
+  <section class="card">
+    <h3>Before you click Install</h3>
+    <ul>
+      <li>Plug the board into this computer through the USB-C port labelled <code>UART</code> (or <code>COM</code>), with a data cable.</li>
+      <li>Use Chrome or Edge on a desktop. Safari and Firefox can't flash boards.</li>
+      <li>After flashing you're asked for Wi-Fi details. That's optional: the board always runs its own hotspot. Join your home Wi-Fi if you'd like to reach it at <code>http://watchgrapher.local</code> from a computer and have it keep time over the internet.</li>
+    </ul>
+    <p class="muted">Board not detected? Hold <code>BOOT</code>, tap <code>RST</code>, release <code>BOOT</code>, then try again. If a USB microphone is set as the input, the board's other USB port is busy hosting it &mdash; always install through the <code>UART</code> port.</p>
+  </section>
+
+  <section class="card">
+    <h3>The pickup</h3>
+    <table>
+      <tr><th>Pickup</th><th>Connect</th></tr>
+      <tr><td><strong>USB-C microphone</strong> (lavalier or desk mic)</td><td>The board's <code>USB</code> (OTG) port. Most USB-C mics work: they must offer standard USB audio (no driver needed on a computer). Power the board from its <code>5V</code> pin; the USB port must pass 5&nbsp;V on to the mic &mdash; see the <a href="https://github.com/Legal-Copy7045/watchgrapher/blob/main/esp32/README.md#usb-c-microphone">USB microphone notes</a>. Then <em>Settings &rarr; Source &rarr; USB microphone</em>.</td></tr>
+      <tr><td><strong>I2S MEMS mic</strong> (INMP441, ICS-43434)</td><td>GPIO 5 (SCK), 6 (WS), 4 (SD), 3V3, GND; L/R to GND.</td></tr>
+      <tr><td><strong>Piezo disc + PCM1808 ADC</strong></td><td>Same as the MEMS mic, plus a master clock pin set in Settings. The best amplitude readings.</td></tr>
+    </table>
+    <p class="muted">No pickup yet? <em>Settings &rarr; Source &rarr; Simulated watch</em> runs the whole app on a synthetic watch.</p>
+  </section>
+
+  <section class="card">
+    <h3>Then</h3>
+    <ol>
+      <li><strong>Connect:</strong> join the Wi-Fi network <code>WatchGrapher-XXXX</code> (password <code>watchgrapher</code>) and open <code>http://192.168.4.1</code> &mdash; on a phone or any computer. If you entered home Wi-Fi details, <code>http://watchgrapher.local</code> works too.</li>
+      <li><strong>Change the hotspot password</strong> under Settings.</li>
+      <li><strong>Add your watches</strong>, or load your desktop <code>collection.json</code> under Watches.</li>
+      <li><strong>Measure:</strong> pick the watch at the top, put it on the pickup, press <em>Listen</em>.</li>
+    </ol>
+  </section>
+
+  <p class="muted">Updates: on the device, <em>Settings &rarr; Check for updates</em> (needs a browser with internet access), or come back here and click Install again &mdash; choose not to erase and your watches and logs are kept (settings go back to their defaults). <a href="https://github.com/Legal-Copy7045/watchgrapher/blob/main/esp32/README.md">Docs</a> &middot; <a href="https://github.com/Legal-Copy7045/watchgrapher">Source</a>.</p>
+</main>
+</body>
+</html>

@@ -6,7 +6,7 @@
 #include "wgdsp.h"
 #include "wgsim.h"
 
-enum class Source : uint8_t { I2S = 0, SIM = 1 };
+enum class Source : uint8_t { I2S = 0, SIM = 1, USB = 2 };
 
 struct Settings {
     // ---- audio input ------------------------------------------------------
@@ -40,6 +40,16 @@ struct Settings {
 };
 
 extern Settings g_settings;
+
+// g_settings is written by the web server and read by the audio and analysis
+// tasks. Hold this while writing it, and while copying anything wider than a
+// single flag out of it (Strings, wg::Config, the simulator parameters).
+struct SettingsLock {
+    SettingsLock();
+    ~SettingsLock();
+    SettingsLock(const SettingsLock&) = delete;
+    SettingsLock& operator=(const SettingsLock&) = delete;
+};
 
 void settings_load();
 void settings_save();

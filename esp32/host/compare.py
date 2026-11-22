@@ -22,6 +22,15 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import numpy as np  # noqa: E402
 from synth import synth_watch  # noqa: E402
 from watchgrapher import analysis  # noqa: E402
+from watchgrapher.audio import SimulatedRecorder  # noqa: E402
+
+
+def simrec(secs, kw):
+    """The device's simulated-watch noise model (white noise, no room rumble)."""
+    r = SimulatedRecorder(samplerate=48000, bph=kw["bph"], amplitude=kw["amplitude"],
+                          lift_angle=kw["lift_angle"], snr_db=kw.get("snr_db", 18.0))
+    r._rng = np.random.default_rng(7)
+    return np.concatenate([r._generate(2400) for _ in range(int(secs * 20))]).astype(np.float32)
 
 CASES = [
     # name, synth kwargs
@@ -41,6 +50,15 @@ CASES = [
     ("noisy 10 dB", dict(snr_db=10.0)),
     ("very noisy 4 dB", dict(snr_db=4.0, rate_spd=3.0)),
     ("wheel error", dict(wheel_error_ms=0.3)),
+    # Regressions found in review: a 12000 bph watch read as ~12400 (end of
+    # the period search range), and a big beat error on a slow watch missed
+    # the standard rate and reported thousands of s/day.
+    ("12000 bph", dict(bph=12000, amplitude=240.0)),
+    ("21600 be 6", dict(bph=21600, beat_error_ms=6.0, asymmetry=0.6)),
+    ("18000 be 9", dict(bph=18000, beat_error_ms=9.0, asymmetry=0.6)),
+    # White noise only (the device simulator's model) at 9 dB: noise peaks
+    # between beats used to make the analyzer report DOUBLE the beat rate.
+    ("noisy sim 9 dB", dict(simrec=True, snr_db=9.0)),
 ]
 FIELDS = ("detected_bph", "rate", "beat_error", "amplitude")
 # Agreement the port must hold with the Python on every case, per field.
@@ -60,7 +78,10 @@ def main():
             kw.setdefault("amplitude", 275.0)
             kw.setdefault("lift_angle", 52.0)
             kw.setdefault("bph", 28800)
-            x, fs = synth_watch(duration=secs, seed=7, **kw)
+            if kw.pop("simrec", False):
+                x, fs = simrec(secs, kw), 48000
+            else:
+                x, fs = synth_watch(duration=secs, seed=7, **kw)
             path = os.path.join(td, "x.f32")
             x.astype("<f4").tofile(path)
 

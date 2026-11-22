@@ -315,8 +315,8 @@ void find_peaks(const float* x, size_t n, const PeakOpts& opt, std::vector<int>&
 // Returns the SMALLEST lag close to the global maximum (the fundamental, not
 // a harmonic), then applies the sub-harmonic guard -- see
 // dsp.estimate_beat_period. Runs on a decimated copy; see wgdsp.h.
-static double estimate_beat_period(const float* env, size_t n, int fs,
-                                   int bph_min = 12000, int bph_max = 43200) {
+static double estimate_beat_period(const float* env, size_t n, int fs, AllocFn fast,
+                                   FreeFn fast_free, int bph_min = 12000, int bph_max = 43200) {
     if (n < (size_t)(fs / 4)) return 0.0;
 
     const int D = std::max(1, (int)pyround(fs / 4000.0));
@@ -326,7 +326,16 @@ static double estimate_beat_period(const float* env, size_t n, int fs,
     const float* src = env + (n - use);
     size_t nd = use / D;
     if (nd < 16) return 0.0;
-    std::vector<float> e(nd);
+    // Every lag streams the whole of e[], so it goes in fast internal RAM when
+    // the platform offers it (32k floats from PSRAM per lag is what made this
+    // the slowest stage on the ESP32).
+    struct Scratch {
+        float* p; FreeFn f;
+        ~Scratch() { if (p) f(p); }
+    } scratch{fast ? (float*)fast(nd * sizeof(float)) : nullptr, fast_free};
+    std::vector<float> heap_e;
+    float* e = scratch.p;
+    if (!e) { heap_e.resize(nd); e = heap_e.data(); }
     double mean = 0;
     for (size_t i = 0; i < nd; ++i) {
         float acc = 0;
@@ -341,13 +350,15 @@ static double estimate_beat_period(const float* env, size_t n, int fs,
 
     const long len = (long)nd;
     const long lag_min = (long)(fsd * 3600.0 / bph_max);
-    long lag_max = (long)(fsd * 3600.0 / bph_min);
+    // 3% to spare: a peak exactly AT the end of the searched range is not a
+    // peak to find_peaks, which made a 12000 bph watch read as ~12400 bph.
+    long lag_max = (long)(fsd * 3600.0 / (bph_min * 0.97));
     lag_max = std::min(lag_max, len - 2);
     if (lag_max <= lag_min + 2) return 0.0;
 
-    // ac[] only where it is read: lag 0, the search range, and the half-lag
-    // probes of the sub-harmonic guard.
-    const long a_lo = std::max(1L, lag_min / 4 - 3);
+    // ac[] only where it is read: lag 0 and the search range. The sub-harmonic
+    // guard's half-lag probes stop at half >= lag_min, so never below lag_min - 2.
+    const long a_lo = std::max(1L, lag_min - 3);
     const long a_hi = std::min(len - 1, lag_max + 2);
     std::vector<float> ac(a_hi + 1, 0.0f);
     auto corr = [&](long lag) {
@@ -429,13 +440,28 @@ static double verify_period(const float* env, size_t n, int fs, double period,
     po.distance = std::max(3, (int)(0.38 * period * fs));
     po.use_prominence = true;
     po.prominence = (float)(std::min(prom, 0.5) * emax);
+    // A peak's prominence never exceeds its height, so prefiltering on height
+    // gives the same peaks and spares sorting every noise maximum.
+    po.use_height = true;
+    po.height = po.prominence;
     std::vector<int> idx;
     find_peaks(env, n, po, idx);
     if (idx.size() < 8) return period;
     std::vector<double> d(idx.size() - 1);
     for (size_t i = 1; i < idx.size(); ++i) d[i - 1] = idx[i] - idx[i - 1];
-    double med = median_inplace(d) / fs;
-    if (0.40 * period < med && med < 0.64 * period) return period / 2.0;
+    std::vector<double> dd = d;
+    double med = median_inplace(dd) / fs;
+    if (0.40 * period < med && med < 0.64 * period) {
+        // Real beats at half the period are evenly spaced and similar in
+        // height; noise peaks between beats are neither -- see dsp.verify_period.
+        for (double& v : d) v = std::fabs(v / fs - med);
+        double spread = median_inplace(d) / (med + 1e-12);
+        std::vector<double> h(idx.size());
+        for (size_t i = 0; i < idx.size(); ++i) h[i] = env[idx[i]];
+        double hratio = percentile(h, 25) / (percentile(h, 75) + 1e-12);
+        if (spread < 0.06 || (spread < 0.10 && hratio > 0.4)) return period / 2.0;
+        return period;
+    }
     if (1.55 * period < med && med < 2.60 * period) return period * 2.0;
     return period;
 }
@@ -451,6 +477,8 @@ static void detect_beats(const float* env, size_t n, int fs, double period, floa
     po.distance = std::max(4, (int)(0.55 * period * fs));
     po.use_prominence = true;
     po.prominence = (float)(std::min(prom, 0.5) * emax);
+    po.use_height = true;          // same peaks, far fewer to sort (see verify_period)
+    po.height = po.prominence;
     find_peaks(env, n, po, out);
 }
 
@@ -542,28 +570,33 @@ static BeatSet refine_beats(const float* xf, size_t n, int fs, const std::vector
             }
             std::vector<float> t(L);
             double tm = 0;
-            for (long q = 0; q < L; ++q) { acc[q] /= sel.size(); tm += acc[q]; }
+            const double inv_n = 1.0 / sel.size();
+            for (long q = 0; q < L; ++q) { acc[q] *= inv_n; tm += acc[q]; }
             tm /= L;
             double tn = 0;
             for (long q = 0; q < L; ++q) { acc[q] -= tm; tn += acc[q] * acc[q]; }
             tn = std::sqrt(tn);
             if (tn == 0) continue;
-            for (long q = 0; q < L; ++q) t[q] = (float)(acc[q] / tn);
+            const double inv_tn = 1.0 / tn;
+            for (long q = 0; q < L; ++q) t[q] = (float)(acc[q] * inv_tn);
             tpl[p] = t;
 
             for (size_t k : sel) {
+                // Single precision: ~1300 samples per row, and double is
+                // software-emulated on the ESP32.
                 const float* r0 = xf + ic[k] - pre;
-                double rm = 0;
+                float rm = 0;
                 for (long q = 0; q < L; ++q) rm += r0[q];
-                rm /= L;
-                double rn = 0;
+                rm /= (float)L;
+                float rn = 0;
                 for (long q = 0; q < L; ++q) {
-                    row[q] = (float)(r0[q] - rm);
-                    rn += (double)row[q] * row[q];
+                    row[q] = r0[q] - rm;
+                    rn += row[q] * row[q];
                 }
                 rn = std::sqrt(rn);
-                if (rn == 0) continue;
-                for (long q = 0; q < L; ++q) row[q] = (float)(row[q] / rn);
+                if (!(rn > 0)) continue;
+                const float inv = 1.0f / rn;
+                for (long q = 0; q < L; ++q) row[q] *= inv;
                 long lo = std::max(0L, mid - lim), hi = std::min(L, mid + lim + 1);
                 corr_same(row.data(), t.data(), L, lo, hi, cc);
                 long j = lo;
@@ -670,7 +703,9 @@ static ImpulseResult measure_impulse(const float* env, size_t n, int fs,
     double lo_dt, hi_dt;
     dt_bounds(bph, lift, amp_min, amp_max, lo_dt, hi_dt);
     const double period = 3600.0 / bph;
-    const long half = (long)std::min(fs * (hi_dt + 0.004), 0.42 * period * fs);
+    // Capped at 60 ms: covers every standard beat rate (12000 bph needs ~46 ms)
+    // and keeps a nonsense forced rate from allocating megabytes.
+    const long half = (long)std::min(std::min(fs * (hi_dt + 0.004), 0.42 * period * fs), 0.060 * fs);
     const long pre = half, post = half, W = pre + post;
     const size_t nb = times.size();
     r.dt.assign(nb, NaN);
@@ -736,25 +771,53 @@ static ImpulseResult measure_impulse(const float* env, size_t n, int fs,
 // Rate and beat error
 // ---------------------------------------------------------------------------
 
-static void lstsq_line(const std::vector<double>& x, const std::vector<double>& y,
-                       const std::vector<uint8_t>* keep, double& a, double& b) {
-    double n = 0, sx = 0, sy = 0;
+// Least squares for t = a + b*i + c*(-1)^i over the kept points. The
+// alternating column is the beat error; without it the slope is biased
+// whenever the window holds an odd number of beats.
+static void lstsq3(const std::vector<double>& x, const std::vector<double>& y,
+                   const std::vector<uint8_t>* keep, double& a, double& b, double& c) {
+    // Centre x for conditioning, then solve the 3x3 normal equations.
+    double n = 0, xm = 0;
     for (size_t i = 0; i < x.size(); ++i)
-        if (!keep || (*keep)[i]) { n += 1; sx += x[i]; sy += y[i]; }
-    double mx = sx / n, my = sy / n, sxx = 0, sxy = 0;
-    for (size_t i = 0; i < x.size(); ++i)
-        if (!keep || (*keep)[i]) {
-            double dx = x[i] - mx;
-            sxx += dx * dx;
-            sxy += dx * (y[i] - my);
+        if (!keep || (*keep)[i]) { n += 1; xm += x[i]; }
+    xm /= n;
+    double S[3][3] = {{0}}, R[3] = {0};
+    for (size_t i = 0; i < x.size(); ++i) {
+        if (keep && !(*keep)[i]) continue;
+        const double v[3] = {1.0, x[i] - xm, ((long long)x[i] % 2) ? -1.0 : 1.0};
+        for (int r = 0; r < 3; ++r) {
+            R[r] += v[r] * y[i];
+            for (int q = 0; q < 3; ++q) S[r][q] += v[r] * v[q];
         }
-    b = sxx > 0 ? sxy / sxx : 0.0;
-    a = my - b * mx;
+    }
+    // Gaussian elimination with partial pivoting.
+    double M[3][4];
+    for (int r = 0; r < 3; ++r) { for (int q = 0; q < 3; ++q) M[r][q] = S[r][q]; M[r][3] = R[r]; }
+    for (int col = 0; col < 3; ++col) {
+        int piv = col;
+        for (int r = col + 1; r < 3; ++r) if (std::fabs(M[r][col]) > std::fabs(M[piv][col])) piv = r;
+        if (piv != col) for (int q = 0; q < 4; ++q) std::swap(M[col][q], M[piv][q]);
+        if (M[col][col] == 0) { a = y.empty() ? 0 : y[0]; b = 0; c = 0; return; }
+        for (int r = col + 1; r < 3; ++r) {
+            double f = M[r][col] / M[col][col];
+            for (int q = col; q < 4; ++q) M[r][q] -= f * M[col][q];
+        }
+    }
+    double sol[3];
+    for (int r = 2; r >= 0; --r) {
+        double acc = M[r][3];
+        for (int q = r + 1; q < 3; ++q) acc -= M[r][q] * sol[q];
+        sol[r] = acc / M[r][r];
+    }
+    b = sol[1];
+    a = sol[0] - b * xm;
+    c = sol[2];
 }
 
 // Least-squares fit of beat time against beat INDEX, with indices assigned
 // from successive intervals so a missed beat shifts one point instead of
-// corrupting everything after it -- see analysis.fit_rate.
+// corrupting everything after it -- see analysis.fit_rate. Residuals are
+// about the straight line alone, so they still carry the beat error.
 static bool fit_rate(const std::vector<double>& t, double period_guess,
                      double& a, double& period, std::vector<double>& idx,
                      std::vector<double>& resid, int passes = 3) {
@@ -764,7 +827,7 @@ static bool fit_rate(const std::vector<double>& t, double period_guess,
     a = t[0];
     idx.assign(n, 0.0);
     resid.assign(n, 0.0);
-    std::vector<double> tmp;
+    std::vector<double> full(n), tmp;
     for (int p = 0; p < passes; ++p) {
         idx[0] = 0;
         for (size_t i = 1; i < n; ++i) {
@@ -772,24 +835,24 @@ static bool fit_rate(const std::vector<double>& t, double period_guess,
             st = std::min(8.0, std::max(1.0, st));
             idx[i] = idx[i - 1] + st;
         }
-        lstsq_line(idx, t, nullptr, a, period);
-        for (size_t i = 0; i < n; ++i) resid[i] = t[i] - (a + period * idx[i]);
+        double c;
+        lstsq3(idx, t, nullptr, a, period, c);
+        for (size_t i = 0; i < n; ++i)
+            full[i] = t[i] - (a + period * idx[i] + (((long long)idx[i] % 2) ? -c : c));
         if (n > 20) {
-            tmp = resid;
+            tmp = full;
             double med = median_inplace(tmp);
-            for (size_t i = 0; i < n; ++i) tmp[i] = std::fabs(resid[i] - med);
+            for (size_t i = 0; i < n; ++i) tmp[i] = std::fabs(full[i] - med);
             double s = 1.4826 * median_inplace(tmp) + 1e-12;
             std::vector<uint8_t> keep(n);
             size_t nk = 0;
             for (size_t i = 0; i < n; ++i) {
-                keep[i] = std::fabs(resid[i] - med) < 5 * s;
+                keep[i] = std::fabs(full[i] - med) < 5 * s;
                 nk += keep[i];
             }
-            if (nk > 8 && nk < n) {
-                lstsq_line(idx, t, &keep, a, period);
-                for (size_t i = 0; i < n; ++i) resid[i] = t[i] - (a + period * idx[i]);
-            }
+            if (nk > 8 && nk < n) lstsq3(idx, t, &keep, a, period, c);
         }
+        for (size_t i = 0; i < n; ++i) resid[i] = t[i] - (a + period * idx[i]);
     }
     return true;
 }
@@ -817,8 +880,10 @@ static double beat_error_ms(const std::vector<double>& idx, const std::vector<do
 // Analyzer
 // ---------------------------------------------------------------------------
 
-Analyzer::Analyzer(size_t max_samples, AllocFn alloc, FreeFn release, ClockFn clock)
-    : cap_(max_samples), free_(release ? release : std::free), clock_(clock) {
+Analyzer::Analyzer(size_t max_samples, AllocFn alloc, FreeFn release, ClockFn clock,
+                   AllocFn fast, FreeFn fast_free)
+    : cap_(max_samples), free_(release ? release : std::free), clock_(clock), fast_(fast),
+      fast_free_(fast_free ? fast_free : std::free) {
     AllocFn a = alloc ? alloc : std::malloc;
     xf_ = (float*)a(max_samples * sizeof(float));
     env_ = (float*)a(max_samples * sizeof(float));
@@ -857,18 +922,27 @@ Measurement Analyzer::analyze(size_t n, int fs, const Config& cfg) {
         m.message = "Not enough audio yet.";
         return m;
     }
+    // Blocked float sums: exact enough, and no software double per sample.
     float peak = 0;
     double mean = 0;
-    for (size_t i = 0; i < n; ++i) {
-        peak = std::max(peak, std::fabs(x[i]));
-        mean += x[i];
+    for (size_t i0 = 0; i0 < n; i0 += 1024) {
+        float acc = 0;
+        const size_t i1 = std::min(n, i0 + 1024);
+        for (size_t i = i0; i < i1; ++i) {
+            float v = x[i];
+            acc += v;
+            float a = std::fabs(v);
+            if (a > peak) peak = a;
+        }
+        mean += acc;
     }
     if (peak < 1e-5f) {
         m.message = "Signal is silent. Check the microphone input and gain.";
         return m;
     }
     mean /= n;
-    for (size_t i = 0; i < n; ++i) x[i] -= (float)mean;
+    const float fmean = (float)mean;
+    for (size_t i = 0; i < n; ++i) x[i] -= fmean;
 
     Biquad sos[4];
     int nsec = design_bandpass(fs, cfg.band_lo, cfg.band_hi, sos);
@@ -877,7 +951,7 @@ Measurement Analyzer::analyze(size_t n, int fs, const Config& cfg) {
     const double t_filt = now();
     m.t_filter_ms = (float)(t_filt - t_start);
 
-    double period = estimate_beat_period(env_, n, fs);
+    double period = estimate_beat_period(env_, n, fs, fast_, fast_free_);
     if (!(period > 0)) {
         m.message = "No periodic escapement signal found. Reposition the watch on the pickup.";
         return m;
@@ -953,9 +1027,37 @@ Measurement Analyzer::analyze(size_t n, int fs, const Config& cfg) {
         m.message = "Could not fit a stable beat sequence.";
         return m;
     }
-    m.rate = rate_spd(fitted, nominal);
+    // Beat rate from the fit, which is exact, rather than the autocorrelation
+    // estimate, which a large beat error biases by a few percent -- see
+    // analysis.analyze.
+    int nominal_bph = nominal;
+    if (fitted > 0) {
+        m.raw_bph = 3600.0 / fitted;
+        int snapped2 = snap_bph(m.raw_bph, 0.02);
+        int detected = snapped2 ? snapped2 : (int)pyround(m.raw_bph);
+        if (detected != m.detected_bph) {
+            m.detected_bph = detected;
+            if (cfg.forced_bph <= 0) {
+                nominal_bph = detected;
+                m.nominal_bph = nominal_bph;
+            } else if (detected == nominal_bph) {
+                m.message.clear();
+            } else {
+                m.message = fmt("Measured %d bph but rate is being computed against %d bph. The "
+                                "rate figure is meaningless until these agree -- check the "
+                                "caliber selection, or switch beat rate to Auto-detect.",
+                                m.detected_bph, nominal_bph);
+            }
+        }
+    }
+    if (!(STANDARD_BPH[0] * 0.97 <= m.raw_bph && m.raw_bph <= STANDARD_BPH[9] * 1.03)) {
+        m.message = fmt("Measured %.0f bph, outside any watch's range. The pickup is hearing "
+                        "something other than the escapement.", m.raw_bph);
+        return m;
+    }
+    m.rate = rate_spd(fitted, nominal_bph);
     m.beat_error = beat_error_ms(idx, resid);
-    const double nominal_period = 3600.0 / nominal;
+    const double nominal_period = 3600.0 / nominal_bph;
 
     // Instantaneous rate, ~1 s running mean ("valid" mode, no drooping edges).
     if (times.size() >= 12) {
@@ -1013,10 +1115,10 @@ Measurement Analyzer::analyze(size_t n, int fs, const Config& cfg) {
         for (double d : imp.dt)
             if (std::isfinite(d)) dts.push_back(d);
         m.dt_mean = median_of(dts);
-        m.amplitude = amplitude_from_dt(m.dt_mean, nominal, cfg.lift_angle, cfg.exact_amplitude);
+        m.amplitude = amplitude_from_dt(m.dt_mean, nominal_bph, cfg.lift_angle, cfg.exact_amplitude);
         std::vector<double> amps;
         for (double d : dts) {
-            double v = amplitude_from_dt(d, nominal, cfg.lift_angle, cfg.exact_amplitude);
+            double v = amplitude_from_dt(d, nominal_bph, cfg.lift_angle, cfg.exact_amplitude);
             if (std::isfinite(v)) {
                 amps.push_back(v);
                 m.amp_samples.push_back((float)v);
