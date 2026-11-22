@@ -46,8 +46,10 @@ void setup() {
     size_t ps = psramFound() ? heap_caps_get_free_size(MALLOC_CAP_SPIRAM) : 0;
     float cap = 0.0f;
     if (ps > PSRAM_RESERVE) {
-        // cap*fs*8 (analyzer) + (cap + extra)*fs*2 (ring) <= free - reserve
-        const float per_s = fs * (2.0f * sizeof(float) + sizeof(int16_t));
+        // Per second of window: the stream's band-passed signal and envelope
+        // (two floats, with a quarter extra so they slide rarely) plus the raw
+        // ring's int16. (cap + extra)*fs*2 + cap*fs*10 <= free - reserve
+        const float per_s = fs * (1.25f * 2.0f * sizeof(float) + sizeof(int16_t));
         cap = ((float)(ps - PSRAM_RESERVE) - RING_EXTRA_S * fs * sizeof(int16_t)) / per_s;
         cap = std::min(20.0f, cap);
     }

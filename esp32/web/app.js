@@ -347,7 +347,9 @@ function redrawMeasure() {
     ["Noises per beat", f(3 + (m.extra || 0), 1)], ["Beats with amplitude", f(100 * (m.valid || 0), 0) + "%"],
     ["1st-3rd noise", f(m.dt_ms, 2) + " ms"], ["Raw beat rate", f(m.raw_bph, 1)],
     ["Tick/tock anchor fix", f(m.par_ms, 2) + " ms (seen " + f(m.par_seen_ms, 2) + ")"],
-    ["Lift angle", f(m.lift, 1) + "°"], ["Analysis time", f(m.an_ms, 0) + " ms"],
+    ["Lift angle", f(m.lift, 1) + "°"],
+    ["Analysis time", f(m.an_ms, 0) + " ms" + (fin(m.t_per) ? ` (new audio ${f(m.t_upd, 0)}, period ${f(m.t_per, 0)}, beats ${f(m.t_ref, 0)}, amplitude ${f(m.t_imp, 0)})` : "")],
+    ["Vector maths", m.simd === undefined ? "--" : m.simd ? "on (esp-dsp)" : "off"],
   ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
 }
 

@@ -45,6 +45,7 @@ jobs:
       - run: cmake -S esp32/host -B build/host && cmake --build build/host
       - run: build/host/uac_test
       - run: python esp32/host/compare.py build/host/wgcli
+      - run: python esp32/host/stream_check.py build/host/wgcli
 
   build:
     runs-on: ubuntu-latest

@@ -24,6 +24,23 @@ const int STANDARD_BPH[10] = {12000, 14400, 16200, 18000, 19800,
 
 static const double NaN = std::nan("");
 
+// The inner loop of every correlation. Plain C++ by default; the firmware
+// installs esp-dsp's SIMD version (set_dot).
+static float dot_plain(const float* a, const float* b, int n) {
+    float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+    int i = 0;
+    for (; i + 4 <= n; i += 4) {
+        s0 += a[i] * b[i];
+        s1 += a[i + 1] * b[i + 1];
+        s2 += a[i + 2] * b[i + 2];
+        s3 += a[i + 3] * b[i + 3];
+    }
+    for (; i < n; ++i) s0 += a[i] * b[i];
+    return (s0 + s1) + (s2 + s3);
+}
+static DotFn g_dot = dot_plain;
+void set_dot(DotFn f) { g_dot = f ? f : dot_plain; }
+
 int snap_bph(double measured_bph, double tol_frac) {
     int best = 0;
     double best_err = 1e9;
@@ -239,6 +256,25 @@ void envelope(const float* x, float* env, size_t n, int fs, float win_ms) {
 // height, then distance by descending height, then prominence)
 // ---------------------------------------------------------------------------
 
+// Local maxima at or above `floor` -- one pass, without storing every noise
+// maximum first (there can be ~100k of them in a 12 s envelope).
+static void local_maxima_above(const float* x, size_t n, float floor, std::vector<int>& out) {
+    out.clear();
+    if (n < 3) return;
+    size_t i = 1, i_max = n - 1;
+    while (i < i_max) {
+        if (x[i] >= floor && x[i - 1] < x[i]) {
+            size_t ahead = i + 1;
+            while (ahead < i_max && x[ahead] == x[i]) ++ahead;
+            if (x[ahead] < x[i]) {
+                out.push_back((int)((i + ahead - 1) / 2));
+                i = ahead;
+            }
+        }
+        ++i;
+    }
+}
+
 static void local_maxima(const float* x, size_t n, std::vector<int>& out) {
     out.clear();
     if (n < 3) return;
@@ -256,16 +292,26 @@ static void local_maxima(const float* x, size_t n, std::vector<int>& out) {
     }
 }
 
-static float prominence_of(const float* x, size_t n, int peak) {
+// Whether the peak's prominence (scipy's definition) is at least `thr` --
+// without computing it. Prominence >= thr exactly when, on BOTH sides, the
+// stretch before the first higher sample dips to xp - thr or below; each side
+// can stop at the first such dip. Computing the prominence itself walks to the
+// next higher sample, which for the tallest beat is the whole window.
+static bool prominence_at_least(const float* x, size_t n, int peak, float thr) {
     const float xp = x[peak];
-    float left_min = xp;
+    const float level = xp - thr;
+    bool left = false;
     for (long i = peak; i >= 0 && x[i] <= xp; --i)
-        if (x[i] < left_min) left_min = x[i];
-    float right_min = xp;
+        if (x[i] <= level) { left = true; break; }
+    if (!left) return false;
     for (size_t i = (size_t)peak; i < n && x[i] <= xp; ++i)
-        if (x[i] < right_min) right_min = x[i];
-    return xp - std::max(left_min, right_min);
+        if (x[i] <= level) return true;
+    return false;
 }
+
+// The distance and prominence stages of find_peaks, on candidates already
+// found (and height-filtered).
+static void select_peaks(const float* x, size_t n, const PeakOpts& opt, std::vector<int>& peaks);
 
 void find_peaks(const float* x, size_t n, const PeakOpts& opt, std::vector<int>& peaks,
                 std::vector<float>* heights) {
@@ -276,6 +322,14 @@ void find_peaks(const float* x, size_t n, const PeakOpts& opt, std::vector<int>&
             if (x[peaks[r]] >= opt.height) peaks[w++] = peaks[r];
         peaks.resize(w);
     }
+    select_peaks(x, n, opt, peaks);
+    if (heights) {
+        heights->resize(peaks.size());
+        for (size_t r = 0; r < peaks.size(); ++r) (*heights)[r] = x[peaks[r]];
+    }
+}
+
+static void select_peaks(const float* x, size_t n, const PeakOpts& opt, std::vector<int>& peaks) {
     if (opt.distance > 1 && peaks.size() > 1) {
         const int d = opt.distance;
         const size_t m = peaks.size();
@@ -298,12 +352,8 @@ void find_peaks(const float* x, size_t n, const PeakOpts& opt, std::vector<int>&
     if (opt.use_prominence) {
         size_t w = 0;
         for (size_t r = 0; r < peaks.size(); ++r)
-            if (prominence_of(x, n, peaks[r]) >= opt.prominence) peaks[w++] = peaks[r];
+            if (prominence_at_least(x, n, peaks[r], opt.prominence)) peaks[w++] = peaks[r];
         peaks.resize(w);
-    }
-    if (heights) {
-        heights->resize(peaks.size());
-        for (size_t r = 0; r < peaks.size(); ++r) (*heights)[r] = x[peaks[r]];
     }
 }
 
@@ -315,11 +365,31 @@ void find_peaks(const float* x, size_t n, const PeakOpts& opt, std::vector<int>&
 // Returns the SMALLEST lag close to the global maximum (the fundamental, not
 // a harmonic), then applies the sub-harmonic guard -- see
 // dsp.estimate_beat_period. Runs on a decimated copy; see wgdsp.h.
+static double period_core(float* e, size_t nd, double fsd, int bph_min = 12000,
+                          int bph_max = 43200);
+
+// Decimation factor for the period search (~2 kHz).
+static int period_decimation(int fs) { return std::max(1, (int)pyround(fs / 2000.0)); }
+
+// Scratch for the decimated envelope: fast internal RAM when offered.
+struct DecScratch {
+    float* p = nullptr;
+    FreeFn f = nullptr;
+    std::vector<float> heap;
+    DecScratch(size_t n, AllocFn fast, FreeFn fast_free) : f(fast_free) {
+        if (fast) p = (float*)fast(n * sizeof(float));
+        if (!p) { heap.resize(n); p = heap.data(); f = nullptr; }
+    }
+    ~DecScratch() { if (f && p) f(p); }
+};
+
 static double estimate_beat_period(const float* env, size_t n, int fs, AllocFn fast,
                                    FreeFn fast_free, int bph_min = 12000, int bph_max = 43200) {
     if (n < (size_t)(fs / 4)) return 0.0;
 
-    const int D = std::max(1, (int)pyround(fs / 4000.0));
+    // ~2 kHz: plenty for a starting estimate -- the template refinement and the
+    // least-squares fit set the reported rate -- and a quarter of the work of 4 kHz.
+    const int D = period_decimation(fs);
     const double fsd = (double)fs / D;
     // The most recent 8 s is plenty to find a period of at most 0.3 s.
     size_t use = std::min(n, (size_t)(8.0 * fs));
@@ -327,22 +397,22 @@ static double estimate_beat_period(const float* env, size_t n, int fs, AllocFn f
     size_t nd = use / D;
     if (nd < 16) return 0.0;
     // Every lag streams the whole of e[], so it goes in fast internal RAM when
-    // the platform offers it (32k floats from PSRAM per lag is what made this
-    // the slowest stage on the ESP32).
-    struct Scratch {
-        float* p; FreeFn f;
-        ~Scratch() { if (p) f(p); }
-    } scratch{fast ? (float*)fast(nd * sizeof(float)) : nullptr, fast_free};
-    std::vector<float> heap_e;
-    float* e = scratch.p;
-    if (!e) { heap_e.resize(nd); e = heap_e.data(); }
-    double mean = 0;
+    // the platform offers it.
+    DecScratch sc(nd, fast, fast_free);
+    float* e = sc.p;
     for (size_t i = 0; i < nd; ++i) {
         float acc = 0;
         for (int t = 0; t < D; ++t) acc += src[i * D + t];
         e[i] = acc / D;
-        mean += e[i];
     }
+    return period_core(e, nd, fsd, bph_min, bph_max);
+}
+
+// Autocorrelation of a decimated envelope (modified in place).
+static double period_core(float* e, size_t nd, double fsd, int bph_min, int bph_max) {
+    if (nd < 16) return 0.0;
+    double mean = 0;
+    for (size_t i = 0; i < nd; ++i) mean += e[i];
     mean /= nd;
     bool any = false;
     for (size_t i = 0; i < nd; ++i) { e[i] -= (float)mean; any |= e[i] != 0.0f; }
@@ -361,15 +431,13 @@ static double estimate_beat_period(const float* env, size_t n, int fs, AllocFn f
     const long a_lo = std::max(1L, lag_min - 3);
     const long a_hi = std::min(len - 1, lag_max + 2);
     std::vector<float> ac(a_hi + 1, 0.0f);
+    // Summed in blocks so a long float sum keeps its precision.
     auto corr = [&](long lag) {
         double tot = 0;
-        float acc = 0;
-        long cnt = 0;
-        for (long i = 0; i + lag < len; ++i) {
-            acc += e[i] * e[i + lag];
-            if (++cnt == 256) { tot += acc; acc = 0; cnt = 0; }
-        }
-        return tot + acc;
+        const long m = len - lag;
+        for (long i0 = 0; i0 < m; i0 += 1024)
+            tot += g_dot(e + i0, e + i0 + lag, (int)std::min(1024L, m - i0));
+        return tot;
     };
     double ac0 = corr(0);
     if (ac0 <= 0) return 0.0;
@@ -420,7 +488,9 @@ static double estimate_beat_period(const float* env, size_t n, int fs, AllocFn f
 // subsample (see wgdsp.h).
 struct Floor { double median, mad; };
 static Floor envelope_floor(const float* env, size_t n, float emax) {
-    size_t stride = std::max<size_t>(1, n / 65536);
+    // 16k points: a robust median needs no more, and every point is a
+    // separate read from slow memory on the device.
+    size_t stride = std::max<size_t>(1, n / 16384);
     std::vector<float> s;
     s.reserve(n / stride + 1);
     for (size_t i = 0; i < n; i += stride) s.push_back(env[i] / emax);
@@ -432,20 +502,25 @@ static Floor envelope_floor(const float* env, size_t n, float emax) {
 
 // Cross-check the autocorrelation estimate against actual peak spacing; it
 // can settle on twice the beat interval when tick and tock differ a lot.
-static double verify_period(const float* env, size_t n, int fs, double period,
-                            float emax, const Floor& fl) {
-    if (emax <= 0) return period;
+// verify_period and detect_beats both want peaks with prominence above the
+// same threshold. A peak's prominence never exceeds its height, so the
+// maxima at or above that height are found once, in one pass, and each
+// applies its own refractory distance to them -- identical results to two
+// full find_peaks calls, at a fraction of the cost.
+static float peak_threshold(float emax, const Floor& fl) {
     double prom = std::max(0.10, 4.0 * (fl.mad + 1e-12));
+    return (float)(std::min(prom, 0.5) * emax);
+}
+
+static double verify_period(const float* env, size_t n, int fs, double period,
+                            float emax, const std::vector<int>& cand, float thr) {
+    if (emax <= 0) return period;
     PeakOpts po;
     po.distance = std::max(3, (int)(0.38 * period * fs));
     po.use_prominence = true;
-    po.prominence = (float)(std::min(prom, 0.5) * emax);
-    // A peak's prominence never exceeds its height, so prefiltering on height
-    // gives the same peaks and spares sorting every noise maximum.
-    po.use_height = true;
-    po.height = po.prominence;
-    std::vector<int> idx;
-    find_peaks(env, n, po, idx);
+    po.prominence = thr;
+    std::vector<int> idx = cand;
+    select_peaks(env, n, po, idx);
     if (idx.size() < 8) return period;
     std::vector<double> d(idx.size() - 1);
     for (size_t i = 1; i < idx.size(); ++i) d[i - 1] = idx[i] - idx[i - 1];
@@ -468,18 +543,15 @@ static double verify_period(const float* env, size_t n, int fs, double period,
 
 // Coarse: one detection per beat, using a refractory distance.
 static void detect_beats(const float* env, size_t n, int fs, double period, float emax,
-                         const Floor& fl, std::vector<int>& out,
-                         double prominence_frac = 0.10) {
+                         const std::vector<int>& cand, float thr, std::vector<int>& out) {
     out.clear();
     if (emax <= 0) return;
-    double prom = std::max(prominence_frac, 4.0 * (fl.mad + 1e-12));
     PeakOpts po;
     po.distance = std::max(4, (int)(0.55 * period * fs));
     po.use_prominence = true;
-    po.prominence = (float)(std::min(prom, 0.5) * emax);
-    po.use_height = true;          // same peaks, far fewer to sort (see verify_period)
-    po.height = po.prominence;
-    find_peaks(env, n, po, out);
+    po.prominence = thr;
+    out = cand;
+    select_peaks(env, n, po, out);
 }
 
 // ---------------------------------------------------------------------------
@@ -510,9 +582,7 @@ static void corr_same(const float* a, const float* b, long len, long lo, long hi
     for (long j = std::max(0L, lo - 1); j < std::min(len, hi + 1); ++j) {
         long L = j - mid;
         long n0 = std::max(0L, -L), n1 = std::min(len, len - L);
-        float acc = 0.0f;
-        for (long t = n0; t < n1; ++t) acc += a[t + L] * b[t];
-        cc[j] = acc;
+        cc[j] = n1 > n0 ? g_dot(a + n0 + L, b + n0, (int)(n1 - n0)) : 0.0f;
     }
 }
 
@@ -542,11 +612,12 @@ static BeatSet refine_beats(const float* xf, size_t n, int fs, const std::vector
     std::vector<long> ic(nb);
     std::vector<uint8_t> ok(nb);
     std::vector<double> shifts(nb), corrs(nb);
-    const long lim = (long)(fs * 1.5 / 1000.0);
     const long mid = L / 2;
     double quality = 0.0;
 
     for (int it = 0; it < iterations; ++it) {
+        // First pass searches +/-1.5 ms; later passes only refine around it.
+        const long lim = (long)(fs * (it == 0 ? 1.5 : 0.3) / 1000.0);
         size_t nok = 0;
         for (size_t i = 0; i < nb; ++i) {
             ic[i] = pyround(centers[i]);
@@ -910,65 +981,60 @@ static std::string fmt(const char* f, ...) {
     return buf;
 }
 
-Measurement Analyzer::analyze(size_t n, int fs, const Config& cfg) {
-    Measurement m;
-    m.lift_angle = cfg.lift_angle;
-    const double t_start = now();
-    if (n > cap_) n = cap_;
-    float* x = xf_;
-    m.duration = (double)n / fs;
+// What a Stream already knows about its envelope, so the core need not read
+// every sample again: its peak, a way to find the candidate peaks using
+// block maxima, and the decimated envelope for the period search.
+struct CoreHooks {
+    float emax = -1.0f;                                          // < 0: scan
+    std::function<void(float thr, std::vector<int>& out)> candidates;   // empty: scan
+    const float* dec = nullptr;                                  // decimated envelope, oldest first
+    size_t dec_n = 0;
+    double dec_fs = 0;
+};
 
-    if (n < (size_t)(fs / 2)) {
-        m.message = "Not enough audio yet.";
-        return m;
-    }
-    // Blocked float sums: exact enough, and no software double per sample.
-    float peak = 0;
-    double mean = 0;
-    for (size_t i0 = 0; i0 < n; i0 += 1024) {
-        float acc = 0;
-        const size_t i1 = std::min(n, i0 + 1024);
-        for (size_t i = i0; i < i1; ++i) {
-            float v = x[i];
-            acc += v;
-            float a = std::fabs(v);
-            if (a > peak) peak = a;
-        }
-        mean += acc;
-    }
-    if (peak < 1e-5f) {
-        m.message = "Signal is silent. Check the microphone input and gain.";
-        return m;
-    }
-    mean /= n;
-    const float fmean = (float)mean;
-    for (size_t i = 0; i < n; ++i) x[i] -= fmean;
-
-    Biquad sos[4];
-    int nsec = design_bandpass(fs, cfg.band_lo, cfg.band_hi, sos);
-    sosfiltfilt(sos, nsec, x, n);
-    envelope(x, env_, n, fs, cfg.env_win_ms);
+// Everything after filtering: period, beats, refinement, impulse, fit. Shared
+// by the whole-window Analyzer and the streaming Stream.
+static void analyze_core(const float* x, const float* env, size_t n, int fs, const Config& cfg,
+                         AllocFn fast, FreeFn fast_free, ClockFn clock, Measurement& m,
+                         const CoreHooks* hooks = nullptr) {
+    auto now = [clock]() { return clock ? clock() : 0.0; };
     const double t_filt = now();
-    m.t_filter_ms = (float)(t_filt - t_start);
+    // The envelope's peak and robust floor, then the peak candidates both
+    // period checks share.
+    const float emax = hooks && hooks->emax >= 0 ? hooks->emax : *std::max_element(env, env + n);
+    if (!(emax > 1e-7f)) {
+        m.message = "Signal is silent. Check the microphone input and gain.";
+        return;
+    }
+    const Floor fl = envelope_floor(env, n, emax);
+    const float thr = peak_threshold(emax, fl);
+    std::vector<int> cand;
+    if (hooks && hooks->candidates) hooks->candidates(thr, cand);
+    else local_maxima_above(env, n, thr, cand);
 
-    double period = estimate_beat_period(env_, n, fs, fast_, fast_free_);
+    double period;
+    if (hooks && hooks->dec && hooks->dec_n >= 16) {
+        DecScratch sc(hooks->dec_n, fast, fast_free);
+        memcpy(sc.p, hooks->dec, hooks->dec_n * sizeof(float));
+        period = period_core(sc.p, hooks->dec_n, hooks->dec_fs);
+    } else {
+        period = estimate_beat_period(env, n, fs, fast, fast_free);
+    }
     if (!(period > 0)) {
         m.message = "No periodic escapement signal found. Reposition the watch on the pickup.";
-        return m;
+        return;
     }
-    float emax = *std::max_element(env_, env_ + n);
-    Floor fl = envelope_floor(env_, n, emax > 0 ? emax : 1.0f);
-    period = verify_period(env_, n, fs, period, emax, fl);
+    period = verify_period(env, n, fs, period, emax, cand, thr);
     m.raw_bph = 3600.0 / period;
 
     std::vector<int> coarse;
-    detect_beats(env_, n, fs, period, emax, fl, coarse);
+    detect_beats(env, n, fs, period, emax, cand, thr, coarse);
     const double t_per = now();
     m.t_period_ms = (float)(t_per - t_filt);
     if (coarse.size() < 12) {
         m.message = fmt("Only %d beats detected. Signal is too weak or too noisy.",
                         (int)coarse.size());
-        return m;
+        return;
     }
 
     BeatSet beats = refine_beats(x, n, fs, coarse, period);
@@ -991,7 +1057,7 @@ Measurement Analyzer::analyze(size_t n, int fs, const Config& cfg) {
                         m.detected_bph, nominal);
     }
 
-    ImpulseResult imp = measure_impulse(env_, n, fs, beats.times, nominal, cfg.lift_angle,
+    ImpulseResult imp = measure_impulse(env, n, fs, beats.times, nominal, cfg.lift_angle,
                                         cfg.sub_threshold);
     m.t_impulse_ms = (float)(now() - t_ref);
 
@@ -1025,7 +1091,7 @@ Measurement Analyzer::analyze(size_t n, int fs, const Config& cfg) {
     std::vector<double> idx, resid;
     if (!fit_rate(times, period, a, fitted, idx, resid)) {
         m.message = "Could not fit a stable beat sequence.";
-        return m;
+        return;
     }
     // Beat rate from the fit, which is exact, rather than the autocorrelation
     // estimate, which a large beat error biases by a few percent -- see
@@ -1053,7 +1119,7 @@ Measurement Analyzer::analyze(size_t n, int fs, const Config& cfg) {
     if (!(STANDARD_BPH[0] * 0.97 <= m.raw_bph && m.raw_bph <= STANDARD_BPH[9] * 1.03)) {
         m.message = fmt("Measured %.0f bph, outside any watch's range. The pickup is hearing "
                         "something other than the escapement.", m.raw_bph);
-        return m;
+        return;
     }
     m.rate = rate_spd(fitted, nominal_bph);
     m.beat_error = beat_error_ms(idx, resid);
@@ -1150,7 +1216,266 @@ Measurement Analyzer::analyze(size_t n, int fs, const Config& cfg) {
     m.resid = std::move(resid);
     m.ok = true;
     if (m.message.empty()) m.message = "OK";
+}
+
+Measurement Analyzer::analyze(size_t n, int fs, const Config& cfg) {
+    Measurement m;
+    m.lift_angle = cfg.lift_angle;
+    const double t_start = now();
+    if (n > cap_) n = cap_;
+    float* x = xf_;
+    m.duration = (double)n / fs;
+
+    if (n < (size_t)(fs / 2)) {
+        m.message = "Not enough audio yet.";
+        return m;
+    }
+    // Blocked float sums: exact enough, and no software double per sample.
+    float peak = 0;
+    double mean = 0;
+    for (size_t i0 = 0; i0 < n; i0 += 1024) {
+        float acc = 0;
+        const size_t i1 = std::min(n, i0 + 1024);
+        for (size_t i = i0; i < i1; ++i) {
+            float v = x[i];
+            acc += v;
+            float a = std::fabs(v);
+            if (a > peak) peak = a;
+        }
+        mean += acc;
+    }
+    if (peak < 1e-5f) {
+        m.message = "Signal is silent. Check the microphone input and gain.";
+        return m;
+    }
+    mean /= n;
+    const float fmean = (float)mean;
+    for (size_t i = 0; i < n; ++i) x[i] -= fmean;
+
+    Biquad sos[4];
+    int nsec = design_bandpass(fs, cfg.band_lo, cfg.band_hi, sos);
+    sosfiltfilt(sos, nsec, x, n);
+    envelope(x, env_, n, fs, cfg.env_win_ms);
+    const double t_filt = now();
+    m.t_filter_ms = (float)(t_filt - t_start);
+
+    analyze_core(x, env_, n, fs, cfg, fast_, fast_free_, clock_, m);
     m.t_total_ms = (float)(now() - t_start);
+    return m;
+}
+
+// ---------------------------------------------------------------------------
+// Stream
+// ---------------------------------------------------------------------------
+
+Stream::Stream(size_t window_cap, AllocFn alloc, FreeFn release, ClockFn clock, AllocFn fast,
+               FreeFn fast_free)
+    : alloc_(alloc ? alloc : std::malloc), free_(release ? release : std::free), clock_(clock),
+      fast_(fast), fast_free_(fast_free ? fast_free : std::free) {
+    // Room for the window plus a quarter more, so the buffers slide (one
+    // memmove) only every quarter-window of audio rather than on every block.
+    cap_ = window_cap;
+    slack_ = std::max<size_t>(window_cap / 4, 1);
+    total_ = cap_ + slack_;
+    xf_ = (float*)alloc_(total_ * sizeof(float));
+    env_ = (float*)alloc_(total_ * sizeof(float));
+    // Blocks of up to 0.5 s at 96 kHz, plus margins of up to 0.1 s each side.
+    scratch_len_ = 48000 + 2 * 9600 + 64;
+    scratch_ = (float*)alloc_(scratch_len_ * sizeof(float));
+    // Decimation is at least 8 (16 kHz); size for that.
+    bmax_ = (float*)alloc_((total_ / BLOCK + 2) * sizeof(float));
+    dec_ = (float*)alloc_((total_ / 8 + 2) * sizeof(float));
+    if (!xf_ || !env_ || !scratch_ || !bmax_ || !dec_) {
+        for (float* p : {xf_, env_, scratch_, bmax_, dec_})
+            if (p) free_(p);
+        xf_ = env_ = scratch_ = bmax_ = dec_ = nullptr;
+    }
+}
+
+Stream::~Stream() {
+    for (float* p : {xf_, env_, scratch_, bmax_, dec_})
+        if (p) free_(p);
+}
+
+uint64_t Stream::start() const { return std::max<uint64_t>(base_, epoch_ == ~0ull ? base_ : epoch_); }
+
+void Stream::reset(uint64_t from, uint64_t epoch, int fs, const Config& cfg) {
+    epoch_ = epoch;
+    fs_ = fs;
+    lo_ = cfg.band_lo;
+    hi_ = cfg.band_hi;
+    win_ = cfg.env_win_ms;
+    nsec_ = design_bandpass(fs, cfg.band_lo, cfg.band_hi, sos_);
+    // Margin: at least 30 ms and five periods of the band's low edge -- far
+    // more than the band-pass filter's transients last.
+    double m = std::max(0.030, 5.0 / std::max(50.0f, cfg.band_lo));
+    margin_ = std::min<size_t>((size_t)(m * fs), 9600);
+    // The envelope's Hann window, as in envelope().
+    int k = std::max(3, (int)pyround(fs * cfg.env_win_ms / 1000.0));
+    if (k % 2 == 0) k += 1;
+    kernel_.assign(k, 0.0f);
+    double sum = 0;
+    for (int i = 0; i < k; ++i) {
+        kernel_[i] = (float)(0.5 - 0.5 * std::cos(2.0 * M_PI * i / (k - 1)));
+        sum += kernel_[i];
+    }
+    for (int i = 0; i < k; ++i) kernel_[i] = (float)(kernel_[i] / sum);
+    half_ = (size_t)(k - 1) / 2;
+    dec_d_ = (size_t)std::max(8, period_decimation(fs));
+    base_ = from;
+    fill_ = 0;
+}
+
+void Stream::update(uint64_t avail_end, uint64_t epoch, int fs, const Config& cfg,
+                    const ReadFn& read) {
+    if (!ok() || fs <= 0) return;
+    const bool changed = epoch != epoch_ || fs != fs_ || cfg.band_lo != lo_ ||
+                         cfg.band_hi != hi_ || cfg.env_win_ms != win_;
+    if (changed) {
+        // Start over from at most one window back (what the raw ring holds).
+        uint64_t from = epoch;
+        if (avail_end > epoch + cap_) from = avail_end - cap_;
+        reset(from, epoch, fs, cfg);
+    }
+    const size_t edge = margin_ + half_;
+    const size_t block_max = std::min<size_t>((size_t)fs / 2, scratch_len_ - 2 * edge - 8);
+    for (;;) {
+        const uint64_t next = base_ + fill_;   // first frame not yet final
+        if (avail_end < next + edge + 1) break;
+        const size_t c = (size_t)std::min<uint64_t>(block_max, avail_end - edge - next);
+        if (c < 64 && avail_end - edge - next < (uint64_t)block_max) break;   // wait for more
+        const size_t left = (size_t)std::min<uint64_t>(edge, next - epoch_);
+        const size_t len = left + c + edge;
+        const uint64_t seg_end = next + c + edge;
+        if (read(scratch_, len, seg_end) != len) {
+            // The ring no longer holds it (we fell a ring behind): start over.
+            uint64_t from = avail_end > epoch + cap_ ? avail_end - cap_ : epoch;
+            reset(from, epoch, fs, cfg);
+            return;
+        }
+        sosfiltfilt(sos_, nsec_, scratch_, len);
+
+        if (fill_ + c > total_) {
+            // Slide: keep (at least) the newest cap_ - c samples at the front.
+            // The drop is a whole number of blocks and decimation steps, so
+            // the block maxima and decimated envelope slide with it exactly.
+            size_t g = BLOCK, r = dec_d_;
+            while (r) { size_t t = g % r; g = r; r = t; }
+            const size_t unit = BLOCK * dec_d_ / g;
+            const size_t keep0 = cap_ > c ? cap_ - c : 0;
+            const size_t drop = (fill_ - keep0) / unit * unit;
+            const size_t keep = fill_ - drop;
+            memmove(xf_, xf_ + drop, keep * sizeof(float));
+            memmove(env_, env_ + drop, keep * sizeof(float));
+            memmove(bmax_, bmax_ + drop / BLOCK, (keep / BLOCK + 1) * sizeof(float));
+            memmove(dec_, dec_ + drop / dec_d_, (keep / dec_d_ + 1) * sizeof(float));
+            base_ += drop;
+            fill_ = keep;
+        }
+        // Keep the middle: band-passed signal, and its envelope from the
+        // neighbouring samples (zero beyond the start of the stream, as
+        // np.convolve 'same' pads).
+        float* xo = xf_ + fill_;
+        float* eo = env_ + fill_;
+        const float* xs = scratch_ + left;
+        memcpy(xo, xs, c * sizeof(float));
+        const long h = (long)half_;
+        const long k = (long)kernel_.size();
+        for (size_t i = 0; i < c; ++i) {
+            const long j0 = (long)(left + i) - h;
+            float acc = 0.0f;
+            if (j0 >= 0) {
+                const float* p = scratch_ + j0;
+                for (long t = 0; t < k; ++t) acc += p[t] * p[t] * kernel_[t];
+            } else {
+                for (long t = 0; t < k; ++t) {
+                    long j = j0 + t;
+                    if (j >= 0) acc += scratch_[j] * scratch_[j] * kernel_[t];
+                }
+            }
+            const float v = std::sqrt(std::max(0.0f, acc));
+            eo[i] = v;
+            const size_t pos = fill_ + i;
+            const size_t kb = pos / BLOCK;
+            bmax_[kb] = (pos % BLOCK == 0) ? v : std::max(bmax_[kb], v);
+            const size_t kd = pos / dec_d_;
+            dec_[kd] = (pos % dec_d_ == 0) ? v : dec_[kd] + v;
+            if (pos % dec_d_ == dec_d_ - 1) dec_[kd] /= (float)dec_d_;
+        }
+        fill_ += c;
+    }
+}
+
+Measurement Stream::analyze(size_t n, uint64_t end_frame, const Config& cfg) {
+    Measurement m;
+    m.lift_angle = cfg.lift_angle;
+    const double t0 = clock_ ? clock_() : 0.0;
+    if (!ok() || fs_ <= 0 || end_frame > end() || end_frame < start()) {
+        m.message = "Not enough audio yet.";
+        return m;
+    }
+    n = (size_t)std::min<uint64_t>(n, end_frame - start());
+    n = std::min(n, cap_);
+    m.duration = (double)n / fs_;
+    if (n < (size_t)(fs_ / 2)) {
+        m.message = "Not enough audio yet.";
+        return m;
+    }
+    const size_t e = (size_t)(end_frame - base_);
+    const size_t w0 = e - n;
+    const float* env = env_ + w0;
+
+    CoreHooks hk;
+    // Peak: whole blocks from their maxima, the ragged ends directly.
+    {
+        const size_t kb0 = (w0 + BLOCK - 1) / BLOCK, kb1 = e / BLOCK;
+        float mx = 0.0f;
+        if (kb0 < kb1) {
+            for (size_t k = kb0; k < kb1; ++k) mx = std::max(mx, bmax_[k]);
+            for (size_t p = w0; p < kb0 * BLOCK; ++p) mx = std::max(mx, env_[p]);
+            for (size_t p = kb1 * BLOCK; p < e; ++p) mx = std::max(mx, env_[p]);
+        } else {
+            for (size_t p = w0; p < e; ++p) mx = std::max(mx, env_[p]);
+        }
+        hk.emax = mx;
+    }
+    // Candidates: only blocks that reach the threshold can hold one, and
+    // between beats almost none do.
+    hk.candidates = [this, w0, n, env](float thr, std::vector<int>& out) {
+        out.clear();
+        if (n < 3) return;
+        const size_t i_max = n - 1;
+        size_t i = 1;
+        while (i < i_max) {
+            const size_t k = (w0 + i) / BLOCK;
+            if (bmax_[k] < thr) {   // skip to the next block
+                i = (k + 1) * BLOCK - w0;
+                continue;
+            }
+            if (env[i] >= thr && env[i - 1] < env[i]) {
+                size_t ahead = i + 1;
+                while (ahead < i_max && env[ahead] == env[i]) ++ahead;
+                if (env[ahead] < env[i]) {
+                    out.push_back((int)((i + ahead - 1) / 2));
+                    i = ahead;
+                }
+            }
+            ++i;
+        }
+    };
+    // Decimated envelope over the newest 8 s of the window, whole steps only.
+    {
+        const size_t D = dec_d_;
+        const size_t from = std::max(w0, e > (size_t)(8 * fs_) ? e - (size_t)(8 * fs_) : 0);
+        const size_t k0 = (from + D - 1) / D, k1 = e / D;
+        if (k1 > k0) {
+            hk.dec = dec_ + k0;
+            hk.dec_n = k1 - k0;
+            hk.dec_fs = (double)fs_ / D;
+        }
+    }
+    analyze_core(xf_ + w0, env, n, fs_, cfg, fast_, fast_free_, clock_, m, &hk);
+    m.t_total_ms = (float)((clock_ ? clock_() : 0.0) - t0);
     return m;
 }
 

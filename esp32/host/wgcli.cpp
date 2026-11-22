@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -62,10 +63,41 @@ int main(int argc, char** argv) {
         fclose(f);
     }
 
-    wg::Analyzer an(x.size(), nullptr, nullptr, now_ms);
-    if (!an.ok()) { fprintf(stderr, "alloc failed\n"); return 1; }
-    memcpy(an.input(), x.data(), x.size() * sizeof(float));
-    wg::Measurement m = an.analyze(x.size(), fs, cfg);
+    wg::Measurement m;
+    const char* mode = getenv("WG_MODE");
+    if (mode && !strcmp(mode, "stream")) {
+        // Feed the audio through Stream in uneven blocks, as the device does
+        // (analysis every ~0.5 s), and report the final window -- the whole
+        // capture minus the filter margin. Timing: the average update +
+        // analysis over the last half of the run, once the window is full.
+        size_t win = x.size();
+        wg::Stream st(win, nullptr, nullptr, now_ms);
+        if (!st.ok()) { fprintf(stderr, "alloc failed\n"); return 1; }
+        auto read = [&](float* dst, size_t n, uint64_t end) -> size_t {
+            if (end > x.size() || n > end) return 0;
+            memcpy(dst, x.data() + (end - n), n * sizeof(float));
+            return n;
+        };
+        uint64_t avail = 0;
+        unsigned seed = 1;
+        double t_sum = 0;
+        int t_n = 0;
+        while (avail < x.size()) {
+            seed = seed * 1103515245u + 12345u;
+            size_t step = fs / 4 + (seed >> 16) % (fs / 2);   // 0.25-0.75 s of new audio
+            avail = std::min<uint64_t>(x.size(), avail + step);
+            double t0 = now_ms();
+            st.update(avail, 0, fs, cfg, read);
+            m = st.analyze(win, st.end(), cfg);
+            if (avail > x.size() / 2) { t_sum += now_ms() - t0; ++t_n; }
+        }
+        m.t_total_ms = t_n ? (float)(t_sum / t_n) : 0.0f;
+    } else {
+        wg::Analyzer an(x.size(), nullptr, nullptr, now_ms);
+        if (!an.ok()) { fprintf(stderr, "alloc failed\n"); return 1; }
+        memcpy(an.input(), x.data(), x.size() * sizeof(float));
+        m = an.analyze(x.size(), fs, cfg);
+    }
 
     printf("{\"ok\": %s, ", m.ok ? "true" : "false");
     num("detected_bph", m.detected_bph);
@@ -82,6 +114,10 @@ int main(int argc, char** argv) {
     num("valid_frac", m.valid_frac);
     num("parity_correction", m.parity_correction);
     num("ms_total", m.t_total_ms);
+    num("ms_filter", m.t_filter_ms);
+    num("ms_period", m.t_period_ms);
+    num("ms_refine", m.t_refine_ms);
+    num("ms_impulse", m.t_impulse_ms);
     printf("\"message\": \"");
     for (char c : m.message) putchar(c == '"' ? '\'' : c);
     printf("\"}\n");

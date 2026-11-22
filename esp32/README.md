@@ -173,12 +173,24 @@ power-reserve figures from the raw samples with its fuller model.
 
 - **Core 0** runs Wi-Fi and the audio task: I2S at 48 kHz, a DC blocker and
   makeup gain into a 16-bit ring buffer in PSRAM.
-- **Core 1** runs the web server and the analysis task. The analysis copies
-  the newest window (up to ~13 s on 8 MB PSRAM, 12 s by default) and runs the
-  full chain back to back, at most twice a second. On the chip one 12 s
-  analysis is estimated at roughly 1-2 s (the host does it in ~60 ms; the
-  per-stage times are in the Measure tab's *Diagnostics* -- worth a look on
-  real hardware).
+- **Core 1** runs the analysis task (the web server has its own task, above
+  it). The analysis is built for the chip rather than ported as-is:
+  - **Streaming.** Each new block of audio is band-passed and turned into an
+    envelope once, as it arrives -- zero-phase, with a margin of real audio
+    each side, so the values match a whole-window filter -- and kept in a
+    sliding buffer. An update only runs the measurement stages; nothing is
+    re-filtered.
+  - **Kept indexes.** The stream also keeps the envelope's maximum per
+    256-sample block and a 2 kHz copy for the beat-period search, so an update
+    reads only the blocks that hold beats, not the whole window.
+  - **SIMD.** Every correlation runs on esp-dsp's vector dot product (checked
+    against a plain loop at boot; Diagnostics shows whether it is on).
+  - **Exactness.** `host/stream_check.py` checks the streaming path against
+    the whole-window analysis, and `host/compare.py` the whole-window analysis
+    against the desktop's Python. On a PC the streaming update is about a
+    sixth of the work of the original whole-window one; on the board the
+    saving is larger, since most of what it removed was slow PSRAM traffic.
+    Diagnostics shows the time per stage on the device.
 - A USB microphone is serviced by the USB host library's own tasks on core 0.
 - The analyzer needs two floats per sample (band-passed signal and envelope),
   allocated once in PSRAM.
@@ -206,6 +218,7 @@ so a reading is never stitched from two captures.
 # DSP core on the host, checked against the Python analyzer; USB parser tests
 cmake -S esp32/host -B build/host && cmake --build build/host
 python esp32/host/compare.py build/host/wgcli
+python esp32/host/stream_check.py build/host/wgcli
 build/host/uac_test
 
 # The web app against a stand-in for the device (Python analyzer + simulated watch)

@@ -13,8 +13,10 @@
 #include <vector>
 
 #include "audio_in.h"
+#include "dsps_dotprod.h"
 #include "json.h"
 #include "led.h"
+#include "logx.h"
 #include "settings.h"
 #include "storage.h"
 #include "wgdsp.h"
@@ -66,7 +68,8 @@ struct PowerReserve {
 struct Hist { float t, rate, amp, be; };
 
 static SemaphoreHandle_t mtx;
-static wg::Analyzer* analyzer = nullptr;
+static wg::Stream* stream = nullptr;
+static bool dot_simd = false;
 static float cap_s = 12.0f;
 static bool listening = false;
 static Run run;
@@ -154,6 +157,11 @@ static void measurement_json(const wg::Measurement& m, std::string& o) {
     kv(o, "extra", m.extra_peaks, 2);
     kv(o, "valid", m.valid_frac, 3);
     kv(o, "an_ms", m.t_total_ms, 0);
+    kv(o, "t_upd", m.t_filter_ms, 0);
+    kv(o, "t_per", m.t_period_ms, 0);
+    kv(o, "t_ref", m.t_refine_ms, 0);
+    kv(o, "t_imp", m.t_impulse_ms, 0);
+    kv(o, "simd", dot_simd);
 
     // Trace: deviation of each beat from a perfect grid at the nominal rate,
     // centred on the first few beats (analysis.trace_points, unwrapped -- the
@@ -435,7 +443,6 @@ static void task(void*) {
             continue;
         }
         const uint32_t t_loop = now_ms();
-        const int fs = audio::sample_rate();
         wg::Config cfg;
         float window_s;
         {
@@ -443,10 +450,19 @@ static void task(void*) {
             cfg = g_settings.cfg;
             window_s = std::min(g_settings.window_s, cap_s);
         }
-        uint64_t end = audio::total();
-        // Never reach back past the start of the current unbroken stream.
+        // Filter and envelope only the audio that arrived since last time;
+        // the stream keeps the rest. A new epoch (pause, source switch, rate
+        // change) or new filter settings make it start over from the ring.
         const uint64_t epoch = audio::epoch();
-        size_t n = (size_t)std::min<uint64_t>((uint64_t)(window_s * fs), end - std::min(end, epoch));
+        const double tu = clock_ms();
+        stream->update(audio::total(), epoch, audio::sample_rate(), cfg,
+                       [](float* d, size_t n, uint64_t e) { return audio::copy_window(d, n, e); });
+        const float upd_ms = (float)(clock_ms() - tu);
+        const int fs = stream->fs() > 0 ? stream->fs() : audio::sample_rate();
+        // Processed audio is final up to here (a filter margin behind the newest).
+        uint64_t end = stream->end();
+        const uint64_t s0 = std::max(epoch, stream->start());
+        size_t n = (size_t)std::min<uint64_t>((uint64_t)(window_s * fs), end - std::min(end, s0));
         bool final_window = false;
 
         {
@@ -477,8 +493,9 @@ static void task(void*) {
             continue;
         }
 
-        n = audio::copy_window(analyzer->input(), n, end);
-        wg::Measurement m = analyzer->analyze(n, fs, cfg);
+        wg::Measurement m = stream->analyze(n, end, cfg);
+        m.t_filter_ms = upd_ms;
+        m.t_total_ms += upd_ms;
         std::string js;
         measurement_json(m, js);
 
@@ -526,17 +543,51 @@ static void task(void*) {
     }
 }
 
+static float dot_dsp(const float* a, const float* b, int n) {
+    if (n <= 0) return 0.0f;
+    float r = 0.0f;
+    dsps_dotprod_f32(a, b, &r, n);
+    return r;
+}
+
+static bool dot_selftest() {
+    std::vector<float> va(512), vb(512);
+    float* a = va.data();
+    float* b = vb.data();
+    uint32_t x = 12345;
+    for (int i = 0; i < 512; ++i) {
+        x = x * 1103515245u + 12345u;
+        a[i] = ((x >> 8) & 0xFFFF) / 32768.0f - 1.0f;
+        x = x * 1103515245u + 12345u;
+        b[i] = ((x >> 8) & 0xFFFF) / 32768.0f - 1.0f;
+    }
+    for (int oa = 0; oa < 4; ++oa)
+        for (int ob = 0; ob < 4; ++ob)
+            for (int len : {1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 64, 129, 255, 400}) {
+                double ref = 0;
+                for (int i = 0; i < len; ++i) ref += (double)a[oa + i] * b[ob + i];
+                float got = dot_dsp(a + oa, b + ob, len);
+                if (std::fabs(got - ref) > 1e-4 * (1.0 + std::fabs(ref))) return false;
+            }
+    return true;
+}
+
 bool begin(float window_cap) {
     mtx = xSemaphoreCreateMutex();
     cap_s = window_cap;
     const size_t samples = (size_t)(cap_s * g_settings.sample_rate);
-    analyzer = new wg::Analyzer(
+    stream = new wg::Stream(
         samples, [](size_t b) { return heap_caps_malloc(b, MALLOC_CAP_SPIRAM); },
         [](void* p) { heap_caps_free(p); }, clock_ms,
-        // Hot scratch (the autocorrelation's ~130 kB) in internal RAM if it fits.
+        // Hot scratch (the period search's decimated envelope) in internal RAM if it fits.
         [](size_t b) { return heap_caps_malloc(b, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); },
         [](void* p) { heap_caps_free(p); });
-    if (!analyzer->ok()) return false;
+    if (!stream->ok()) return false;
+    // The S3's vector unit for every correlation -- after checking it agrees
+    // with a plain loop on unaligned, odd-length input, as the analysis uses it.
+    dot_simd = dot_selftest();
+    wg::set_dot(dot_simd ? dot_dsp : nullptr);
+    logx::printf("Correlations: %s\n", dot_simd ? "esp-dsp SIMD" : "plain C (SIMD self-test failed)");
     // Core 1, same priority as the Arduino loop (web server): they time-slice,
     // so a long analysis never stalls a page load.
     xTaskCreatePinnedToCore(task, "analysis", 16384, nullptr, 1, nullptr, 1);
