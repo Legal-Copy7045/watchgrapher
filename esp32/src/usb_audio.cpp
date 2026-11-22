@@ -12,6 +12,7 @@
 #include <cstring>
 #include <vector>
 
+#include "logx.h"
 #include "uac.h"
 
 namespace usbmic {
@@ -35,15 +36,19 @@ static std::atomic<int> inflight{0};
 static std::atomic<bool> streaming_{false};
 static std::atomic<uint32_t> rate_{0};
 static bool claimed = false;
+static std::atomic<uint32_t> samples_in{0};   // counts samples delivered, for the no-audio check
 
 static portMUX_TYPE stmux = portMUX_INITIALIZER_UNLOCKED;
-static char status_[160] = "No USB microphone connected.";
+static char status_[200] = "USB host not started.";
 static char product_[48] = "";
 
+// Everything the UI is told also goes to the serial log, so a mic that won't
+// work leaves a trail: seen or not, what it is, what was chosen, why it failed.
 static void set_status(const char* s) {
     portENTER_CRITICAL(&stmux);
     strlcpy(status_, s, sizeof status_);
     portEXIT_CRITICAL(&stmux);
+    logx::printf("USB mic: %s\n", s);
 }
 
 // ---- control transfers (synchronous, from the client task only) ------------
@@ -93,6 +98,7 @@ static void iso_cb(usb_transfer_t* t) {
         if (p.status != USB_TRANSFER_STATUS_COMPLETED || p.actual_num_bytes <= 0) continue;
         size_t n = uac::to_float(t->data_buffer + i * fmt.mps, p.actual_num_bytes, fmt.channels,
                                  fmt.subframe, buf, 512);
+        if (n) samples_in += n;
         if (n && sink_) sink_(buf, n, r);
     }
     for (int i = 0; i < t->num_isoc_packets; ++i) t->isoc_packet_desc[i].num_bytes = fmt.mps;
@@ -144,10 +150,23 @@ static void open_device(uint8_t addr) {
         return;
     }
     product_name(dev);
+    {
+        const usb_device_desc_t* dd = nullptr;
+        usb_device_info_t info;
+        if (usb_host_get_device_descriptor(dev, &dd) == ESP_OK && dd &&
+            usb_host_device_info(dev, &info) == ESP_OK)
+            logx::printf("USB mic: device %04x:%04x \"%s\", class %u, %s speed\n", dd->idVendor,
+                         dd->idProduct, product_[0] ? product_ : "?", dd->bDeviceClass,
+                         info.speed == USB_SPEED_FULL ? "full" : "low");
+    }
     const usb_config_desc_t* cfg = nullptr;
     if (usb_host_get_active_config_descriptor(dev, &cfg) != ESP_OK || !cfg) return fail("no configuration.");
     if (!uac::parse_config((const uint8_t*)cfg, cfg->wTotalLength, desc))
         return fail("not a USB microphone (no audio input stream found).");
+    for (const auto& a : desc.alts)
+        logx::printf("USB mic: option iface %u alt %u: %u ch, %u-bit in %u bytes, mps %u, %s\n", a.iface,
+                     a.alt, a.channels, a.bits, a.subframe, a.mps,
+                     a.continuous ? "continuous rates" : (a.rates.empty() ? "rate unlisted" : "listed rates"));
 
     std::vector<uac::Span> spans;
     if (desc.uac2 && desc.clock_id) {
@@ -218,13 +237,30 @@ static void client_task(void*) {
         vTaskDelete(nullptr);
     }
     usb_host_transfer_alloc(8 + 256, 0, &ctrl);
+    set_status("Nothing plugged into the USB port has answered. If the mic has a light and it is "
+               "off, the port isn't powering it (see the USB microphone notes).");
+    uint32_t last_check = millis(), last_count = 0;
+    bool silent_reported = false;
     for (;;) {
         usb_host_client_handle_events(client, pdMS_TO_TICKS(50));
+        // A mic that enumerates and accepts its settings but then sends
+        // nothing should say so, not sit there looking connected.
+        if (millis() - last_check >= 3000) {
+            uint32_t c = samples_in;
+            if (streaming_ && c == last_count && !silent_reported) {
+                set_status("The USB microphone was set up but sends no audio. Unplug it and plug it back in; "
+                           "if that doesn't help, send the serial log.");
+                silent_reported = true;
+            }
+            if (c != last_count) silent_reported = false;
+            last_count = c;
+            last_check = millis();
+        }
         uint8_t a = new_addr.exchange(0);
         if (a) open_device(a);
         if (gone.exchange(false)) {
             teardown();
-            set_status("USB microphone disconnected.");
+            set_status("USB microphone unplugged.");
         }
     }
 }

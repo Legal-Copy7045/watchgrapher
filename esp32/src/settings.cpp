@@ -52,6 +52,7 @@ void settings_load() {
     s.sta_ssid = prefs.getString("sta_ssid", d.sta_ssid);
     s.sta_pass = prefs.getString("sta_pass", d.sta_pass);
     s.hostname = prefs.getString("host", d.hostname);
+    s.ap_fallback = prefs.getBool("ap_fb", d.ap_fallback);
     s.pin_led = prefs.getInt("p_led", d.pin_led);
     prefs.end();
 }
@@ -92,6 +93,7 @@ void settings_save() {
     prefs.putString("sta_ssid", s.sta_ssid);
     prefs.putString("sta_pass", s.sta_pass);
     prefs.putString("host", s.hostname);
+    prefs.putBool("ap_fb", s.ap_fallback);
     prefs.putInt("p_led", s.pin_led);
     prefs.end();
 }

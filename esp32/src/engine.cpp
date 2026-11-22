@@ -4,6 +4,7 @@
 #include <Preferences.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 
 #include <algorithm>
@@ -15,6 +16,7 @@
 #include "json.h"
 #include "led.h"
 #include "settings.h"
+#include "storage.h"
 #include "wgdsp.h"
 
 namespace engine {
@@ -370,17 +372,24 @@ static void pr_sample(uint32_t t) {
     if (pr.spark.size() > 240) pr.spark.erase(pr.spark.begin());
 }
 
+void storage_ready() {
+    LittleFS.mkdir("/pr");
+    recover_interrupted_pr();
+}
+
 void recover_interrupted_pr() {
     Preferences p;
     p.begin("wg", true);
-    String id = p.getString("pr_live", "");
+    String id = p.isKey("pr_live") ? p.getString("pr_live", "") : String();
     p.end();
     if (id.isEmpty()) return;
-    if (!LittleFS.exists(pr_path(id, ".end"))) {
+    struct stat st;
+    if (::stat(("/littlefs" + pr_path(id, ".end")).c_str(), &st) != 0) {
         // How far it got: the elapsed time of the last sample written.
         double hours = NAN;
         int samples = 0;
-        File c = LittleFS.open(pr_path(id, ".csv"), "r");
+        File c = ::stat(("/littlefs" + pr_path(id, ".csv")).c_str(), &st) == 0
+                     ? LittleFS.open(pr_path(id, ".csv"), "r") : File();
         if (c) {
             while (c.available()) {
                 String line = c.readStringUntil('\n');
@@ -528,7 +537,6 @@ bool begin(float window_cap) {
         [](size_t b) { return heap_caps_malloc(b, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); },
         [](void* p) { heap_caps_free(p); });
     if (!analyzer->ok()) return false;
-    LittleFS.mkdir("/pr");
     // Core 1, same priority as the Arduino loop (web server): they time-slice,
     // so a long analysis never stalls a page load.
     xTaskCreatePinnedToCore(task, "analysis", 16384, nullptr, 1, nullptr, 1);
@@ -591,6 +599,8 @@ std::string command(const String& action, const ArgFn& arg) {
     }
     if (action == "pr_start") {
         if (pr.active) return err_reply("A power-reserve log is already running.");
+        if (!storage::ready())
+            return err_reply("Storage is still being prepared (first start after installing) -- try again in a minute.");
         pr = PowerReserve();
         String iso = iso_now();
         if (clock_valid()) {
@@ -642,6 +652,7 @@ std::string command(const String& action, const ArgFn& arg) {
         if (id.isEmpty() || id.indexOf('/') >= 0 || id.indexOf("..") >= 0)
             return err_reply("Bad id.");
         if (pr.active && pr.id == id) return err_reply("Stop the log first.");
+        if (!storage::ready()) return err_reply("Storage is still being prepared.");
         for (const char* e : {".json", ".csv", ".end"}) LittleFS.remove(pr_path(id, e));
         return ok_reply();
     }
@@ -675,6 +686,7 @@ void state_json(uint32_t since, std::string& o) {
     kv(o, "window_cap", cap_s, 1);
     kv(o, "an_ms", last_an_ms, 0);
     kv(o, "clock", clock_valid());
+    kv(o, "storage", storage::ready());
     kv(o, "input", audio::status().c_str());
     kv(o, "input_ready", audio::input_ready());
 
@@ -761,6 +773,7 @@ void pr_list_json(std::string& o) {
         if (pr.active) live = pr.id;
     }
     o = "[";
+    if (!storage::ready()) { o += ']'; return; }
     File dir = LittleFS.open("/pr");
     bool first = true;
     if (dir && dir.isDirectory()) {
@@ -780,11 +793,12 @@ void pr_list_json(std::string& o) {
             String meta = object_or_null(f.readString());
             f.close();
             String end = "null";
-            File e = LittleFS.open(pr_path(id, ".end"), "r");
+            struct stat st;
+            File e = ::stat(("/littlefs" + pr_path(id, ".end")).c_str(), &st) == 0
+                         ? LittleFS.open(pr_path(id, ".end"), "r") : File();
             if (e) { end = object_or_null(e.readString()); e.close(); }
             size_t bytes = 0;
-            File c = LittleFS.open(pr_path(id, ".csv"), "r");
-            if (c) { bytes = c.size(); c.close(); }
+            if (::stat(("/littlefs" + pr_path(id, ".csv")).c_str(), &st) == 0) bytes = st.st_size;
             if (!first) o += ',';
             first = false;
             o += "{\"meta\":";

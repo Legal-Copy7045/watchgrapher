@@ -13,8 +13,12 @@ format, so they move between the two.
 ## Install from your browser
 
 Open **https://legal-copy7045.github.io/watchgrapher/** in Chrome or Edge on a
-computer, plug the board's `UART` USB-C port into it and click **Install**. The
-page offers Wi-Fi setup afterwards (optional -- the hotspot always works).
+computer, plug the board in (the `USB` port needs no driver; a `UART` port with
+a CH340 chip often fails to start an install) and click **Install**. If it says
+*Failed to initialize*, hold `BOOT`, tap `RST`, release `BOOT` and click Install
+again -- and when it has finished, **press `RST`** to start WatchGrapher (until
+then the board sits in its bootloader: the log says *waiting for download*).
+The page then offers Wi-Fi setup to put the device on your network.
 Later updates: *Settings -> Check for updates* on the device.
 
 (The page is published by `.github/workflows/esp32.yml` from `main`. It needs
@@ -66,7 +70,8 @@ and certificates, the advice engine. Do those on the desktop after merging.
 | Power | 3V3 / GND | VDD / GND | 3.3 V / 5 V per module |
 
 The on-board RGB LED (GPIO 48 on DevKitC-1 v1.0, 38 on v1.1) shows status:
-blue idle, green good reading, amber rate only (amplitude not resolved),
+blue idle (dim white while storage is being prepared on the first start after
+installing -- a few minutes; the hotspot and app work meanwhile), green good reading, amber rate only (amplitude not resolved),
 purple listening but no watch found, red clipping.
 
 ## USB-C microphone
@@ -130,9 +135,13 @@ else on a shared network can reflash the device. The version lives in
    **watchgrapher**.
 2. Open **http://192.168.4.1**. (Phones may say the network has no internet;
    stay connected.)
-3. *Settings*: change the hotspot password. Optionally enter your home Wi-Fi
-   under *Join network* -- the device then also appears at
-   http://watchgrapher.local and sets its clock by NTP.
+3. *Settings*: change the hotspot password, and enter your home Wi-Fi under
+   *Join network* if you'd like it to be a device on your network: after a
+   restart it is at http://watchgrapher.local (Settings shows its address
+   too) and sets its clock by NTP. With *Hotspot only when the home network
+   can't be reached* ticked (the default), its own hotspot switches off about
+   20 s after joining and comes back within a minute whenever that network is
+   out of reach -- so away from home it works exactly as before.
 4. *Watches*: add a watch and pick its caliber, or load your desktop
    collection (`watches/collection.json` in the WatchGrapher folder).
 5. *Measure*: choose the watch at the top, put it on the pickup, press

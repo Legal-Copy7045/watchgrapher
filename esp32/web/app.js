@@ -193,6 +193,7 @@ $$(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.da
 // ---------------------------------------------------------------- polling
 
 let pollFail = 0;
+let storageWasBusy = false;
 async function poll() {
   try {
     const st = await getJSON(`/api/state?since=${lastSeq}&now=${Date.now()}&tzo=${new Date().getTimezoneOffset()}`);
@@ -212,6 +213,16 @@ async function poll() {
       redrawMeasure();
     }
     renderStatus(st);
+    // First start after installing: storage formats in the background.
+    if (st.storage === false) {
+      storageWasBusy = true;
+      banner("Preparing storage -- the first start after installing takes a few minutes. Measuring works already; watches and logs appear when it's done.", 0);
+    } else if (st.storage && storageWasBusy) {
+      storageWasBusy = false;
+      banner("Storage ready.");
+      loadCollection();
+      refreshPrList();
+    }
   } catch {
     if (++pollFail > 2) {
       $("#conn").classList.remove("ok");
@@ -847,6 +858,7 @@ async function loadSettings() {
   }
   form.window_s.max = settings.window_cap;
   $("#simCard").hidden = settings.source !== "sim";
+  $("#netStatus").textContent = settings.net_status || "";
   const mb = (b) => (b / 1048576).toFixed(1) + " MB";
   $("#devInfo").innerHTML = [
     ["Firmware", `${settings.fw} (${settings.variant})`], ["Hotspot", settings.ap_ssid_live], ["On network", settings.sta_ip || "--"],
@@ -865,9 +877,13 @@ form.addEventListener("submit", async (e) => {
     else if (el.type === "password") { if (el.value) fields[el.name] = el.value; }
     else fields[el.name] = el.value;
   }
+  const newNet = fields.sta_ssid && fields.sta_ssid !== settings.sta_ssid;
   try {
     const r = await post("/api/settings", fields);
-    banner(r.msg);
+    banner(newNet
+      ? `Saved. Restart the device: it then joins "${fields.sta_ssid}" and can be found at http://${fields.hostname || "watchgrapher"}.local` +
+        (fields.ap_fallback ? " -- its hotspot switches off once it has joined." : ".")
+      : r.msg, newNet ? 15000 : 4000);
     lastSeq = -1;
     loadSettings();
   } catch (err) { banner(err.message); }
@@ -925,16 +941,16 @@ $("#fwFile").addEventListener("change", (e) => {
   e.target.value = "";
   if (file) uploadFirmware(file);
 });
+// The .bin goes up as the raw request body (the device streams it to flash).
 function uploadFirmware(file) {
-  const fd = new FormData();
-  fd.append("firmware", file, file.name);
   const x = new XMLHttpRequest();
   x.upload.onprogress = (ev) => ($("#fwBar").style.width = ((100 * ev.loaded) / ev.total).toFixed(0) + "%");
   x.onload = () => { try { banner(JSON.parse(x.responseText).msg, 10000); } catch { banner("Upload finished.", 10000); } };
   x.onerror = () => banner("Upload failed.");
   x.onloadend = () => { if (x.status === 403) banner("Wrong hotspot password -- firmware not changed.", 8000); };
   x.open("POST", "/api/update?key=" + encodeURIComponent($("#fwKey").value || ""));
-  x.send(fd);
+  x.setRequestHeader("Content-Type", "application/octet-stream");
+  x.send(file);
 }
 
 // ---------------------------------------------------------------- boot

@@ -255,13 +255,16 @@
   </div>
   <div class="card">
     <h3>Wi-Fi <span class="small muted">(restart to apply)</span></h3>
+    <p id="netStatus" class="small"></p>
     <div class="grid2">
       <label>Hotspot name<input name="ap_ssid" placeholder="WatchGrapher-XXXX"></label>
       <label>Hotspot password<input name="ap_pass" type="password" placeholder="unchanged"></label>
       <label>Join network (optional)<input name="sta_ssid"></label>
       <label>Its password<input name="sta_pass" type="password" placeholder="unchanged"></label>
       <label>Hostname (.local)<input name="hostname"></label>
+      <label class="check"><input name="ap_fallback" type="checkbox"> Hotspot only when the home network can't be reached</label>
     </div>
+    <p class="small muted">On your home network the device is at <code>http://watchgrapher.local</code> (or the address shown above). With the box ticked its own hotspot switches off about 20 s after joining, and comes back by itself within a minute whenever that network is out of reach &mdash; away from home it works exactly as before.</p>
   </div>
   </div>
   <div class="row sticky">

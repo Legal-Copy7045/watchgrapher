@@ -37,5 +37,8 @@ void pr_list_json(std::string& out);
 // Called at boot: a power-reserve log that was running when the device lost
 // power is closed off and marked as interrupted.
 void recover_interrupted_pr();
+// Run once storage is mounted: creates the log folder and closes off a log
+// interrupted by a power cut.
+void storage_ready();
 
 }  // namespace engine

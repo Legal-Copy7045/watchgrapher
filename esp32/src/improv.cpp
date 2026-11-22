@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
+#include "logx.h"
+#include "net.h"
 #include "settings.h"
 
 namespace improv {
@@ -63,28 +65,18 @@ static void handle_rpc(Stream* s, const uint8_t* d, uint8_t len) {
             if (2 + p[0] + pl > plen) { send_byte(s, T_ERROR, E_INVALID); return; }
             String pass((const char*)p + 2 + p[0], pl);
             send_byte(s, T_STATE, S_PROVISIONING);
-            WiFi.mode(WIFI_AP_STA);   // keep the hotspot up
-            WiFi.begin(ssid.c_str(), pass.c_str());
-            uint32_t t0 = millis();
-            while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) delay(100);
-            if (WiFi.status() != WL_CONNECTED) {
+            String u;
+            if (!net::join(ssid, pass, 20000, u)) {
                 send_byte(s, T_ERROR, E_NO_CONNECT);
                 send_byte(s, T_STATE, S_READY);
                 return;
             }
-            {
-                SettingsLock lock;
-                g_settings.sta_ssid = ssid;
-                g_settings.sta_pass = pass;
-            }
-            settings_save();
-            configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
             send_byte(s, T_STATE, S_PROVISIONED);
-            send_result(s, C_WIFI, {url()});
+            send_result(s, C_WIFI, {u});
             return;
         }
         case C_STATE:
-            if (WiFi.status() == WL_CONNECTED) {
+            if (net::sta_connected()) {
                 send_byte(s, T_STATE, S_PROVISIONED);
                 send_result(s, C_STATE, {url()});
             } else {
@@ -101,6 +93,7 @@ static void handle_rpc(Stream* s, const uint8_t* d, uint8_t len) {
             return;
         }
         case C_SCAN: {
+            for (uint32_t t0 = millis(); !net::ready() && millis() - t0 < 60000;) delay(100);
             int n = WiFi.scanNetworks();
             for (int i = 0; i < n; ++i)
                 send_result(s, C_SCAN, {WiFi.SSID(i), String(WiFi.RSSI(i)),
@@ -151,12 +144,10 @@ static void task(void*) {
 }
 
 void begin(bool usb_host) {
+    (void)usb_host;   // logx::begin() decided whether the USB port is serial
     ports[nports++].s = &Serial;
 #if ARDUINO_USB_MODE && !ARDUINO_USB_CDC_ON_BOOT
-    if (!usb_host) {
-        USBSerial.begin();
-        ports[nports++].s = &USBSerial;
-    }
+    if (logx::usb_serial()) ports[nports++].s = &USBSerial;
 #endif
     xTaskCreatePinnedToCore(task, "improv", 4096, nullptr, 2, nullptr, 0);
 }

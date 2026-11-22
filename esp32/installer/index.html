@@ -90,11 +90,11 @@
   <section class="card">
     <h3>Before you click Install</h3>
     <ul>
-      <li>Plug the board into this computer through the USB-C port labelled <code>UART</code> (or <code>COM</code>), with a data cable.</li>
+      <li>Plug the board into this computer with a data cable, through the USB-C port labelled <code>USB</code> (it needs no driver) or <code>UART</code>/<code>COM</code>. If the <code>UART</code> port shows up as a <strong>CH340</strong> and the install fails to start, use the <code>USB</code> port.</li>
       <li>Use Chrome or Edge on a desktop. Safari and Firefox can't flash boards.</li>
-      <li>After flashing you're asked for Wi-Fi details. That's optional: the board always runs its own hotspot. Join your home Wi-Fi if you'd like to reach it at <code>http://watchgrapher.local</code> from a computer and have it keep time over the internet.</li>
+      <li>After flashing you're asked for Wi-Fi details. Enter your home Wi-Fi to make WatchGrapher a device on your network at <code>http://watchgrapher.local</code>; its own hotspot then only comes on when that network is out of reach. Skipped it, or the board was in download mode? Join the hotspot and enter it under <em>Settings &rarr; Wi-Fi</em>, or come back here, click Install and choose <em>Change Wi-Fi</em>.</li>
     </ul>
-    <p class="muted">Board not detected? Hold <code>BOOT</code>, tap <code>RST</code>, release <code>BOOT</code>, then try again. If a USB microphone is set as the input, the board's other USB port is busy hosting it &mdash; always install through the <code>UART</code> port.</p>
+    <p class="muted">"Failed to initialize" or board not detected? Hold <code>BOOT</code>, tap <code>RST</code>, release <code>BOOT</code>, then click Install. <strong>After installing that way, press <code>RST</code> once</strong> to start WatchGrapher &mdash; until you do, the board waits in its bootloader (the log says <em>waiting for download</em>) and there's no hotspot. If a USB microphone is set as the input, the <code>USB</code> port is busy hosting it: unplug the mic and use download mode as above.</p>
   </section>
 
   <section class="card">
