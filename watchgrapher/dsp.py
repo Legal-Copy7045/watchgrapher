@@ -94,7 +94,10 @@ def estimate_beat_period(env: np.ndarray, fs: int,
     ac /= ac[0]
 
     lag_min = int(fs * 3600.0 / bph_max)   # shortest plausible beat
-    lag_max = int(fs * 3600.0 / bph_min)   # longest plausible beat
+    # Longest plausible beat, with 3% to spare: a peak exactly AT the end of
+    # the searched range is not a peak to find_peaks (it has no right-hand
+    # neighbour), which made a 12000 bph watch read as ~12400 bph.
+    lag_max = int(fs * 3600.0 / (bph_min * 0.97))
     lag_max = min(lag_max, len(ac) - 2)
     if lag_max <= lag_min + 2:
         return None
@@ -169,9 +172,21 @@ def verify_period(env: np.ndarray, fs: int, period: float) -> float:
     idx, _ = signal.find_peaks(e, distance=dist, prominence=min(prom, 0.5))
     if idx.size < 8:
         return period
-    med = float(np.median(np.diff(idx))) / fs
+    d = np.diff(idx) / fs
+    med = float(np.median(d))
     if 0.40 * period < med < 0.64 * period:
-        return period / 2.0
+        # Real beats at half the period are evenly spaced (alternating by the
+        # beat error at most) and similar in height. Peaks of room noise picked
+        # up between the beats are neither -- and in a noisy capture they alone
+        # can pull the median spacing to half, which used to report double the
+        # true beat rate. Measured: noise gives a spacing spread of 0.12-0.15
+        # and a quartile height ratio of 0.15-0.3; genuine beats 0.002 and 0.67.
+        spread = float(np.median(np.abs(d - med))) / (med + 1e-12)
+        h = e[idx]
+        hratio = float(np.percentile(h, 25)) / (float(np.percentile(h, 75)) + 1e-12)
+        if spread < 0.06 or (spread < 0.10 and hratio > 0.4):
+            return period / 2.0
+        return period
     if 1.55 * period < med < 2.60 * period:
         return period * 2.0
     return period
@@ -393,7 +408,9 @@ def measure_impulse(env: np.ndarray, fs: int, beats: BeatSet, bph: float,
     period = 3600.0 / bph
 
     # Look both ways from the anchor, but never far enough to touch a neighbour.
-    half = int(min(fs * (hi_dt + 0.004), 0.42 * period * fs))
+    # Capped at 60 ms: covers every standard beat rate (12000 bph needs ~46 ms)
+    # and keeps a nonsense forced rate from building a seconds-long window.
+    half = int(min(fs * (hi_dt + 0.004), 0.42 * period * fs, 0.060 * fs))
     pre = post = half
 
     ic = np.rint(beats.times * fs).astype(int)
