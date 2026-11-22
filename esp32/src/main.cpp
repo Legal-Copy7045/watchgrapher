@@ -67,5 +67,5 @@ void setup() {
 void loop() {
     web::loop();
     net::loop();
-    delay(2);   // yield to the analysis task, which shares this core
+    delay(20);  // the web server has its own task now; this only minds the hotspot
 }
