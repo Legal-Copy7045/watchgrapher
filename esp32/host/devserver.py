@@ -164,7 +164,8 @@ class Device:
                  amp=nn(m.amplitude, 1), amp_iqr=nn(m.amplitude_spread, 1), beats=m.beats,
                  dur=nn(m.duration), snr=nn(m.snr_db, 1), q=nn(m.quality, 3), lift=nn(m.lift_angle, 1),
                  dt_ms=nn(m.dt_mean * 1000, 3), par_ms=nn(m.parity_correction), par_seen_ms=nn(m.parity_offset_seen),
-                 extra=nn(m.extra_peaks), valid=nn(m.valid_frac, 3), an_ms=round(ms))
+                 extra=nn(m.extra_peaks), valid=nn(m.valid_frac, 3), an_ms=round(ms),
+                 t_upd=0, t_per=round(ms * 0.4), t_ref=round(ms * 0.5), t_imp=round(ms * 0.1), simd=False)
         if m.ok and m.times.size >= 4:
             npd = 3600.0 / m.nominal_bph
             dev = ((m.times - m.times[0]) - m.index * npd) * 1000.0

@@ -24,6 +24,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -126,9 +127,81 @@ private:
     double now() const { return clock_ ? clock_() : 0.0; }
 };
 
+// Streaming analysis for a device that measures continuously.
+//
+// Analyzer re-filters its whole window on every call. Stream instead filters
+// and envelopes each NEW block of audio once, as it arrives, and keeps the
+// band-passed signal and its envelope in a sliding buffer, so an analysis
+// only runs the measurement stages over data that is already prepared.
+//
+// The filter is still zero-phase: each block is run through sosfiltfilt with
+// a margin of real audio on both sides (several of the band-pass filter's
+// time constants), and only its middle is kept -- the same values a
+// whole-window sosfiltfilt gives, apart from its edge transients. Processed
+// audio therefore trails the newest sample by that margin (tens of ms).
+struct Biquad { float b0, b1, b2, a1, a2; };
+
+using ReadFn = std::function<size_t(float* dst, size_t n, uint64_t end)>;
+
+class Stream {
+public:
+    // `window_cap`: the longest window analyze() will be asked for, samples.
+    Stream(size_t window_cap, AllocFn alloc = nullptr, FreeFn release = nullptr,
+           ClockFn clock = nullptr, AllocFn fast = nullptr, FreeFn fast_free = nullptr);
+    ~Stream();
+    Stream(const Stream&) = delete;
+    Stream& operator=(const Stream&) = delete;
+    bool ok() const { return xf_ && env_ && scratch_ && bmax_ && dec_; }
+
+    // Process raw audio up to absolute frame `avail_end`. `epoch` is the first
+    // frame of the current unbroken stream; a change of epoch, rate or filter
+    // settings starts over. `read(dst, n, end)` copies the n raw samples
+    // ending at absolute frame `end` and returns how many it could.
+    void update(uint64_t avail_end, uint64_t epoch, int fs, const Config& cfg, const ReadFn& read);
+
+    uint64_t end() const { return base_ + fill_; }      // processed audio is final up to here
+    uint64_t start() const;                              // oldest processed frame held
+    int fs() const { return fs_; }
+
+    // Analyse the n samples ending at absolute frame `end_frame` (<= end()).
+    Measurement analyze(size_t n, uint64_t end_frame, const Config& cfg);
+
+private:
+    void reset(uint64_t from, uint64_t epoch, int fs, const Config& cfg);
+    size_t cap_ = 0, slack_ = 0, total_ = 0;   // window, extra room, buffer length
+    float* xf_ = nullptr;                      // band-passed signal
+    float* env_ = nullptr;                     // its RMS envelope
+    float* scratch_ = nullptr;                 // one block plus margins
+    // Kept up to date as audio arrives, so an analysis need not re-read the
+    // whole envelope: the maximum of every BLOCK samples, and the envelope
+    // averaged down to ~2 kHz for the period search.
+    static constexpr size_t BLOCK = 256;
+    float* bmax_ = nullptr;
+    float* dec_ = nullptr;
+    size_t dec_d_ = 1;
+    size_t scratch_len_ = 0;
+    uint64_t base_ = 0;                        // absolute frame of xf_[0]
+    size_t fill_ = 0;                          // valid samples in the buffers
+    uint64_t epoch_ = ~0ull;
+    int fs_ = 0;
+    float lo_ = 0, hi_ = 0, win_ = 0;          // filter settings in force
+    Biquad sos_[4];
+    int nsec_ = 0;
+    size_t margin_ = 0, half_ = 0;             // filter margin, envelope half-width
+    std::vector<float> kernel_;
+    AllocFn alloc_ = nullptr;
+    FreeFn free_ = nullptr;
+    ClockFn clock_ = nullptr;
+    AllocFn fast_ = nullptr;
+    FreeFn fast_free_ = nullptr;
+};
+
+// Dot product used by every correlation; the firmware installs a SIMD one.
+using DotFn = float (*)(const float* a, const float* b, int n);
+void set_dot(DotFn f);
+
 // ---- lower-level pieces, exposed for the host tests ------------------------
 
-struct Biquad { float b0, b1, b2, a1, a2; };
 
 // 4th-order Butterworth band-pass as four second-order sections (8 poles),
 // the same design as scipy.signal.butter(4, [lo, hi], 'band', output='sos').
