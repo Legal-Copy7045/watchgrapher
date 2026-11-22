@@ -110,6 +110,14 @@ tells you what to adjust for the caliber you're working on.
 - Dedicated Phone Portal tab with QR code; optional autostart
 - Bound to the LAN address only; watch list and commands token-gated
 
+### Standalone pocket version (ESP32-S3)
+- The measurement engine ported to an ESP32-S3 with an I2S mic or piezo/ADC
+  pickup: its own Wi-Fi hotspot, the app served to your phone, live readings,
+  trace and beat waveform, timed runs, six positions, power-reserve logs that
+  run on the device unattended, watches and caliber picker
+- Same `collection.json` format as the desktop; merge results back with
+  `esp32/tools/merge_device.py`. See [`esp32/README.md`](esp32/README.md)
+
 ### Chronograph
 - Dedicated Chrono tab: measure chronograph stopped vs running, quantify the
   amplitude / rate load, A/B compare

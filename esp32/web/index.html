@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14161a">
+<title>WatchGrapher</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">WatchGrapher</div>
+  <label class="watchsel">
+    <span class="sr">Watch</span>
+    <select id="watchSel" aria-label="Watch"></select>
+  </label>
+  <span id="conn" class="conn" title="Connection to the device">&#9679;</span>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" data-tab="measure" class="on">Measure</button>
+  <button role="tab" data-tab="positions">Positions</button>
+  <button role="tab" data-tab="reserve">Reserve</button>
+  <button role="tab" data-tab="watches">Watches</button>
+  <button role="tab" data-tab="settings">Settings</button>
+</nav>
+
+<div id="banner" class="banner" hidden></div>
+
+<main>
+<!-- ================================================================ Measure -->
+<section id="tab-measure" class="tab on">
+  <div class="tiles">
+    <div class="tile" id="tRate"><div class="lbl">Rate</div><div class="val">--</div><div class="sub">s/day</div></div>
+    <div class="tile" id="tAmp"><div class="lbl">Amplitude</div><div class="val">--</div><div class="sub">deg</div></div>
+    <div class="tile" id="tBe"><div class="lbl">Beat error</div><div class="val">--</div><div class="sub">ms</div></div>
+    <div class="tile" id="tBph"><div class="lbl">Beat rate</div><div class="val">--</div><div class="sub">bph</div></div>
+  </div>
+  <div id="msg" class="msg">Press Listen with the watch on the pickup.</div>
+
+  <div class="row meterrow">
+    <button id="btnListen" class="primary">Listen</button>
+    <div class="meter" title="Input level after gain"><div id="meterBar"></div></div>
+    <span id="gainTxt" class="mono small"></span>
+  </div>
+  <div id="calInfo" class="small muted"></div>
+
+  <div class="card">
+    <div class="cardhead"><h3>Timed run</h3><span id="runState" class="small muted"></span></div>
+    <div class="grid2">
+      <label>Position<select id="runPos"></select></label>
+      <label>Wind<select id="runWind"><option>Full wind</option><option>Partial</option><option>After 24 h</option><option>Unknown</option></select></label>
+      <label>Settle (s)<input id="runSettle" type="number" min="0" max="120" value="10"></label>
+      <label>Duration (s)<input id="runDur" type="number" min="6" max="3600" value="30"></label>
+    </div>
+    <div class="row">
+      <button id="btnRun" class="primary">Start run</button>
+      <button id="btnRunStop">Stop</button>
+    </div>
+    <div class="progress"><div id="runBar"></div></div>
+    <div id="runResult" hidden></div>
+  </div>
+
+  <div class="card">
+    <div class="cardhead"><h3>Trace</h3>
+      <label class="small">Window <select id="traceWin"><option value="10">10 ms</option><option value="20" selected>20 ms</option><option value="50">50 ms</option></select></label>
+    </div>
+    <canvas id="cvTrace" class="chart tall"></canvas>
+    <div class="legend small"><span class="dot c1"></span>tick <span class="dot c2"></span>tock &mdash; slope is rate, the gap between the lines is beat error</div>
+  </div>
+
+  <div class="card">
+    <h3>Beat waveform</h3>
+    <canvas id="cvShape" class="chart"></canvas>
+    <div class="small muted">Averaged envelope of one beat. Markers: unlocking (1st noise) and drop (3rd noise) &mdash; their spacing gives amplitude.</div>
+  </div>
+
+  <div class="card">
+    <div class="cardhead"><h3>History</h3><button id="btnHistClear" class="small">Clear</button></div>
+    <canvas id="cvHist" class="chart"></canvas>
+    <div class="legend small"><span class="dot c1"></span>rate (s/day, left) <span class="dot c3"></span>amplitude (deg, right)</div>
+  </div>
+
+  <details class="card">
+    <summary>Diagnostics</summary>
+    <table class="kv" id="diag"></table>
+    <p class="small"><a id="wavLink" href="/api/wav?s=10">Download the last 10 s as WAV</a> &mdash; opens in the desktop app's <em>Analyze WAV</em>.</p>
+  </details>
+</section>
+
+<!-- ============================================================== Positions -->
+<section id="tab-positions" class="tab">
+  <div class="card">
+    <h3>Six-position check</h3>
+    <p class="small muted">Put the watch in each position, then press its Measure button. Each uses the timed-run settings from the Measure tab.</p>
+    <table class="grid" id="posTable">
+      <thead><tr><th>Position</th><th>Rate</th><th>Amp</th><th>BE</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="posSummary" class="summary"></div>
+    <label>Notes<input id="posNotes" type="text" placeholder="e.g. after regulation"></label>
+    <label class="check"><input id="posService" type="checkbox"> Taken right after a service</label>
+    <div class="row">
+      <button id="btnPosSave" class="primary">Save to watch</button>
+      <button id="btnPosClear">Clear</button>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ Reserve -->
+<section id="tab-reserve" class="tab">
+  <div class="card" id="prLive">
+    <h3>Power-reserve log</h3>
+    <p class="small muted">Fully wind the watch, put it on the pickup and start. The device logs on its own -- you can close this page and come back. It stops by itself when the watch runs down.</p>
+    <div class="grid2">
+      <label>Sample every<select id="prInt"><option value="120">2 min</option><option value="300" selected>5 min</option><option value="600">10 min</option><option value="900">15 min</option></select></label>
+      <label>Rated reserve (h)<input id="prTarget" type="number" min="0" max="2000" placeholder="from caliber"></label>
+    </div>
+    <label>Notes<input id="prNotes" type="text"></label>
+    <div class="row">
+      <button id="btnPrStart" class="primary">Start log</button>
+      <button id="btnPrStop">Stop log</button>
+    </div>
+    <div id="prStatus" class="prstatus"></div>
+    <canvas id="cvPrSpark" class="chart short"></canvas>
+  </div>
+
+  <div class="card">
+    <h3>Logs on this device</h3>
+    <div id="prList" class="list"></div>
+  </div>
+
+  <div class="card" id="prDetail" hidden>
+    <div class="cardhead"><h3 id="prTitle"></h3><button id="btnPrClose" class="small">Close</button></div>
+    <div id="prFigures" class="summary"></div>
+    <canvas id="cvPrAmp" class="chart"></canvas>
+    <canvas id="cvPrRate" class="chart"></canvas>
+    <div class="row">
+      <button id="btnPrSave" class="primary">Save to watch</button>
+      <a id="prCsv" class="button" download>CSV</a>
+      <button id="btnPrDelete" class="danger">Delete</button>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ Watches -->
+<section id="tab-watches" class="tab">
+  <div class="row">
+    <button id="btnWatchAdd" class="primary">+ Add watch</button>
+    <label class="check small"><input id="showArchived" type="checkbox"> show archived</label>
+  </div>
+  <div id="watchList" class="list"></div>
+
+  <div class="card" id="watchEdit" hidden>
+    <h3 id="weTitle">Watch</h3>
+    <div class="grid2">
+      <label>Brand<input id="weBrand"></label>
+      <label>Model<input id="weModel"></label>
+      <label>Nickname<input id="weNick"></label>
+      <label>Reference<input id="weRef"></label>
+      <label>Target rate (s/day)<input id="weTarget" inputmode="decimal"></label>
+      <label>Lift angle override<input id="weLift" inputmode="decimal" placeholder="caliber value"></label>
+    </div>
+    <label>Caliber
+      <input id="weCalSearch" placeholder="search e.g. 2824, NH35, Rolex 3135" autocomplete="off">
+    </label>
+    <div id="weCalHits" class="hits"></div>
+    <div id="weCal" class="small"></div>
+    <label>Notes<textarea id="weNotes" rows="2"></textarea></label>
+    <div class="row">
+      <button id="btnWeSave" class="primary">Save</button>
+      <button id="btnWeCancel">Cancel</button>
+      <button id="btnWeArchive">Archive</button>
+    </div>
+    <div id="weHistory"></div>
+  </div>
+
+  <div class="card">
+    <h3>Sync with the desktop app</h3>
+    <p class="small muted">Load your desktop <code>collection.json</code> here to carry your watches with you. To bring results back, download the device's collection and merge it on the computer with <code>python esp32/tools/merge_device.py</code> &mdash; nothing on the desktop is overwritten.</p>
+    <div class="row">
+      <label class="button">Load desktop collection<input id="collFile" type="file" accept=".json,application/json" hidden></label>
+      <a class="button" href="/api/collection" download="device_collection.json">Download device collection</a>
+    </div>
+  </div>
+</section>
+
+<!-- =============================================================== Settings -->
+<section id="tab-settings" class="tab">
+  <form id="setForm" autocomplete="off">
+  <div class="card">
+    <h3>Input</h3>
+    <div class="grid2">
+      <label>Source<select name="source"><option value="i2s">I2S microphone / ADC</option><option value="sim">Simulated watch</option></select></label>
+      <label>Analysis window (s)<input name="window_s" type="number" step="0.5" min="4"></label>
+      <label>Gain (dB)<input name="gain_db" type="number" step="1" min="0" max="54"></label>
+      <label class="check"><input name="agc" type="checkbox"> Auto-gain</label>
+    </div>
+  </div>
+  <div class="card" id="simCard">
+    <h3>Simulated watch</h3>
+    <div class="grid2">
+      <label>Beat rate<select name="sim_bph"></select></label>
+      <label>Amplitude (deg)<input name="sim_amp" type="number" step="1"></label>
+      <label>Lift angle (deg)<input name="sim_lift" type="number" step="0.5"></label>
+      <label>Rate (s/day)<input name="sim_rate" type="number" step="0.5"></label>
+      <label>Beat error (ms)<input name="sim_be" type="number" step="0.1" min="0"></label>
+      <label>SNR (dB)<input name="sim_snr" type="number" step="1"></label>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Analysis</h3>
+    <div class="grid2">
+      <label>Lift angle (deg)<input name="lift_angle" type="number" step="0.5"></label>
+      <label>Beat rate<select name="forced_bph"></select></label>
+      <label>Band low (Hz)<input name="band_lo" type="number" step="100"></label>
+      <label>Band high (Hz)<input name="band_hi" type="number" step="100"></label>
+      <label>Envelope (ms)<input name="env_win_ms" type="number" step="0.05"></label>
+      <label>Sub-noise threshold<input name="sub_threshold" type="number" step="0.01"></label>
+      <label class="check"><input name="exact_amplitude" type="checkbox"> Exact amplitude formula</label>
+      <label class="check"><input name="no_parity_fix" type="checkbox"> Disable tick/tock anchor fix</label>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Hardware <span class="small muted">(restart to apply)</span></h3>
+    <div class="grid2">
+      <label>Sample rate<select name="sample_rate"><option>44100</option><option>48000</option></select></label>
+      <label>I2S slot<select name="i2s_right"><option value="0">Left (L/R pin low)</option><option value="1">Right (L/R pin high)</option></select></label>
+      <label>BCLK / SCK pin<input name="pin_bclk" type="number"></label>
+      <label>WS / LRCLK pin<input name="pin_ws" type="number"></label>
+      <label>Data in (SD) pin<input name="pin_din" type="number"></label>
+      <label>MCLK pin (-1 none)<input name="pin_mclk" type="number"></label>
+      <label>Status LED pin (-1 off)<input name="pin_led" type="number"></label>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Wi-Fi <span class="small muted">(restart to apply)</span></h3>
+    <div class="grid2">
+      <label>Hotspot name<input name="ap_ssid" placeholder="WatchGrapher-XXXX"></label>
+      <label>Hotspot password<input name="ap_pass" type="password" placeholder="unchanged"></label>
+      <label>Join network (optional)<input name="sta_ssid"></label>
+      <label>Its password<input name="sta_pass" type="password" placeholder="unchanged"></label>
+      <label>Hostname (.local)<input name="hostname"></label>
+    </div>
+  </div>
+  <div class="row sticky">
+    <button type="submit" class="primary">Save settings</button>
+    <button type="button" id="btnReboot">Restart device</button>
+  </div>
+  </form>
+
+  <div class="card">
+    <h3>Device</h3>
+    <table class="kv" id="devInfo"></table>
+    <label class="button">Update firmware (.bin)<input id="fwFile" type="file" accept=".bin" hidden></label>
+    <div class="progress"><div id="fwBar"></div></div>
+    <button id="btnFactory" class="danger small">Factory reset settings</button>
+  </div>
+</section>
+</main>
+
+<dialog id="dlg"><form method="dialog"><p id="dlgMsg"></p><div class="row"><button value="cancel">Cancel</button><button value="ok" class="primary">OK</button></div></form></dialog>
+<script src="/app.js"></script>
+</body>
+</html>
