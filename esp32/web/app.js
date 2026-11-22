@@ -847,6 +847,7 @@ async function loadSettings() {
   }
   form.window_s.max = settings.window_cap;
   $("#simCard").hidden = settings.source !== "sim";
+  $("#netStatus").textContent = settings.net_status || "";
   const mb = (b) => (b / 1048576).toFixed(1) + " MB";
   $("#devInfo").innerHTML = [
     ["Firmware", `${settings.fw} (${settings.variant})`], ["Hotspot", settings.ap_ssid_live], ["On network", settings.sta_ip || "--"],
@@ -865,9 +866,13 @@ form.addEventListener("submit", async (e) => {
     else if (el.type === "password") { if (el.value) fields[el.name] = el.value; }
     else fields[el.name] = el.value;
   }
+  const newNet = fields.sta_ssid && fields.sta_ssid !== settings.sta_ssid;
   try {
     const r = await post("/api/settings", fields);
-    banner(r.msg);
+    banner(newNet
+      ? `Saved. Restart the device: it then joins "${fields.sta_ssid}" and can be found at http://${fields.hostname || "watchgrapher"}.local` +
+        (fields.ap_fallback ? " -- its hotspot switches off once it has joined." : ".")
+      : r.msg, newNet ? 15000 : 4000);
     lastSeq = -1;
     loadSettings();
   } catch (err) { banner(err.message); }

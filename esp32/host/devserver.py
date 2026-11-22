@@ -55,7 +55,8 @@ class Device:
             band_lo=1500.0, band_hi=12000.0, env_win_ms=0.35, sub_threshold=0.16,
             lift_angle=52.0, forced_bph=0, exact_amplitude=True, no_parity_fix=False,
             sim_bph=28800, sim_amp=285.0, sim_lift=52.0, sim_rate=4.0, sim_be=0.3, sim_snr=18.0,
-            ap_ssid="", ap_ssid_live="WatchGrapher-DEV", sta_ssid="", sta_ip="",
+            ap_ssid="", ap_ssid_live="WatchGrapher-DEV", sta_ssid="", sta_ip="", ap_fallback=True,
+            net_status="No home network set \u00b7 hotspot WatchGrapher-DEV on",
             hostname="watchgrapher", pin_led=48, fw="0.2.0-dev", variant="n16r8",
             psram_free=1_600_000, heap_free=210_000, fs_total=10_354_688, fs_used=40_960)
         self.rec = SimulatedRecorder(samplerate=48000, buffer_seconds=20.0)

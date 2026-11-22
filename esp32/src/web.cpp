@@ -21,6 +21,7 @@
 #include "audio_in.h"
 #include "engine.h"
 #include "json.h"
+#include "net.h"
 #include "settings.h"
 #include "web_assets.h"
 
@@ -109,9 +110,11 @@ static void h_settings_get() {
     kv(o, "sim_be", s.sim.beat_error_ms, 2);
     kv(o, "sim_snr", s.sim.snr_db, 1);
     kv(o, "ap_ssid", s.ap_ssid.c_str());
-    kv(o, "ap_ssid_live", WiFi.softAPSSID().c_str());
+    kv(o, "ap_ssid_live", net::ap_ssid().c_str());
+    kv(o, "ap_fallback", s.ap_fallback);
+    kv(o, "net_status", net::status().c_str());
     kv(o, "sta_ssid", s.sta_ssid.c_str());
-    kv(o, "sta_ip", WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "");
+    kv(o, "sta_ip", net::sta_ip().c_str());
     kv(o, "hostname", s.hostname.c_str());
     kv(o, "pin_led", s.pin_led);
     kv(o, "fw", WG_FW_VERSION);
@@ -180,6 +183,7 @@ static void h_settings_post() {
     }
     b("exact_amplitude", s.cfg.exact_amplitude);
     b("no_parity_fix", s.cfg.no_parity_fix);
+    b("ap_fallback", s.ap_fallback);
     if (server.hasArg("sim_bph")) {
         int v = (int)server.arg("sim_bph").toInt();
         for (int r : wg::STANDARD_BPH)

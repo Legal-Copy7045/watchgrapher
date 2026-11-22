@@ -35,6 +35,9 @@ struct Settings {
     String sta_ssid;            // optional: also join an existing network
     String sta_pass;
     String hostname = "watchgrapher";  // mDNS: http://watchgrapher.local
+    // With a home network set: turn the hotspot off while joined to it, and
+    // back on when it can't be reached. false = hotspot always on.
+    bool ap_fallback = true;
 
     int pin_led = 48;           // on-board RGB LED (DevKitC-1 v1.0; 38 on v1.1), -1 = off
 };
