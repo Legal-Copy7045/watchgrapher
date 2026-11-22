@@ -738,6 +738,7 @@ void state_json(uint32_t since, std::string& o) {
     kv(o, "an_ms", last_an_ms, 0);
     kv(o, "clock", clock_valid());
     kv(o, "storage", storage::ready());
+    kv(o, "coll_rev", (long long)storage::coll_rev());
     kv(o, "input", audio::status().c_str());
     kv(o, "input_ready", audio::input_ready());
 

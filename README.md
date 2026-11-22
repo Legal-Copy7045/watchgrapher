@@ -115,8 +115,9 @@ tells you what to adjust for the caliber you're working on.
   pickup: its own Wi-Fi hotspot, the app served to your phone, live readings,
   trace and beat waveform, timed runs, six positions, power-reserve logs that
   run on the device unattended, watches and caliber picker
-- Same `collection.json` format as the desktop; merge results back with
-  `esp32/tools/merge_device.py`. See [`esp32/README.md`](esp32/README.md)
+- Syncs with this app over your Wi-Fi: the device finds the computer by
+  itself, pairs once with a code shown on the Phone Portal tab, and from then
+  on both hold every watch and result. See [`esp32/README.md`](esp32/README.md)
 
 ### Chronograph
 - Dedicated Chrono tab: measure chronograph stopped vs running, quantify the

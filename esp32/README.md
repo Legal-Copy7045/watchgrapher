@@ -39,8 +39,8 @@ from the Actions tab with *release* ticked.)
   a power cut (the log is closed off and kept)
 - **Watches**: add / edit / archive, caliber picker over the full desktop
   caliber database (lift angle and beat rate set automatically), history
-- **Desktop sync**: load your desktop `collection.json` onto the device;
-  merge device results back with `tools/merge_device.py`
+- **Desktop sync** over your Wi-Fi: finds the WatchGrapher desktop app by
+  itself, pairs once with a code, then keeps both collections in step
 - **Simulated watch** for trying it with no pickup fitted
 - WAV download of the last few seconds (analyse it in the desktop app),
   firmware update from the page, a status LED, auto-gain and clipping guard
@@ -154,20 +154,44 @@ The page sends your phone's clock with each request (the board has no
 real-time clock), so results are stamped with the right time even on the
 hotspot.
 
-## Bringing results back to the desktop
+## Syncing with the desktop app
 
-Close WatchGrapher on the computer, join the device's hotspot (or have the
-device on your home network) and run:
+With the device on your home Wi-Fi and WatchGrapher running on a computer on
+the same network, the device finds the computer by itself.
+
+1. On the computer, open the **Phone Portal** tab. Under *WatchGrapher
+   devices* it shows a 6-digit **pairing code** (and *Let devices on this
+   network sync with this computer*, on by default).
+2. On the device, open **Watches**. The computer is listed under *Sync with
+   the desktop app*: type the code and press **Pair**. It syncs straight away.
+3. From then on it syncs by itself -- when the computer appears on the
+   network, every 15 minutes, and a minute after you change something -- or
+   press **Sync now**.
+
+A sync only ever **adds**: new watches, and test, service and power-reserve
+records the other side doesn't have (matched by when they were taken).
+Nothing is changed or deleted on the computer; the device then gets the
+computer's whole collection, so both hold everything. Edits to a watch's
+details are taken from the computer. Power-reserve logs reach the computer
+once you have saved them to a watch on the device.
+
+How it works: the desktop broadcasts a small UDP beacon (port 8479) and serves
+pairing and sync on port 8478, on its LAN address only. Pairing needs the code
+on the computer's screen (it changes after each use; five wrong tries lock
+pairing for a minute) and gives the device a token; *Forget all devices*
+revokes them. The merge runs inside the app, so the app can't later save over
+it. Windows may ask once whether to let Python accept connections on private
+networks -- allow it.
+
+**Without a network**, by file: download the device's collection (*Watches ->
+Without a network: by file*) and, with WatchGrapher closed, run
 
 ```
-python esp32/tools/merge_device.py --device http://192.168.4.1
+python esp32/tools/merge_device.py --device device_collection.json
 ```
 
-or download the collection from the *Watches* tab and pass the file instead
-of the URL. It adds new watches and any test, service and power-reserve
-records the desktop does not already have, backs up `collection.json` first,
-and never changes or removes desktop data. The desktop recomputes
-power-reserve figures from the raw samples with its fuller model.
+(or `--device http://192.168.4.1` from a computer joined to the hotspot). It
+merges the same way, backing up `collection.json` first.
 
 ## How it fits on the chip
 

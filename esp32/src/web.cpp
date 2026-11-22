@@ -35,6 +35,7 @@
 #include "net.h"
 #include "settings.h"
 #include "storage.h"
+#include "sync.h"
 #include "web_assets.h"
 
 namespace web {
@@ -378,10 +379,6 @@ static esp_err_t h_reset(httpd_req_t* r) {
 // The collection is the desktop's collection.json schema, managed by the
 // browser. Saved via a temp file and a backup, so a power cut mid-write
 // cannot lose it.
-static const char* COLL = "/collection.json";
-static const char* COLL_TMP = "/collection.tmp";
-static const char* COLL_BAK = "/collection.bak";
-
 static bool storage_or_503(httpd_req_t* r) {
     if (storage::ready()) return true;
     send_json(r, "{\"ok\":false,\"msg\":\"Storage is still being prepared (first start after installing takes a few minutes).\"}", 503);
@@ -390,31 +387,33 @@ static bool storage_or_503(httpd_req_t* r) {
 
 static esp_err_t h_coll_get(httpd_req_t* r) {
     if (!storage_or_503(r)) return ESP_OK;
-    const char* p = exists(COLL) ? COLL : (exists(COLL_BAK) ? COLL_BAK : nullptr);
-    if (!p) return send_json(r, "{\"version\":1,\"watches\":[]}");
-    File f = LittleFS.open(p, "r");
-    if (!f) return send_json(r, "{\"version\":1,\"watches\":[]}");
+    storage::CollLock l;
+    // The revision goes with it, so a later save can say what it was based on.
+    static char rev[16];
+    snprintf(rev, sizeof rev, "%u", (unsigned)storage::coll_rev());
+    httpd_resp_set_hdr(r, "X-WG-Rev", rev);
+    File f;
+    if (!storage::coll_open(f)) return send_json(r, "{\"version\":1,\"watches\":[]}");
     return stream_file(r, f, "application/json");
 }
 
 static esp_err_t h_coll_post(httpd_req_t* r) {
     if (!storage_or_503(r)) return ESP_OK;
+    // A page saving a collection it loaded before a sync changed it would
+    // undo the sync: refuse, and the page reloads.
+    char base[16] = "";
+    if (httpd_req_get_hdr_value_str(r, "X-WG-Rev", base, sizeof base) == ESP_OK && base[0] &&
+        strtoul(base, nullptr, 10) != storage::coll_rev())
+        return send_json(r, "{\"ok\":false,\"stale\":true,\"msg\":\"The collection changed on the device (a sync) -- reloaded; please make that change again.\"}", 409);
     String body;
     if (!read_body(r, body, 4 * 1024 * 1024))
         return send_json(r, "{\"ok\":false,\"msg\":\"Collection too large or the upload broke off.\"}", 413);
     if (body.length() < 2 || body[0] != '{')
         return send_json(r, "{\"ok\":false,\"msg\":\"Expected a JSON object.\"}", 400);
-    File f = LittleFS.open(COLL_TMP, "w");
-    if (!f || f.print(body) != body.length()) {
-        if (f) f.close();
-        LittleFS.remove(COLL_TMP);
+    if (!storage::coll_replace([&](File& f) { return f.print(body) == body.length(); }))
         return send_json(r, "{\"ok\":false,\"msg\":\"Could not write -- storage full?\"}", 507);
-    }
-    f.close();
-    if (exists(COLL_BAK)) LittleFS.remove(COLL_BAK);
-    if (exists(COLL)) LittleFS.rename(COLL, COLL_BAK);
-    LittleFS.rename(COLL_TMP, COLL);
-    return send_json(r, "{\"ok\":true}");
+    std::string o = "{\"ok\":true,\"rev\":" + std::to_string(storage::coll_rev()) + "}";
+    return send_json(r, o);
 }
 
 static esp_err_t h_pr_list(httpd_req_t* r) {
@@ -503,6 +502,30 @@ static esp_err_t h_update(httpd_req_t* r) {
     return e;
 }
 
+// Desktop sync: GET for status; POST action=pair (desktop, code) | now |
+// forget | auto (on).
+static esp_err_t h_sync_get(httpd_req_t* r) {
+    std::string s;
+    dsync::status_json(s);
+    return send_json(r, s);
+}
+
+static esp_err_t h_sync_post(httpd_req_t* r) {
+    Req q = request(r, true);
+    String a = q.arg("action"), msg;
+    bool ok = true;
+    if (a == "pair") ok = dsync::pair(q.arg("desktop"), q.arg("code"), msg);
+    else if (a == "now") ok = dsync::sync_now(msg);
+    else if (a == "forget") { dsync::forget(); msg = "Forgotten."; }
+    else if (a == "auto") { dsync::set_auto(q.arg("on") != "0"); msg = "Saved."; }
+    else { ok = false; msg = "Unknown action."; }
+    std::string o = "{";
+    json::kv(o, "ok", ok);
+    json::kv(o, "msg", msg.c_str());
+    json::close_obj(o);
+    return send_json(r, o);
+}
+
 static esp_err_t h_not_found(httpd_req_t* r, httpd_err_code_t) {
     // Phones probing for a captive portal, and any unknown page: the app.
     if (r->method == HTTP_GET && strncmp(r->uri, "/api/", 5) != 0) {
@@ -553,6 +576,8 @@ void begin() {
     route("/api/pr/csv", HTTP_GET, h_pr_csv);
     route("/api/wav", HTTP_GET, h_wav);
     route("/api/update", HTTP_POST, h_update);
+    route("/api/sync", HTTP_GET, h_sync_get);
+    route("/api/sync", HTTP_POST, h_sync_post);
     httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, h_not_found);
 }
 
