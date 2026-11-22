@@ -4,6 +4,7 @@
 #include <Preferences.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 
 #include <algorithm>
@@ -379,14 +380,16 @@ void storage_ready() {
 void recover_interrupted_pr() {
     Preferences p;
     p.begin("wg", true);
-    String id = p.getString("pr_live", "");
+    String id = p.isKey("pr_live") ? p.getString("pr_live", "") : String();
     p.end();
     if (id.isEmpty()) return;
-    if (!LittleFS.exists(pr_path(id, ".end"))) {
+    struct stat st;
+    if (::stat(("/littlefs" + pr_path(id, ".end")).c_str(), &st) != 0) {
         // How far it got: the elapsed time of the last sample written.
         double hours = NAN;
         int samples = 0;
-        File c = LittleFS.open(pr_path(id, ".csv"), "r");
+        File c = ::stat(("/littlefs" + pr_path(id, ".csv")).c_str(), &st) == 0
+                     ? LittleFS.open(pr_path(id, ".csv"), "r") : File();
         if (c) {
             while (c.available()) {
                 String line = c.readStringUntil('\n');
@@ -790,11 +793,12 @@ void pr_list_json(std::string& o) {
             String meta = object_or_null(f.readString());
             f.close();
             String end = "null";
-            File e = LittleFS.open(pr_path(id, ".end"), "r");
+            struct stat st;
+            File e = ::stat(("/littlefs" + pr_path(id, ".end")).c_str(), &st) == 0
+                         ? LittleFS.open(pr_path(id, ".end"), "r") : File();
             if (e) { end = object_or_null(e.readString()); e.close(); }
             size_t bytes = 0;
-            File c = LittleFS.open(pr_path(id, ".csv"), "r");
-            if (c) { bytes = c.size(); c.close(); }
+            if (::stat(("/littlefs" + pr_path(id, ".csv")).c_str(), &st) == 0) bytes = st.st_size;
             if (!first) o += ',';
             first = false;
             o += "{\"meta\":";

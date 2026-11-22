@@ -17,6 +17,7 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
+#include <sys/stat.h>
 
 #include "audio_in.h"
 #include "engine.h"
@@ -29,6 +30,8 @@
 namespace web {
 
 static WebServer server(80);
+
+static bool exists(const char* path);
 
 static void send_json(const std::string& s, int code = 200) {
     server.sendHeader("Cache-Control", "no-store");
@@ -243,7 +246,7 @@ static bool storage_or_503() {
 
 static void h_coll_get() {
     if (!storage_or_503()) return;
-    const char* p = LittleFS.exists(COLL) ? COLL : (LittleFS.exists(COLL_BAK) ? COLL_BAK : nullptr);
+    const char* p = exists(COLL) ? COLL : (exists(COLL_BAK) ? COLL_BAK : nullptr);
     if (!p) {
         send_json("{\"version\":1,\"watches\":[]}");
         return;
@@ -269,8 +272,8 @@ static void h_coll_post() {
         return;
     }
     f.close();
-    LittleFS.remove(COLL_BAK);
-    if (LittleFS.exists(COLL)) LittleFS.rename(COLL, COLL_BAK);
+    if (exists(COLL_BAK)) LittleFS.remove(COLL_BAK);
+    if (exists(COLL)) LittleFS.rename(COLL, COLL_BAK);
     LittleFS.rename(COLL_TMP, COLL);
     send_json("{\"ok\":true}");
 }
@@ -288,7 +291,8 @@ static void h_pr_csv() {
         server.send(400, "text/plain", "bad id");
         return;
     }
-    File f = LittleFS.open("/pr/" + id + ".csv", "r");
+    String path = "/pr/" + id + ".csv";
+    File f = exists(path.c_str()) ? LittleFS.open(path, "r") : File();
     if (!f) {
         server.send(200, "text/csv", "");
         return;
@@ -374,7 +378,19 @@ static void h_update_chunk() {
     }
 }
 
+// exists() opens the file, and a missing file is logged as an error by the
+// VFS layer; stat() just answers.
+static bool exists(const char* path) {
+    struct stat st;
+    return ::stat((String("/littlefs") + path).c_str(), &st) == 0;
+}
+
 void begin() {
+    // Each embedded file gets its own route: served through onNotFound, the
+    // web server logged every page load as "request handler not found".
+    for (size_t i = 0; i < WEB_ASSET_COUNT; ++i)
+        server.on(WEB_ASSETS[i].path, HTTP_GET, []() { serve_asset(server.uri()); });
+    server.on("/", HTTP_GET, []() { serve_asset("/"); });
     server.on("/api/state", HTTP_GET, h_state);
     server.on("/api/cmd", HTTP_POST, h_cmd);
     server.on("/api/history", HTTP_GET, h_history);
