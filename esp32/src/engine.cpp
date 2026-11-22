@@ -15,6 +15,7 @@
 #include "json.h"
 #include "led.h"
 #include "settings.h"
+#include "storage.h"
 #include "wgdsp.h"
 
 namespace engine {
@@ -370,6 +371,11 @@ static void pr_sample(uint32_t t) {
     if (pr.spark.size() > 240) pr.spark.erase(pr.spark.begin());
 }
 
+void storage_ready() {
+    LittleFS.mkdir("/pr");
+    recover_interrupted_pr();
+}
+
 void recover_interrupted_pr() {
     Preferences p;
     p.begin("wg", true);
@@ -528,7 +534,6 @@ bool begin(float window_cap) {
         [](size_t b) { return heap_caps_malloc(b, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); },
         [](void* p) { heap_caps_free(p); });
     if (!analyzer->ok()) return false;
-    LittleFS.mkdir("/pr");
     // Core 1, same priority as the Arduino loop (web server): they time-slice,
     // so a long analysis never stalls a page load.
     xTaskCreatePinnedToCore(task, "analysis", 16384, nullptr, 1, nullptr, 1);
@@ -591,6 +596,8 @@ std::string command(const String& action, const ArgFn& arg) {
     }
     if (action == "pr_start") {
         if (pr.active) return err_reply("A power-reserve log is already running.");
+        if (!storage::ready())
+            return err_reply("Storage is still being prepared (first start after installing) -- try again in a minute.");
         pr = PowerReserve();
         String iso = iso_now();
         if (clock_valid()) {
@@ -642,6 +649,7 @@ std::string command(const String& action, const ArgFn& arg) {
         if (id.isEmpty() || id.indexOf('/') >= 0 || id.indexOf("..") >= 0)
             return err_reply("Bad id.");
         if (pr.active && pr.id == id) return err_reply("Stop the log first.");
+        if (!storage::ready()) return err_reply("Storage is still being prepared.");
         for (const char* e : {".json", ".csv", ".end"}) LittleFS.remove(pr_path(id, e));
         return ok_reply();
     }
@@ -675,6 +683,7 @@ void state_json(uint32_t since, std::string& o) {
     kv(o, "window_cap", cap_s, 1);
     kv(o, "an_ms", last_an_ms, 0);
     kv(o, "clock", clock_valid());
+    kv(o, "storage", storage::ready());
     kv(o, "input", audio::status().c_str());
     kv(o, "input_ready", audio::input_ready());
 
@@ -761,6 +770,7 @@ void pr_list_json(std::string& o) {
         if (pr.active) live = pr.id;
     }
     o = "[";
+    if (!storage::ready()) { o += ']'; return; }
     File dir = LittleFS.open("/pr");
     bool first = true;
     if (dir && dir.isDirectory()) {

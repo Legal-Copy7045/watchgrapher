@@ -8,7 +8,6 @@
 // http://192.168.4.1 -- or http://watchgrapher.local on a network it joins,
 // in which case the hotspot steps aside while that network is reachable.
 #include <Arduino.h>
-#include <LittleFS.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 
@@ -19,6 +18,7 @@
 #include "logx.h"
 #include "net.h"
 #include "settings.h"
+#include "storage.h"
 #include "web.h"
 
 // Leave this much PSRAM for everything that is not the two big buffers:
@@ -36,9 +36,9 @@ void setup() {
     // never heard -- the installer just skipped Wi-Fi setup.
     improv::begin(g_settings.source == Source::USB);
     led::begin(g_settings.pin_led);
-    logx::printf("Mounting storage (the first start after installing formats it -- up to a minute)\n");
-    if (!LittleFS.begin(true)) logx::printf("LittleFS mount failed\n");
-    engine::recover_interrupted_pr();
+    // Storage mounts in the background (a first start formats it, which takes
+    // minutes); Wi-Fi, the app and measuring don't wait for it.
+    storage::begin(engine::storage_ready);
 
     // Size the analysis window to the PSRAM fitted: per second of window the
     // analyzer needs two floats per sample and the ring one int16.

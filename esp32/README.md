@@ -70,7 +70,8 @@ and certificates, the advice engine. Do those on the desktop after merging.
 | Power | 3V3 / GND | VDD / GND | 3.3 V / 5 V per module |
 
 The on-board RGB LED (GPIO 48 on DevKitC-1 v1.0, 38 on v1.1) shows status:
-blue idle, green good reading, amber rate only (amplitude not resolved),
+blue idle (dim white while storage is being prepared on the first start after
+installing -- a few minutes; the hotspot and app work meanwhile), green good reading, amber rate only (amplitude not resolved),
 purple listening but no watch found, red clipping.
 
 ## USB-C microphone

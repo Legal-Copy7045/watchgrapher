@@ -193,6 +193,7 @@ $$(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.da
 // ---------------------------------------------------------------- polling
 
 let pollFail = 0;
+let storageWasBusy = false;
 async function poll() {
   try {
     const st = await getJSON(`/api/state?since=${lastSeq}&now=${Date.now()}&tzo=${new Date().getTimezoneOffset()}`);
@@ -212,6 +213,16 @@ async function poll() {
       redrawMeasure();
     }
     renderStatus(st);
+    // First start after installing: storage formats in the background.
+    if (st.storage === false) {
+      storageWasBusy = true;
+      banner("Preparing storage -- the first start after installing takes a few minutes. Measuring works already; watches and logs appear when it's done.", 0);
+    } else if (st.storage && storageWasBusy) {
+      storageWasBusy = false;
+      banner("Storage ready.");
+      loadCollection();
+      refreshPrList();
+    }
   } catch {
     if (++pollFail > 2) {
       $("#conn").classList.remove("ok");

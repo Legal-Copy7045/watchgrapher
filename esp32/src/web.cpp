@@ -23,6 +23,7 @@
 #include "json.h"
 #include "net.h"
 #include "settings.h"
+#include "storage.h"
 #include "web_assets.h"
 
 namespace web {
@@ -121,7 +122,8 @@ static void h_settings_get() {
     kv(o, "variant", WG_VARIANT);
     kv(o, "psram_free", (long long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     kv(o, "heap_free", (long long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-    size_t tot = LittleFS.totalBytes(), used = LittleFS.usedBytes();
+    size_t tot = storage::ready() ? LittleFS.totalBytes() : 0;
+    size_t used = storage::ready() ? LittleFS.usedBytes() : 0;
     kv(o, "fs_total", (long long)tot);
     kv(o, "fs_used", (long long)used);
     close_obj(o);
@@ -233,7 +235,14 @@ static const char* COLL = "/collection.json";
 static const char* COLL_TMP = "/collection.tmp";
 static const char* COLL_BAK = "/collection.bak";
 
+static bool storage_or_503() {
+    if (storage::ready()) return true;
+    send_json("{\"ok\":false,\"msg\":\"Storage is still being prepared (first start after installing takes a few minutes).\"}", 503);
+    return false;
+}
+
 static void h_coll_get() {
+    if (!storage_or_503()) return;
     const char* p = LittleFS.exists(COLL) ? COLL : (LittleFS.exists(COLL_BAK) ? COLL_BAK : nullptr);
     if (!p) {
         send_json("{\"version\":1,\"watches\":[]}");
@@ -246,6 +255,7 @@ static void h_coll_get() {
 }
 
 static void h_coll_post() {
+    if (!storage_or_503()) return;
     const String& body = server.arg("plain");
     if (body.length() < 2 || body[0] != '{') {
         send_json("{\"ok\":false,\"msg\":\"Expected a JSON object.\"}", 400);
@@ -272,6 +282,7 @@ static void h_pr_list() {
 }
 
 static void h_pr_csv() {
+    if (!storage_or_503()) return;
     String id = arg("id");
     if (id.isEmpty() || id.indexOf('/') >= 0 || id.indexOf("..") >= 0) {
         server.send(400, "text/plain", "bad id");
