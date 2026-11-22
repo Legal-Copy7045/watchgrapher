@@ -83,7 +83,14 @@ def fit_rate(times: np.ndarray, period_guess: float, passes: int = 3):
     rather than assuming the detections are consecutive, so a missed or
     spurious beat shifts one point instead of corrupting everything after it.
 
-    Returns (intercept, period, indices, residuals).
+    The model is  t_i = a + period * i + c * (-1)^i : the alternating term is
+    the beat error. Leaving it out biases the slope whenever the window holds
+    an odd number of beats -- by several s/day at a few ms of beat error,
+    exactly the watch that is being regulated.
+
+    Returns (intercept, period, indices, residuals). The residuals are about
+    the straight line a + period * i alone, so the even/odd split that
+    beat_error_ms() reads from them still holds the beat error.
     """
     t = np.asarray(times, dtype=float)
     if t.size < 8:
@@ -94,6 +101,12 @@ def fit_rate(times: np.ndarray, period_guess: float, passes: int = 3):
     idx = np.zeros(t.size)
     resid = np.zeros(t.size)
 
+    def solve(i_, t_):
+        alt = np.where(np.asarray(i_) % 2 == 0, 1.0, -1.0)
+        A = np.vstack([np.ones_like(i_), i_, alt]).T
+        sol, *_ = np.linalg.lstsq(A, t_, rcond=None)
+        return float(sol[0]), float(sol[1]), float(sol[2])
+
     for _ in range(passes):
         # Assign beat numbers from SUCCESSIVE intervals, not from elapsed time.
         # Each gap is about one period, so the rounding is near 1 and tolerant
@@ -103,20 +116,17 @@ def fit_rate(times: np.ndarray, period_guess: float, passes: int = 3):
         steps = np.rint(np.diff(t) / period)
         steps = np.clip(steps, 1, 8)
         idx = np.concatenate([[0.0], np.cumsum(steps)])
-        A = np.vstack([np.ones_like(idx), idx]).T
-        sol, *_ = np.linalg.lstsq(A, t, rcond=None)
-        a, period = float(sol[0]), float(sol[1])
+        a, period, c = solve(idx, t)
+        alt = np.where(idx % 2 == 0, 1.0, -1.0)
+        # Drop gross outliers (bad detections) and refit once more. Judged
+        # against the full model, so the beat error is not mistaken for scatter.
+        full = t - (a + period * idx + c * alt)
+        if full.size > 20:
+            s = 1.4826 * np.median(np.abs(full - np.median(full))) + 1e-12
+            keep = np.abs(full - np.median(full)) < 5 * s
+            if keep.sum() > 8 and keep.sum() < full.size:
+                a, period, c = solve(idx[keep], t[keep])
         resid = t - (a + period * idx)
-        # Drop gross outliers (bad detections) and refit once more.
-        if resid.size > 20:
-            s = 1.4826 * np.median(np.abs(resid - np.median(resid))) + 1e-12
-            keep = np.abs(resid - np.median(resid)) < 5 * s
-            if keep.sum() > 8 and keep.sum() < resid.size:
-                t_k, i_k = t[keep], idx[keep]
-                A = np.vstack([np.ones_like(i_k), i_k]).T
-                sol, *_ = np.linalg.lstsq(A, t_k, rcond=None)
-                a, period = float(sol[0]), float(sol[1])
-                resid = t - (a + period * idx)
 
     return a, period, idx, resid
 
@@ -394,6 +404,30 @@ def analyze(samples: np.ndarray, fs: int, cfg: AnalyzerConfig) -> Measurement:
         return m
 
     m.times, m.index, m.resid = times, idx, resid
+
+    # The beat rate from the least-squares fit, which is exact, rather than
+    # from the autocorrelation estimate above, which a large beat error biases
+    # by a few percent -- enough to miss the standard rate and report a rate
+    # thousands of s/day out on a watch that is merely out of beat.
+    if fitted_period > 0:
+        m.raw_bph = 3600.0 / fitted_period
+        snapped = snap_bph(m.raw_bph, tol_frac=0.02)
+        detected = snapped if snapped else int(round(m.raw_bph))
+        if detected != m.detected_bph:
+            m.detected_bph = detected
+            if not cfg.forced_bph:
+                nominal = detected
+                m.nominal_bph = nominal
+            elif detected == nominal:
+                m.message = ""
+            else:
+                m.message = (f"Measured {m.detected_bph} bph but rate is being computed against "
+                             f"{nominal} bph. The rate figure is meaningless until these agree -- "
+                             f"check the caliber selection, or switch beat rate to Auto-detect.")
+    if not (STANDARD_BPH[0] * 0.97 <= m.raw_bph <= STANDARD_BPH[-1] * 1.03):
+        m.message = (f"Measured {m.raw_bph:.0f} bph, outside any watch's range. The pickup "
+                     f"is hearing something other than the escapement.")
+        return m
     m.rate = rate_spd(fitted_period, nominal)
     m.beat_error = beat_error_ms(idx, resid)
 

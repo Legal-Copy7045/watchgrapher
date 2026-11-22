@@ -8,3 +8,7 @@ pickup_profiles.json
 crosschecks.json
 settings.json
 images/catalogue/
+# ESP32 firmware build output
+esp32/.pio/
+esp32/src/web_assets.h
+build/
