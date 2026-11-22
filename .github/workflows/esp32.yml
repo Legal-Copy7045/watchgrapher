@@ -8,10 +8,10 @@ name: ESP32 firmware, installer & release
 on:
   push:
     branches: ["**"]
-    paths: ["esp32/**", "watchgrapher/dsp.py", "watchgrapher/analysis.py", "tools/synth.py",
+    paths: ["esp32/**", "watchgrapher/dsp.py", "watchgrapher/analysis.py", "watchgrapher/devicesync.py", "tools/synth.py",
             ".github/workflows/esp32.yml", ".github/scripts/make_site.py"]
   pull_request:
-    paths: ["esp32/**", "watchgrapher/dsp.py", "watchgrapher/analysis.py", "tools/synth.py",
+    paths: ["esp32/**", "watchgrapher/dsp.py", "watchgrapher/analysis.py", "watchgrapher/devicesync.py", "tools/synth.py",
             ".github/workflows/esp32.yml", ".github/scripts/make_site.py"]
   workflow_dispatch:
     inputs:
@@ -46,6 +46,7 @@ jobs:
       - run: build/host/uac_test
       - run: python esp32/host/compare.py build/host/wgcli
       - run: python esp32/host/stream_check.py build/host/wgcli
+      - run: python esp32/host/sync_check.py
 
   build:
     runs-on: ubuntu-latest

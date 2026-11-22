@@ -2060,6 +2060,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.status.showMessage(self._net_recorder.opened_note, 12000)
             except Exception:
                 pass
+        self._sync_server = None
+        if self._settings_get("device_sync", True):
+            self._start_sync_server()
         if not self._settings_get("setup_done", False):
             QtCore.QTimer.singleShot(300, self._run_setup_wizard)
         elif self._settings_get("update_check", True):
@@ -3145,10 +3148,140 @@ class MainWindow(QtWidgets.QMainWindow):
             "</div>")
         info.setMaximumHeight(200)
         outer.addWidget(info)
+
+        # -- WatchGrapher pocket devices (the ESP32 version) --
+        grp = QtWidgets.QGroupBox("WatchGrapher devices")
+        gv = QtWidgets.QVBoxLayout(grp)
+        gv.addWidget(QtWidgets.QLabel(
+            "A WatchGrapher pocket device on this network finds this computer by itself "
+            "(<i>Settings &rarr; Sync</i> on the device). Pair it once with the code below; "
+            "after that it syncs on its own. Syncing only ever <b>adds</b> -- new watches and "
+            "new test, service and power-reserve records -- and the device gets everything "
+            "this computer has."))
+        row = QtWidgets.QHBoxLayout()
+        self.chk_device_sync = QtWidgets.QCheckBox("Let devices on this network sync with this computer")
+        self.chk_device_sync.setChecked(bool(self._settings_get("device_sync", True)))
+        self.chk_device_sync.toggled.connect(self._toggle_device_sync)
+        row.addWidget(self.chk_device_sync, 1)
+        gv.addLayout(row)
+        crow = QtWidgets.QHBoxLayout()
+        crow.addWidget(QtWidgets.QLabel("Pairing code:"))
+        self.lbl_sync_code = QtWidgets.QLabel("------")
+        fc = self.lbl_sync_code.font()
+        fc.setPointSize(20)
+        fc.setBold(True)
+        fc.setFamily("Consolas")
+        self.lbl_sync_code.setFont(fc)
+        self.lbl_sync_code.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        crow.addWidget(self.lbl_sync_code)
+        crow.addStretch(1)
+        b_forget = QtWidgets.QPushButton("Forget all devices")
+        b_forget.setToolTip("Paired devices must pair again with a new code before they can sync.")
+        b_forget.clicked.connect(self._forget_sync_devices)
+        crow.addWidget(b_forget)
+        gv.addLayout(crow)
+        self.lbl_sync_status = QtWidgets.QLabel("")
+        self.lbl_sync_status.setStyleSheet("color:#8a94a4;")
+        self.lbl_sync_status.setWordWrap(True)
+        gv.addWidget(self.lbl_sync_status)
+        outer.addWidget(grp)
         outer.addStretch(1)
 
         self._phone_qr_url = None
         return scroll
+
+    # ------------------------------------------------- pocket device sync
+    def _start_sync_server(self):
+        import socket
+        import secrets
+        from . import devicesync
+        if getattr(self, "_sync_server", None) is not None:
+            return
+        sid = self._settings_get("sync_id")
+        if not sid:
+            sid = secrets.token_hex(8)
+            self._settings_set("sync_id", sid)
+        try:
+            name = socket.gethostname() or "WatchGrapher"
+        except OSError:
+            name = "WatchGrapher"
+        srv = devicesync.SyncServer(
+            sid, name, self._settings_get("sync_devices", {}) or {},
+            lambda paired: self._settings_set("sync_devices", paired))
+        try:
+            srv.start()
+        except OSError as e:
+            self.status.showMessage(f"Device sync could not start: {e}", 10000)
+            return
+        self._sync_server = srv
+        self._sync_panel_key = None
+        self._refresh_sync_panel(force=True)
+
+    def _stop_sync_server(self):
+        srv = getattr(self, "_sync_server", None)
+        self._sync_server = None
+        if srv is not None:
+            srv.stop()
+        self._refresh_sync_panel(force=True)
+
+    def _toggle_device_sync(self, on):
+        self._settings_set("device_sync", bool(on))
+        if on:
+            self._start_sync_server()
+        else:
+            self._stop_sync_server()
+
+    def _forget_sync_devices(self):
+        srv = getattr(self, "_sync_server", None)
+        if srv is not None:
+            srv.forget()
+        else:
+            self._settings_set("sync_devices", {})
+        self._refresh_sync_panel(force=True)
+
+    def _refresh_sync_panel(self, force=False):
+        if not hasattr(self, "lbl_sync_code"):
+            return
+        srv = getattr(self, "_sync_server", None)
+        paired = (srv.paired if srv else self._settings_get("sync_devices", {})) or {}
+        key = (srv.code if srv else None, srv.status if srv else "", srv.last_event if srv else "",
+               tuple(sorted((k, v.get("last_sync", "")) for k, v in paired.items())))
+        if not force and key == getattr(self, "_sync_panel_key", None):
+            return
+        self._sync_panel_key = key
+        self.lbl_sync_code.setText(srv.code if srv else "------")
+        lines = [f"Sync {srv.status}." if srv else "Sync is off."]
+        if srv and srv.last_event:
+            lines.append(srv.last_event[:1].upper() + srv.last_event[1:] + ".")
+        for dev, p in sorted(paired.items(), key=lambda kv: kv[1].get("name", "")):
+            last = (p.get("last_sync") or "").replace("T", " ") or "never"
+            lines.append(f"Paired: {p.get('name', dev)} -- last sync {last}")
+        self.lbl_sync_status.setText("\n".join(lines))
+
+    def _device_sync(self, device):
+        """Merge a device's collection into ours (main thread). Returns
+        (merged collection dict, (watches added, records added))."""
+        import json
+        from . import devicesync
+        self.collection.save()   # what is on screen is what gets merged
+        try:
+            with open(self.collection.path, encoding="utf-8") as fh:
+                desktop = json.load(fh)
+        except (OSError, ValueError):
+            desktop = {"version": 1, "watches": []}
+        added = devicesync.merge(desktop, device)
+        if added != (0, 0):
+            desktop["saved"] = datetime.now().isoformat(timespec="seconds")
+            tmp = self.collection.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(desktop, fh, indent=2)
+            os.replace(tmp, self.collection.path)
+            self.collection.load()
+            self._refresh_watches()
+            self.status.showMessage(
+                f"Synced with a WatchGrapher device: {added[0]} new watch(es), "
+                f"{added[1]} new record(s).", 10000)
+        return desktop, added
 
     # ============================================================== sync page
     def _build_chrono_page(self):
@@ -6222,6 +6355,10 @@ alongside the application.</p>
 
     # --------------------------------------------------------------- events
     def _tick_ui(self):
+        ss = getattr(self, "_sync_server", None)
+        if ss is not None:
+            ss.drain(self._device_sync)
+            self._refresh_sync_panel()
         nr = getattr(self, "_net_recorder", None)
         if nr is not None:
             import json
@@ -8930,6 +9067,9 @@ alongside the application.</p>
 
     def closeEvent(self, e):
         self._closing = True
+        if getattr(self, "_sync_server", None) is not None:
+            self._sync_server.stop()
+            self._sync_server = None
         w = getattr(self, "_clock_cal_worker", None)
         if w is not None:
             w.stop()

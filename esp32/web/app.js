@@ -183,7 +183,7 @@ function showTab(name) {
   $$(".tab").forEach((t) => t.classList.toggle("on", t.id === "tab-" + name));
   store.set("tab", name);
   if (name === "reserve") refreshPrList();
-  if (name === "watches") renderWatches();
+  if (name === "watches") { renderWatches(); refreshSync(); }
   if (name === "settings") loadSettings();
   if (name === "positions") renderPositions();
   if (name === "measure") redrawMeasure();
@@ -194,6 +194,7 @@ $$(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.da
 
 let pollFail = 0;
 let storageWasBusy = false;
+let lastCollRev = null;
 async function poll() {
   try {
     const st = await getJSON(`/api/state?since=${lastSeq}&now=${Date.now()}&tzo=${new Date().getTimezoneOffset()}`);
@@ -213,6 +214,12 @@ async function poll() {
       redrawMeasure();
     }
     renderStatus(st);
+    // The collection changed on the device (a sync): reload it.
+    if (st.coll_rev !== undefined && lastCollRev !== null && st.coll_rev !== lastCollRev) {
+      await loadCollection();
+      if ($("#tab-watches").classList.contains("on")) renderWatches();
+    }
+    if (st.coll_rev !== undefined) lastCollRev = st.coll_rev;
     // First start after installing: storage formats in the background.
     if (st.storage === false) {
       storageWasBusy = true;
@@ -414,9 +421,15 @@ async function startRun(position) {
 
 // ---------------------------------------------------------------- collection
 
+// The device's revision of the collection when we loaded it: a save says
+// what it was based on, so it can't undo a sync that happened meanwhile.
+let collRev = null;
 async function loadCollection() {
   try {
-    coll = await getJSON("/api/collection");
+    const r = await fetch("/api/collection", { cache: "no-store" });
+    if (!r.ok) throw new Error(`collection: ${r.status}`);
+    collRev = r.headers.get("X-WG-Rev");
+    coll = parseLenient(await r.text());
     if (!Array.isArray(coll.watches)) coll.watches = [];
   } catch (e) {
     banner("Could not read the collection: " + e.message);
@@ -426,9 +439,17 @@ async function loadCollection() {
 
 async function saveCollection() {
   coll.saved = isoLocal();
-  const r = await fetch("/api/collection", { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(coll) });
+  const headers = { "Content-Type": "text/plain" };
+  if (collRev) headers["X-WG-Rev"] = collRev;
+  const r = await fetch("/api/collection", { method: "POST", headers, body: JSON.stringify(coll) });
   const j = await r.json().catch(() => ({}));
+  if (r.status === 409 && j.stale) {
+    await loadCollection();
+    renderWatches();
+    throw new Error(j.msg);
+  }
   if (!r.ok || j.ok === false) throw new Error(j.msg || "Could not save the collection");
+  if (j.rev !== undefined) { collRev = String(j.rev); lastCollRev = j.rev; }
 }
 
 function renderWatchSel() {
@@ -841,6 +862,57 @@ $("#collFile").addEventListener("change", async (e) => {
   renderWatches();
   renderWatchSel();
 });
+
+// ---------------------------------------------------------------- desktop sync
+
+let syncTimer = 0;
+async function refreshSync() {
+  clearTimeout(syncTimer);
+  if (!$("#tab-watches").classList.contains("on")) return;
+  let st;
+  try { st = await getJSON("/api/sync"); } catch { syncTimer = setTimeout(refreshSync, 5000); return; }
+  const box = $("#syncBox");
+  let h = "";
+  if (!st.online) {
+    h = `<p class="muted">Join your home Wi-Fi (<em>Settings &rarr; Wi-Fi</em>) and the device finds the WatchGrapher desktop app on that network by itself.</p>`;
+  } else if (st.paired_id) {
+    const here = st.seen.some((d) => d.id === st.paired_id);
+    h = `<p>Paired with <b>${esc(st.paired_name)}</b> &mdash; ${here ? "on the network" : "<span class='muted'>not on the network right now</span>"}.<br>
+      <span class="muted">Last sync: ${esc((st.last_sync || "never").replace("T", " "))}. ${esc(st.state === "idle" ? "" : st.state)}</span></p>
+      <div class="row"><button id="syNow" class="primary"${here && !st.busy ? "" : " disabled"}>${st.busy ? "Syncing..." : "Sync now"}</button>
+      <label class="check"><input id="syAuto" type="checkbox"${st.auto ? " checked" : ""}> Sync automatically</label>
+      <button id="syForget" class="small">Forget</button></div>`;
+  } else if (st.seen.length) {
+    h = `<p>WatchGrapher on these computers can sync with this device. Pair with one using the code it shows on its <em>Phone Portal</em> tab, under <em>WatchGrapher devices</em>.</p>` +
+      st.seen.map((d, i) => `<div class="row"><b>${esc(d.name)}</b> <span class="muted">${esc(d.ip)}</span>
+        <input id="syCode${i}" inputmode="numeric" maxlength="6" placeholder="6-digit code" style="width:9em">
+        <button class="primary" data-pair="${i}">Pair</button></div>`).join("") +
+      (st.state && st.state !== "idle" ? `<p class="muted">${esc(st.state)}</p>` : "");
+  } else {
+    h = `<p class="muted">Looking for the WatchGrapher desktop app on this network&hellip; It needs to be running, with <em>Let devices on this network sync</em> ticked on its Phone Portal tab.</p>`;
+  }
+  box.innerHTML = h;
+  if ($("#syNow")) $("#syNow").onclick = async () => { try { await post("/api/sync", { action: "now" }); } catch (e) { banner(e.message); } refreshSync(); };
+  if ($("#syAuto")) $("#syAuto").onchange = (e) => post("/api/sync", { action: "auto", on: e.target.checked ? 1 : 0 }).catch((er) => banner(er.message));
+  if ($("#syForget")) $("#syForget").onclick = async () => {
+    if (!(await confirmBox("Forget the paired computer? You can pair again with a new code."))) return;
+    await post("/api/sync", { action: "forget" }).catch(() => null);
+    refreshSync();
+  };
+  $$("button[data-pair]", box).forEach((b) => (b.onclick = async () => {
+    const i = +b.dataset.pair;
+    const code = $("#syCode" + i).value.trim();
+    if (!/^\d{6}$/.test(code)) { banner("Enter the 6-digit code shown on the computer."); return; }
+    b.disabled = true;
+    try {
+      const r = await post("/api/sync", { action: "pair", desktop: st.seen[i].id, code });
+      banner(r.msg);
+      await post("/api/sync", { action: "now" }).catch(() => null);
+    } catch (e) { banner(e.message); }
+    refreshSync();
+  }));
+  syncTimer = setTimeout(refreshSync, st.busy ? 1500 : 4000);
+}
 
 // ---------------------------------------------------------------- settings
 

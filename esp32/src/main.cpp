@@ -19,6 +19,7 @@
 #include "net.h"
 #include "settings.h"
 #include "storage.h"
+#include "sync.h"
 #include "web.h"
 
 // Leave this much PSRAM for everything that is not the two big buffers:
@@ -64,10 +65,12 @@ void setup() {
 
     net::begin();
     web::begin();
+    dsync::begin();
 }
 
 void loop() {
     web::loop();
     net::loop();
+    dsync::loop();
     delay(20);  // the web server has its own task now; this only minds the hotspot
 }

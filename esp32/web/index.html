@@ -167,11 +167,14 @@
   <div id="watchList" class="list"></div>
   <div class="card">
     <h3>Sync with the desktop app</h3>
-    <p class="small muted">Load your desktop <code>collection.json</code> here to carry your watches with you. To bring results back, download the device's collection and merge it on the computer with <code>python esp32/tools/merge_device.py</code> &mdash; nothing on the desktop is overwritten.</p>
+    <div id="syncBox" class="small"></div>
+    <details class="small"><summary>Without a network: by file</summary>
+    <p class="muted">Load your desktop <code>collection.json</code> here, or download the device's collection and merge it on the computer with <code>python esp32/tools/merge_device.py</code> &mdash; nothing on the desktop is overwritten.</p>
     <div class="row">
       <label class="button">Load desktop collection<input id="collFile" type="file" accept=".json,application/json" hidden></label>
       <a class="button" href="/api/collection" download="device_collection.json">Download device collection</a>
     </div>
+    </details>
   </div>
  </div>
  <div class="col">

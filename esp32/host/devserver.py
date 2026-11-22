@@ -276,7 +276,7 @@ class Device:
                      window=self.settings["window_s"], window_cap=self.settings["window_cap"],
                      an_ms=round(self.an_ms), clock=True, run=run, pr=pr,
                      input="No USB microphone connected." if self.settings["source"] == "usb" else "",
-                     input_ready=self.settings["source"] != "usb")
+                     input_ready=self.settings["source"] != "usb", coll_rev=getattr(self, "coll_rev", 1))
             if since != self.seq:
                 o["m"] = self.m
             return o
@@ -367,8 +367,99 @@ class Device:
         return dict(ok=True, reboot=False, msg="Saved.")
 
 
+class DeviceSync:
+    """What src/sync.cpp does: hear desktop beacons, pair, sync."""
+
+    def __init__(self, dev):
+        self.dev = dev
+        self.coll_path = os.path.join(dev.dir, "collection.json")
+        self.seen = {}
+        self.paired = None          # {"id", "name", "token"}
+        self.auto = True
+        self.state = "idle"
+        self.last_sync = ""
+        self.busy = False
+        self.device_id = "wg-devserver"
+        self.rev = 1
+        threading.Thread(target=self._listen, daemon=True).start()
+
+    def _listen(self):
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("", 8479))
+        except OSError:
+            return
+        while True:
+            data, addr = s.recvfrom(2048)
+            if not data.startswith(b"WGDESK1 "):
+                continue
+            try:
+                info = json.loads(data[8:])
+            except ValueError:
+                continue
+            self.seen[info["id"]] = dict(info, ip=addr[0], t=time.time())
+
+    def visible(self):
+        return [v for v in self.seen.values() if time.time() - v["t"] < 15]
+
+    def status(self):
+        return dict(online=True, paired_id=(self.paired or {}).get("id", ""),
+                    paired_name=(self.paired or {}).get("name", ""), auto=self.auto, busy=self.busy,
+                    state=self.state, last_sync=self.last_sync,
+                    seen=[{"id": v["id"], "name": v["name"], "ip": v["ip"]} for v in self.visible()])
+
+    def _http(self, d, path, body, headers=None):
+        import urllib.request
+        import urllib.error
+        req = urllib.request.Request(f"http://{d['ip']}:{d['port']}{path}", data=body,
+                                     headers=dict({"Content-Type": "application/json"}, **(headers or {})))
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status, r.read(), dict(r.headers)
+        except urllib.error.HTTPError as e:
+            return e.code, e.read(), dict(e.headers)
+
+    def pair(self, did, code):
+        d = next((v for v in self.visible() if v["id"] == did), None)
+        if not d:
+            return False, "That computer isn't on the network right now."
+        st, body, _ = self._http(d, "/wg-sync/pair", json.dumps(
+            {"device_id": self.device_id, "device_name": "WatchGrapher (dev)", "code": code}).encode())
+        j = json.loads(body or b"{}")
+        if st != 200:
+            return False, j.get("msg", "The computer refused.")
+        self.paired = {"id": d["id"], "name": d["name"], "token": j["token"]}
+        return True, f"Paired with {d['name']}."
+
+    def sync(self):
+        d = next((v for v in self.visible() if self.paired and v["id"] == self.paired["id"]), None)
+        if not d:
+            self.state = "the computer isn't on the network"
+            return
+        self.busy = True
+        try:
+            body = open(self.coll_path, "rb").read() if os.path.exists(self.coll_path) else b'{"version":1,"watches":[]}'
+            st, resp, hdr = self._http(d, "/wg-sync/sync", body,
+                                       {"X-WG-Device": self.device_id, "X-WG-Token": self.paired["token"]})
+            if st != 200:
+                self.state = json.loads(resp or b"{}").get("msg", f"refused ({st})")
+                return
+            with open(self.coll_path, "wb") as fh:
+                fh.write(resp)
+            self.rev += 1
+            self.dev.coll_rev = getattr(self.dev, "coll_rev", 1) + 1
+            self.last_sync = time.strftime("%Y-%m-%dT%H:%M:%S")
+            self.state = (f"synced with {d['name']} -- the computer got {hdr.get('X-WG-Added-Watches')} "
+                          f"new watch(es) and {hdr.get('X-WG-Added-Records')} new record(s)")
+        finally:
+            self.busy = False
+
+
 def make_handler(dev):
     coll_path = os.path.join(dev.dir, "collection.json")
+    dsync = DeviceSync(dev)
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -381,6 +472,8 @@ def make_handler(dev):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            if getattr(self, "_rev_hdr", None):
+                self.send_header("X-WG-Rev", self._rev_hdr)
             self.end_headers()
             self.wfile.write(body)
 
@@ -394,9 +487,12 @@ def make_handler(dev):
             if u.path == "/api/settings":
                 return self._send(200, dev.settings)
             if u.path == "/api/collection":
+                self._rev_hdr = str(getattr(dev, "coll_rev", 1))
                 if os.path.exists(coll_path):
                     return self._send(200, open(coll_path, "rb").read())
                 return self._send(200, {"version": 1, "watches": []})
+            if u.path == "/api/sync":
+                return self._send(200, dsync.status())
             if u.path == "/api/pr":
                 return self._send(200, dev.pr_list())
             if u.path == "/api/pr/csv":
@@ -417,10 +513,30 @@ def make_handler(dev):
                     json.loads(raw)
                 except ValueError:
                     return self._send(400, {"ok": False, "msg": "Expected a JSON object."})
+                base = self.headers.get("X-WG-Rev")
+                if base and base != str(getattr(dev, "coll_rev", 1)):
+                    return self._send(409, {"ok": False, "stale": True,
+                                            "msg": "The collection changed on the device (a sync) -- reloaded; please make that change again."})
                 with open(coll_path, "wb") as fh:
                     fh.write(raw)
-                return self._send(200, {"ok": True})
+                dev.coll_rev = getattr(dev, "coll_rev", 1) + 1
+                return self._send(200, {"ok": True, "rev": dev.coll_rev})
             q = parse_qs(raw.decode())
+            if u.path == "/api/sync":
+                a = q.get("action", [""])[0]
+                if a == "pair":
+                    ok, msg = dsync.pair(q.get("desktop", [""])[0], q.get("code", [""])[0])
+                    return self._send(200, {"ok": ok, "msg": msg})
+                if a == "now":
+                    threading.Thread(target=dsync.sync, daemon=True).start()
+                    return self._send(200, {"ok": True, "msg": "Syncing."})
+                if a == "forget":
+                    dsync.paired = None
+                    return self._send(200, {"ok": True, "msg": "Forgotten."})
+                if a == "auto":
+                    dsync.auto = q.get("on", ["1"])[0] != "0"
+                    return self._send(200, {"ok": True, "msg": "Saved."})
+                return self._send(200, {"ok": False, "msg": "Unknown action."})
             if u.path == "/api/cmd":
                 return self._send(200, dev.command(q.get("action", [""])[0], q))
             if u.path == "/api/settings":
